@@ -18,6 +18,8 @@ Our focus is on:
 
 
 About Yeyland Wutani LLC
+
+
 Yeyland Wutani LLC provides professional IT consulting and cybersecurity services, including:
 
 * Infrastructure design \& support
@@ -33,7 +35,11 @@ Yeyland Wutani LLC provides professional IT consulting and cybersecurity service
 
 
 Repository Contents
+
+
 You may find any of the following categories of tools here:
+
+
 PowerShell Scripts
 
 * Automation utilities
@@ -62,6 +68,8 @@ Security Tools
 
 
 License
+
+
 Unless otherwise stated, all scripts and tools are released under the MIT License, allowing reuse, modification, and redistribution with attribution.
 If you need a different licensing structure for commercial use, feel free to contact us.
 
@@ -70,6 +78,8 @@ If you need a different licensing structure for commercial use, feel free to con
 
 
 Contributing
+
+
 We welcome:
 
 * Bug reports
@@ -91,6 +101,8 @@ To contribute:
 
 
 Contact
+
+
 For business inquiries or security consulting services:
 Yeyland Wutani LLC
 Email: Yeyland.Wutani@tcpip.network
