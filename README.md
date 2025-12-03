@@ -1,113 +1,150 @@
-Yeyland Wutani LLC - Public Scripts \& Tools
+# Yeyland Wutani LLC
 
+**IT Consulting & Cybersecurity Services | Building Better Systems**
 
-Welcome to the official public repository for Yeyland Wutani LLC, an IT consulting and cybersecurity services provider.
-This repository contains open-source tools, PowerShell scripts, frameworks, and utilities designed to help IT professionals, system administrators, and security teams solve real-world problems efficiently and safely.
+![License](https://img.shields.io/badge/license-MIT-FF6600.svg)
+![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-FF6600.svg)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-6B7280.svg)
 
+---
 
-Our focus is on:
+## Overview
 
-* Automation
-* Secure configurations
-* System hardening
-* Threat detection
-* Incident response tooling
-* Productivity enhancements for IT teams
-  
+Yeyland Wutani LLC is an IT project and security consulting firm specializing in enterprise infrastructure, security hardening, and automation solutions. This repository contains production-ready tools, PowerShell scripts, and frameworks developed through real-world engagements and designed to solve common IT challenges efficiently and securely.
 
+Our expertise spans:
+- **Infrastructure & Cloud** - Design, deployment, and optimization of hybrid environments
+- **Security Operations** - Vulnerability assessment, incident response, and threat detection
+- **Automation** - PowerShell-based solutions for configuration management and deployment
+- **Enterprise Identity** - Active Directory, Azure AD, and hybrid identity implementations
+- **Network Security** - Firewall policy management, segmentation, and monitoring
 
+All tools are developed with enterprise environments in mind and battle-tested across managed service provider operations supporting hundreds of clients.
 
-About Yeyland Wutani LLC
+---
 
+## Repository Structure
 
-Yeyland Wutani LLC provides professional IT consulting and cybersecurity services, including:
+```
+YeylandWutani/
+├── Automation/          # Deployment and configuration scripts
+├── Security/            # Security assessment and hardening tools
+├── Monitoring/          # System health and log analysis utilities
+├── ActiveDirectory/     # AD administration and audit scripts
+├── Network/             # Network configuration and diagnostics
+└── Documentation/       # Templates, guides, and best practices
+```
 
-* Infrastructure design \& support
-* Cloud migration and optimization
-* Vulnerability assessments
-* Endpoint security hardening
-* Automation and scripting solutions
-* Network design, monitoring, and troubleshooting
-* Advisory services for small to mid-size businesses
-* We build tools not just for our clients - but also for the community.
-  
+---
 
+## Featured Tools
 
+### PowerShell Automation
+- System provisioning and configuration management
+- Bulk user and group administration
+- Compliance scanning and reporting
+- Software deployment frameworks
 
-Repository Contents
+### Security Utilities
+- Local security policy auditing
+- Endpoint hardening validation
+- Incident response data collection
+- Vulnerability discovery helpers
 
+### Infrastructure Tools
+- Health check and diagnostic scripts
+- Backup validation utilities
+- Performance analysis tools
+- Documentation generators
 
-You may find any of the following categories of tools here:
+---
 
+## Requirements
 
-PowerShell Scripts
+Most scripts require:
+- PowerShell 5.1 or later (PowerShell 7+ recommended)
+- Appropriate administrative permissions
+- Windows Server 2016+ or Windows 10/11
 
-* Automation utilities
-* System information \& diagnostics
-* Security auditing tools
-* Deployment scripts
-* Hardening templates
+Specific dependencies are documented within each script.
 
+---
 
+## Usage
 
+All scripts include inline documentation and help text. View help for any script:
 
-Security Tools
+```powershell
+Get-Help .\ScriptName.ps1 -Full
+```
 
-* Local security assessment scripts
-* Incident response helpers
-* Log analysis tools
-* Detection utilities
-* Documentation \& Templates
-* Policy templates
-* Hardening guides
-* Security checklists
-* Scripts will be organized into folders by category.
+Scripts follow PowerShell best practices:
+- Parameter validation and error handling
+- WhatIf and Confirm support where applicable
+- Verbose and Debug output streams
+- Consistent naming conventions
 
+---
 
+## Security Notice
 
+These tools are provided for legitimate IT administration, security testing, and educational purposes only. Users are responsible for:
+- Obtaining proper authorization before running scripts in production
+- Understanding script functionality before execution
+- Complying with all applicable laws and regulations
+- Testing in non-production environments first
 
+Yeyland Wutani LLC assumes no liability for misuse or damages resulting from the use of these tools.
 
-License
+---
 
+## License
 
-Unless otherwise stated, all scripts and tools are released under the MIT License, allowing reuse, modification, and redistribution with attribution.
-If you need a different licensing structure for commercial use, feel free to contact us.
+Unless otherwise specified, all content is released under the MIT License. See [LICENSE](LICENSE) for full terms.
 
+Commercial support and custom development services are available - contact us for licensing options.
 
+---
 
+## Contributing
 
+Contributions are welcome and appreciated:
 
-Contributing
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/improvement`)
+3. Commit changes with clear messages
+4. Submit a pull request with detailed description
 
+For security-related issues, please contact us privately before public disclosure.
 
-We welcome:
+---
 
-* Bug reports
-* Suggestions
-* Improvements
-* New feature requests
+## About Yeyland Wutani LLC
 
+Yeyland Wutani LLC provides professional IT consulting and cybersecurity services with deep expertise in:
+- Enterprise infrastructure design and management
+- Security architecture and implementation
+- Identity and access management solutions
+- Managed detection and response services
+- IT process optimization and automation
 
+Backed by 20+ industry certifications and extensive hands-on experience across diverse enterprise environments.
 
+---
 
-To contribute:
+## Contact
 
-1. Fork this repository
-2. Create a new branch
-3. Commit your changes
-4. Submit a pull request
-5. Security-related contributions or responsible disclosures are especially appreciated.
+**Yeyland Wutani LLC**  
+Email: [Yeyland.Wutani@tcpip.network](mailto:Yeyland.Wutani@tcpip.network)
 
+For consulting inquiries, custom development, or support contracts, reach out to discuss your requirements.
 
+---
 
-Contact
+<div align="center">
 
+**Building Better Systems**
 
-For business inquiries or security consulting services:
+![Yeyland Wutani LLC](https://img.shields.io/badge/Yeyland%20Wutani%20LLC-FF6600?style=for-the-badge)
 
-
-Yeyland Wutani LLC
-
-
-Email: Yeyland.Wutani@tcpip.network
-
+</div>

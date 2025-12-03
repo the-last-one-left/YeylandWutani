@@ -1,0 +1,51 @@
+# PowerShell
+*.ps1xml
+*.psc1
+*.psm1.backup
+
+# Logs and output files
+*.log
+*.txt
+*.csv
+*.json
+*.xml
+logs/
+output/
+
+# Credentials and sensitive data
+*.credentials
+*.cred
+*.key
+*.pem
+*.pfx
+credentials/
+secrets/
+
+# Test and development
+test/
+testing/
+dev/
+.vscode/
+.vs/
+
+# Operating System
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+~*
+*.bak
+*.backup
+
+# Archives
+*.zip
+*.7z
+*.tar
+*.gz
+
+# Documentation drafts
+*.draft.md
+*.wip.md
