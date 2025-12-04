@@ -119,6 +119,16 @@ For security-related issues, please contact us privately before public disclosur
 
 ---
 
+## Support This Project
+
+If you find these tools valuable and want to support ongoing development:
+
+[![Donate](https://img.shields.io/badge/Donate-PayPal-FF6600.svg?style=for-the-badge&logo=paypal)](https://www.paypal.com/donate/?hosted_button_id=NAWYL36KNZHGE)
+
+Your support helps maintain and expand this toolkit while keeping it free and open-source for the community.
+
+---
+
 ## About Yeyland Wutani LLC
 
 Yeyland Wutani LLC provides professional IT consulting and cybersecurity services with deep expertise in:
