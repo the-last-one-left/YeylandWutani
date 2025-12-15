@@ -56,18 +56,20 @@
     Preview what would be deleted without making changes.
 
 .NOTES
-    Author: Yeyland Wutani - Building Better Systems
+    Author: yourname
     Requires: PowerShell 5.1 or later
-    Version: 1.0
+    Version: 1.1
 #>
+
+#Requires -Version 5.1
 
 [CmdletBinding(SupportsShouldProcess)]
 param(
-    [Parameter(Mandatory=$true)]
-    [ValidateScript({Test-Path $_ -PathType Container})]
+    [Parameter(Mandatory = $true)]
+    [ValidateScript({ Test-Path $_ -PathType Container })]
     [string]$Path,
     
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [string[]]$ExcludePaths = @(
         '*\Windows\*',
         '*\Program Files\*',
@@ -79,35 +81,35 @@ param(
         '*\WindowsApps\*'
     ),
     
-    [Parameter(Mandatory=$false)]
-    [ValidateSet('Report','Delete')]
+    [Parameter(Mandatory = $false)]
+    [ValidateSet('Report', 'Delete')]
     [string]$Action = 'Report',
     
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [switch]$Interactive,
     
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [string]$LogPath = $PSScriptRoot,
     
-    [Parameter(Mandatory=$false)]
+    [Parameter(Mandatory = $false)]
     [switch]$ShowProgress
 )
 
-#Requires -Version 5.1
-
-# Initialize logging
-$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
-$logFile = Join-Path $LogPath "EmptyFolderCleanup_$timestamp.log"
+#region Functions
 
 function Write-Log {
+    <#
+    .SYNOPSIS
+        Writes timestamped log entries to file and console with color coding.
+    #>
     param(
         [string]$Message,
-        [ValidateSet('INFO','WARNING','ERROR','SUCCESS')]
+        [ValidateSet('INFO', 'WARNING', 'ERROR', 'SUCCESS')]
         [string]$Level = 'INFO'
     )
     
     $logEntry = "{0} [{1}] {2}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $Level, $Message
-    Add-Content -Path $logFile -Value $logEntry
+    Add-Content -Path $script:logFile -Value $logEntry
     
     switch ($Level) {
         'ERROR'   { Write-Host $logEntry -ForegroundColor Red }
@@ -118,6 +120,10 @@ function Write-Log {
 }
 
 function Test-ShouldExclude {
+    <#
+    .SYNOPSIS
+        Checks if a folder path matches any exclusion pattern.
+    #>
     param([string]$FolderPath)
     
     foreach ($pattern in $ExcludePaths) {
@@ -129,34 +135,32 @@ function Test-ShouldExclude {
 }
 
 function Get-FolderDepth {
+    <#
+    .SYNOPSIS
+        Returns the depth of a folder path based on path separator count.
+    #>
     param([string]$FolderPath)
     
-    # Count path separators to determine depth
-    return ($FolderPath.ToCharArray() | Where-Object {$_ -eq '\' -or $_ -eq '/'}).Count
+    return ($FolderPath.ToCharArray() | Where-Object { $_ -eq '\' -or $_ -eq '/' }).Count
 }
 
-function Format-FolderSize {
-    param([long]$Bytes)
-    
-    if ($Bytes -ge 1GB) { return "{0:N2} GB" -f ($Bytes / 1GB) }
-    elseif ($Bytes -ge 1MB) { return "{0:N2} MB" -f ($Bytes / 1MB) }
-    elseif ($Bytes -ge 1KB) { return "{0:N2} KB" -f ($Bytes / 1KB) }
-    else { return "$Bytes bytes" }
-}
+#endregion Functions
 
-# Main execution
+#region Main Execution
+
+# Initialize logging
+$timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
+$script:logFile = Join-Path $LogPath "EmptyFolderCleanup_$timestamp.log"
+
 try {
-    Write-Host "`n╔════════════════════════════════════════════════════════════╗" -ForegroundColor DarkGray
-    Write-Host "║   " -ForegroundColor DarkGray -NoNewline
-    Write-Host "Yeyland Wutani" -ForegroundColor DarkYellow -NoNewline
-    Write-Host " - Empty Folder Cleanup               ║" -ForegroundColor DarkGray
-    Write-Host "║   Building Better Systems                              ║" -ForegroundColor DarkGray
-    Write-Host "╚════════════════════════════════════════════════════════════╝`n" -ForegroundColor DarkGray
+    Write-Host "`n========================================================" -ForegroundColor DarkGray
+    Write-Host "  Empty Folder Cleanup Tool" -ForegroundColor Cyan
+    Write-Host "========================================================`n" -ForegroundColor DarkGray
     
     Write-Log "=== Empty Folder Cleanup Started ==="
     Write-Log "Scan Path: $Path"
     Write-Log "Action: $Action"
-    Write-Log "Log File: $logFile"
+    Write-Log "Log File: $script:logFile"
     
     # Phase 1: Scan for all folders
     Write-Host "[Phase 1] Scanning directory tree..." -ForegroundColor Cyan
@@ -193,7 +197,8 @@ try {
             if (-not $hasFiles) {
                 $emptyFolders += $folder
             }
-        } catch {
+        }
+        catch {
             Write-Log "Unable to check folder: $($folder.FullName) - $($_.Exception.Message)" -Level WARNING
         }
     }
@@ -210,15 +215,15 @@ try {
         exit 0
     }
     
-    # Phase 3: Sort by depth (deepest first) - THIS IS THE KEY!
+    # Phase 3: Sort by depth (deepest first) - critical for cascading deletes
     Write-Host "[Phase 3] Sorting folders by depth (deepest first)..." -ForegroundColor Cyan
     
     $sortedFolders = $emptyFolders | Sort-Object -Property @{
-        Expression = {Get-FolderDepth -FolderPath $_.FullName}
+        Expression = { Get-FolderDepth -FolderPath $_.FullName }
     } -Descending
     
     # Calculate depth statistics
-    $depthStats = $sortedFolders | Group-Object -Property {Get-FolderDepth -FolderPath $_.FullName} | 
+    $depthStats = $sortedFolders | Group-Object -Property { Get-FolderDepth -FolderPath $_.FullName } | 
         Sort-Object -Property Name -Descending
     
     Write-Log "Depth distribution:"
@@ -227,15 +232,14 @@ try {
     }
     
     # Display summary
-    Write-Host "`n" -NoNewline
-    Write-Host "═══════════════════ Scan Results ═════════════════════" -ForegroundColor DarkGray
+    Write-Host "`n------------------ Scan Results ------------------" -ForegroundColor DarkGray
     Write-Host "Empty Folders Found:  " -NoNewline -ForegroundColor Gray
-    Write-Host "$($sortedFolders.Count)" -ForegroundColor $(if($sortedFolders.Count -gt 0){'Yellow'}else{'Green'})
+    Write-Host "$($sortedFolders.Count)" -ForegroundColor $(if ($sortedFolders.Count -gt 0) { 'Yellow' } else { 'Green' })
     Write-Host "Deepest Level:        " -NoNewline -ForegroundColor Gray
     Write-Host "$($depthStats[0].Name)" -ForegroundColor Cyan
     Write-Host "Shallowest Level:     " -NoNewline -ForegroundColor Gray
     Write-Host "$($depthStats[-1].Name)" -ForegroundColor Cyan
-    Write-Host "══════════════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "---------------------------------------------------" -ForegroundColor DarkGray
     
     # Show sample of deepest folders
     Write-Host "`nSample of empty folders (deepest first):" -ForegroundColor Cyan
@@ -250,7 +254,7 @@ try {
         Write-Host "  ... and $($sortedFolders.Count - 10) more folders" -ForegroundColor DarkGray
     }
     
-    # Perform deletion if requested
+    # Phase 4: Perform deletion if requested
     if ($Action -eq 'Delete') {
         Write-Host "`n[Phase 4] Removing empty folders..." -ForegroundColor Cyan
         
@@ -281,7 +285,8 @@ try {
                     Remove-Item -Path $folder.FullName -Force -ErrorAction Stop
                     Write-Log "Deleted: $($folder.FullName)" -Level SUCCESS
                     $deletedCount++
-                } catch {
+                }
+                catch {
                     Write-Log "Failed to delete $($folder.FullName): $($_.Exception.Message)" -Level ERROR
                     $failedCount++
                 }
@@ -293,8 +298,7 @@ try {
         }
         
         # Summary
-        Write-Host "`n" -NoNewline
-        Write-Host "═══════════════════ Cleanup Summary ══════════════════" -ForegroundColor DarkGray
+        Write-Host "`n------------------ Cleanup Summary ------------------" -ForegroundColor DarkGray
         Write-Log "Total empty folders found: $($sortedFolders.Count)"
         Write-Log "Successfully deleted: $deletedCount" -Level SUCCESS
         
@@ -302,24 +306,28 @@ try {
             Write-Log "Failed deletions: $failedCount" -Level ERROR
         }
         
-        Write-Host "══════════════════════════════════════════════════════" -ForegroundColor DarkGray
+        Write-Host "-----------------------------------------------------" -ForegroundColor DarkGray
         
         # Verify cleanup
         if ($deletedCount -eq $sortedFolders.Count) {
-            Write-Host "`n✓ All empty folders removed successfully!" -ForegroundColor Green
-        } elseif ($deletedCount -gt 0) {
-            Write-Host "`n⚠ Partial cleanup completed. Check log for errors." -ForegroundColor Yellow
+            Write-Host "`n[OK] All empty folders removed successfully!" -ForegroundColor Green
         }
-    } else {
+        elseif ($deletedCount -gt 0) {
+            Write-Host "`n[WARN] Partial cleanup completed. Check log for errors." -ForegroundColor Yellow
+        }
+    }
+    else {
         Write-Host "`n[Report Mode] No folders were deleted. Use '-Action Delete' to remove them." -ForegroundColor Yellow
     }
     
     Write-Log "=== Empty Folder Cleanup Completed ==="
-    Write-Log "Log file: $logFile"
+    Write-Host "Log file: $script:logFile" -ForegroundColor Gray
     Write-Host ""
-    
-} catch {
+}
+catch {
     Write-Log "Critical error: $($_.Exception.Message)" -Level ERROR
     Write-Log $_.ScriptStackTrace -Level ERROR
     exit 1
 }
+
+#endregion Main Execution
