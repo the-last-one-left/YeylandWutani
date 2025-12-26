@@ -462,6 +462,7 @@ begin {
         $macAddress = $null
         $macPrefix = $null
         $vendor = "Unknown"
+        $vendorHint = $null  # DeviceType|OS from MAC database
         try {
             # Use arp -a without IP filter, then parse for our specific IP
             $arpOutput = & arp -a 2>$null
@@ -473,9 +474,13 @@ begin {
                 $macAddress = $matches[0].ToUpper().Replace(':', '-')
                 $macPrefix = ($macAddress -split '-')[0..2] -join ':'
                 
-                # Check local database first
+                # Check local database first (format: Vendor|DeviceType|OS)
                 if ($MacVendorMap.ContainsKey($macPrefix)) {
-                    $vendor = $MacVendorMap[$macPrefix]
+                    $macData = $MacVendorMap[$macPrefix] -split '\|'
+                    $vendor = $macData[0]
+                    if ($macData.Count -ge 3) {
+                        $vendorHint = "$($macData[1])|$($macData[2])"
+                    }
                 }
                 # If not in local DB, vendor remains "Unknown" and will be looked up via API if enabled
             }
@@ -517,21 +522,67 @@ begin {
         $deviceType = "Unknown"
         $os = "Unknown"
         
-        if ($openPorts -contains 445 -and $openPorts -contains 3389) {
-            $deviceType = "Server"
-            $os = "Windows Server"
-        }
-        elseif ($openPorts -contains 445 -or $openPorts -contains 139) {
-            $deviceType = "Workstation"
-            $os = "Windows"
-        }
-        elseif ($openPorts -contains 22 -or $openPorts -contains 23 -or $openPorts -contains 443) {
-            if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link') {
-                $deviceType = "Network Device"
-                $os = "$vendor Device"
+        # First check MAC vendor hints if available
+        if ($vendorHint) {
+            $hintParts = $vendorHint -split '\|'
+            $macDeviceType = $hintParts[0]
+            $macOS = $hintParts[1]
+            
+            # Use MAC hints as primary classification
+            switch ($macDeviceType) {
+                'Printer' {
+                    $deviceType = "Printer"
+                    $os = "$vendor Printer"
+                }
+                'Network' {
+                    $deviceType = "Network Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "$vendor Device" }
+                }
+                'Server' {
+                    $deviceType = "Server"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Server" }
+                }
+                'Computer' {
+                    $deviceType = "Workstation"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Unknown" }
+                }
+                'Mobile' {
+                    $deviceType = "Mobile Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Mobile" }
+                }
+                'IoT' {
+                    $deviceType = "IoT Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "$vendor" }
+                }
             }
-            else {
-                $deviceType = "Network Device"
+        }
+        
+        # Fall back to port-based detection if MAC hints didn't classify it
+        if ($deviceType -eq "Unknown" -and $openPorts.Count -gt 0) {
+            # Server indicators (RDP + SMB)
+            if ($openPorts -contains 445 -and $openPorts -contains 3389) {
+                $deviceType = "Server"
+                $os = "Windows Server"
+            }
+            # Workstation indicators (SMB/NetBIOS)
+            elseif ($openPorts -contains 445 -or $openPorts -contains 139) {
+                $deviceType = "Workstation"
+                $os = "Windows"
+            }
+            # Printer indicators (LPD, IPP, Raw)
+            elseif ($openPorts -contains 515 -or $openPorts -contains 631 -or $openPorts -contains 9100) {
+                $deviceType = "Printer"
+                $os = "Printer Firmware"
+            }
+            # Network device indicators (SSH/Telnet/HTTPS)
+            elseif ($openPorts -contains 22 -or $openPorts -contains 23 -or $openPorts -contains 443) {
+                if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link') {
+                    $deviceType = "Network Device"
+                    $os = "$vendor Device"
+                }
+                else {
+                    $deviceType = "Network Device"
+                }
             }
         }
         
