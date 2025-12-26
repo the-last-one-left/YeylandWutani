@@ -314,7 +314,7 @@ begin {
         }
         
         # Get MAC address using ARP
-        $macAddress = "N/A"
+        $macAddress = $null
         $macPrefix = $null
         $vendor = "Unknown"
         try {
@@ -327,10 +327,15 @@ begin {
                 if ($MacVendorMap.ContainsKey($macPrefix)) {
                     $vendor = $MacVendorMap[$macPrefix]
                 }
-                # If not in local DB, vendor will be looked up later via API if enabled
+                # If not in local DB, vendor remains "Unknown" and will be looked up via API if enabled
             }
         }
         catch { }
+        
+        # Set display value for MAC if not found
+        if (-not $macAddress) {
+            $macAddress = "N/A"
+        }
         
         # Port scanning
         $openPorts = @()
@@ -659,7 +664,10 @@ end {
         </tr>
 "@
                     
-                    foreach ($device in ($onlineDevices | Sort-Object { [System.Version]$_.IPAddress.Split('.') -join '.' })) {
+                    foreach ($device in ($onlineDevices | Sort-Object { 
+                        $octets = $_.IPAddress.Split('.')
+                        [int]$octets[0] * 16777216 + [int]$octets[1] * 65536 + [int]$octets[2] * 256 + [int]$octets[3]
+                    })) {
                         $rowClass = switch ($device.DeviceType) {
                             'Server' { 'device-server' }
                             'Workstation' { 'device-workstation' }
