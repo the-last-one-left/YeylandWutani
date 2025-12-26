@@ -318,9 +318,14 @@ begin {
         $macPrefix = $null
         $vendor = "Unknown"
         try {
-            $arpOutput = & arp -a $IP 2>$null
-            if ($arpOutput -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
-                $macAddress = $matches[0].ToUpper()
+            # Use arp -a without IP filter, then parse for our specific IP
+            $arpOutput = & arp -a 2>$null
+            
+            # Find the line containing our IP address
+            $arpLine = $arpOutput | Where-Object { $_ -match "\b$([regex]::Escape($IP))\b" }
+            
+            if ($arpLine -and $arpLine -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
+                $macAddress = $matches[0].ToUpper().Replace(':', '-')
                 $macPrefix = ($macAddress -split '-')[0..2] -join ':'
                 
                 # Check local database first
