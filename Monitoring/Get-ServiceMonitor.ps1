@@ -643,11 +643,11 @@ end {
             $emailSubject = "Service Alert - $($FailedServices.Count) service(s) require attention"
             
             $emailBody = "Service Monitoring Alerts`n"
-            $emailBody += "═══════════════════════════════════════════════`n`n"
+            $emailBody += "===============================================`n`n"
             
             if ($stillFailed.Count -gt 0) {
                 $emailBody += "FAILED SERVICES ($($stillFailed.Count)):`n"
-                $emailBody += "───────────────────────────────────────────────`n"
+                $emailBody += "-----------------------------------------------`n"
                 
                 $groupedFailures = $AllResults | Where-Object { 
                     -not $_.IsHealthy -and $_.Health -ne 'Restarted' 
@@ -668,7 +668,7 @@ end {
             
             if ($RestartedServices.Count -gt 0) {
                 $emailBody += "RESTARTED SERVICES ($($RestartedServices.Count)):`n"
-                $emailBody += "───────────────────────────────────────────────`n"
+                $emailBody += "-----------------------------------------------`n"
                 
                 $groupedRestarts = $AllResults | Where-Object { 
                     $_.Health -eq 'Restarted' 
@@ -712,9 +712,9 @@ end {
     
     # Summary
     if (-not $Quiet) {
-        Write-Host "`n═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "`n===========================================================" -ForegroundColor Cyan
         Write-Host " Service Monitoring Summary" -ForegroundColor Cyan
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===========================================================" -ForegroundColor Cyan
         Write-Host "Total Services Monitored: $($AllResults.Count)"
         
         $failedCount = ($AllResults | Where-Object { -not $_.IsHealthy -and $_.Health -ne 'Restarted' }).Count
@@ -731,6 +731,6 @@ end {
         }
         Write-Host "Healthy:   " -NoNewline
         Write-Host "$healthyCount" -ForegroundColor Green
-        Write-Host "═══════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+        Write-Host "===========================================================`n" -ForegroundColor Cyan
     }
 }

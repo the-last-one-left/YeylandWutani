@@ -549,11 +549,11 @@ end {
         }
         
         $emailBody = "Disk Space Alerts`n"
-        $emailBody += "═══════════════════════════════════════════════`n`n"
+        $emailBody += "===============================================`n`n"
         
         if ($criticalAlerts.Count -gt 0) {
             $emailBody += "CRITICAL ALERTS ($($criticalAlerts.Count)):`n"
-            $emailBody += "───────────────────────────────────────────────`n"
+            $emailBody += "-----------------------------------------------`n"
             foreach ($alert in $criticalAlerts) {
                 $emailBody += "Computer: $($alert.ComputerName)`n"
                 $emailBody += "  Drive: $($alert.Drive) ($($alert.Label))`n"
@@ -568,7 +568,7 @@ end {
         
         if ($warningAlerts.Count -gt 0) {
             $emailBody += "WARNING ALERTS ($($warningAlerts.Count)):`n"
-            $emailBody += "───────────────────────────────────────────────`n"
+            $emailBody += "-----------------------------------------------`n"
             foreach ($alert in $warningAlerts) {
                 $emailBody += "Computer: $($alert.ComputerName)`n"
                 $emailBody += "  Drive: $($alert.Drive) ($($alert.Label))`n"
@@ -608,9 +608,9 @@ end {
     
     # Summary
     if (-not $Quiet) {
-        Write-Host "`n═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "`n===========================================================" -ForegroundColor Cyan
         Write-Host " Disk Space Monitoring Summary" -ForegroundColor Cyan
-        Write-Host "═══════════════════════════════════════════════════════════" -ForegroundColor Cyan
+        Write-Host "===========================================================" -ForegroundColor Cyan
         Write-Host "Total Drives Monitored: $($AllResults.Count)"
         
         $criticalCount = ($AllResults | Where-Object { $_.Status -eq 'Critical' }).Count
@@ -627,6 +627,6 @@ end {
         }
         Write-Host "Healthy:  " -NoNewline
         Write-Host "$healthyCount" -ForegroundColor Green
-        Write-Host "═══════════════════════════════════════════════════════════`n" -ForegroundColor Cyan
+        Write-Host "===========================================================`n" -ForegroundColor Cyan
     }
 }
