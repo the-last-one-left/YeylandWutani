@@ -200,8 +200,6 @@ begin {
         '00:14:38' = 'HP|Printer|Printer'
         '00:1E:0B' = 'HP|Printer|Printer'
         '00:21:5A' = 'HP|Printer|Printer'
-        '00:23:7D' = 'HP|Printer|Printer'
-        '00:26:55' = 'HP|Printer|Printer'
         '3C:D9:2B' = 'HP|Printer|Printer'
         'B4:99:BA' = 'HP|Printer|Printer'
         'D4:85:64' = 'HP|Printer|Printer'
@@ -209,7 +207,6 @@ begin {
         # Canon Printers
         '00:00:85' = 'Canon|Printer|Printer'
         '00:1E:8F' = 'Canon|Printer|Printer'
-        '34:23:BA' = 'Canon|Printer|Printer'
         '9C:E6:E7' = 'Canon|Printer|Printer'
         
         # Epson Printers
