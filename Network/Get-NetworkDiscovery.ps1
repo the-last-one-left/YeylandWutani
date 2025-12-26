@@ -442,9 +442,11 @@ process {
                 if ($arpResult -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
                     $macAddress = $matches[0].ToUpper()
                     
+                    # Assign $using: variable to local variable for method calls
+                    $macVendorLookup = $using:macVendors
                     $macPrefix = ($macAddress -split '-')[0..2] -join ':'
-                    if ($using:macVendors.ContainsKey($macPrefix)) {
-                        $vendor = $using:macVendors[$macPrefix]
+                    if ($macVendorLookup.ContainsKey($macPrefix)) {
+                        $vendor = $macVendorLookup[$macPrefix]
                     }
                 }
             }
