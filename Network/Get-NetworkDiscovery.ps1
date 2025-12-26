@@ -14,7 +14,7 @@
     - Subnet/IP range scanning with parallel processing
     - Device type identification (server, workstation, printer, network device)
     - Operating system detection
-    - MAC address and vendor lookup
+    - MAC address and vendor lookup (local + online API)
     - Open port scanning
     - DNS hostname resolution
     - Multiple export formats (CSV, JSON, HTML)
@@ -31,18 +31,20 @@
 
 .PARAMETER ScanPorts
     Scan common ports to identify services. Default: True
-    Ports scanned: 21,22,23,25,53,80,110,135,139,143,443,445,3389,8080,8443
 
 .PARAMETER QuickScan
-    Fast ping-only scan (no port scanning, no DNS lookup). 
-    Use for rapid network mapping.
+    Fast ping-only scan (no port scanning, no DNS lookup).
+
+.PARAMETER UseMacVendorAPI
+    Enable online MAC vendor lookup via macvendors.com API.
+    Provides comprehensive vendor identification for unknown MACs.
+    Respects API rate limits (1 req/sec). Results are cached.
 
 .PARAMETER ThrottleLimit
-    Maximum parallel scanning threads. Default: 100 (optimized for runspaces)
-    Higher values = faster scanning but more CPU/network load.
+    Maximum parallel scanning threads. Default: 100
 
 .PARAMETER Timeout
-    Connection timeout in milliseconds per device. Default: 1000 (1 second)
+    Connection timeout in milliseconds per device. Default: 1000
 
 .PARAMETER ExportPath
     Path to export discovery report. Supports CSV, JSON, or HTML formats.
@@ -61,33 +63,23 @@
 .EXAMPLE
     .\Get-NetworkDiscovery.ps1 -Subnet "172.16.0.0/24" -QuickScan
     
-    Fast ping-only scan (5-10x faster than full scan).
+    Fast ping-only scan (5-15 seconds for /24).
 
 .EXAMPLE
-    .\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24","10.0.1.0/24" -ExportPath "C:\Reports\Network.html"
+    .\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -UseMacVendorAPI -ExportPath "C:\Reports\Network.html"
     
-    Scan multiple subnets, generate HTML report.
-
-.EXAMPLE
-    .\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.50"
-    
-    Scan specific IP range.
-
-.EXAMPLE
-    .\Get-NetworkDiscovery.ps1 -Subnet "172.16.0.0/24" -ThrottleLimit 200 -ExportPath "C:\Reports\Client.csv"
-    
-    Very fast scan with 200 parallel threads.
+    Full scan with online MAC vendor lookup, export to HTML.
 
 .NOTES
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
     
-    PERFORMANCE NOTES:
-    - Uses runspace pools for 5-10x faster scanning than jobs
-    - QuickScan mode: ~5-15 seconds for /24 subnet
-    - Full scan mode: ~30-60 seconds for /24 subnet
-    - Increase ThrottleLimit for faster scans (default 100, max 500)
+    MAC VENDOR API:
+    - Uses macvendors.com free API
+    - Rate limit: 1 request/second (automatically throttled)
+    - Results cached to avoid duplicate lookups
+    - Fallback to local vendor database if API unavailable
 #>
 
 [CmdletBinding(DefaultParameterSetName='Subnet')]
@@ -105,6 +97,8 @@ param(
     [bool]$ScanPorts = $true,
     
     [switch]$QuickScan,
+    
+    [switch]$UseMacVendorAPI,
     
     [ValidateRange(1, 500)]
     [int]$ThrottleLimit = 100,
@@ -127,7 +121,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.2"
+    $ScriptVersion = "1.3"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -157,20 +151,85 @@ begin {
         8080 = "HTTP-Alt"
     }
     
-    # MAC vendor lookup
+    # Local MAC vendor database (fallback/cache accelerator)
     $MacVendors = @{
         '00:50:56' = 'VMware'
         '00:0C:29' = 'VMware'
+        '00:05:69' = 'VMware'
+        '00:1C:14' = 'VMware'
         '00:1C:42' = 'Parallels'
         '08:00:27' = 'VirtualBox'
-        '00:15:5D' = 'Hyper-V'
-        'D4:C9:EF' = 'Aruba'
+        '00:15:5D' = 'Microsoft (Hyper-V)'
+        '00:03:FF' = 'Microsoft'
+        'D4:C9:EF' = 'Aruba Networks'
         '00:1A:1E' = 'WatchGuard'
         'F0:9F:C2' = 'Ubiquiti'
         '00:01:E3' = 'Siemens'
         '00:04:76' = '3Com'
-        'B4:75:0E' = 'Aruba'
-        '00:0B:86' = 'Aruba'
+        'B4:75:0E' = 'Aruba Networks'
+        '00:0B:86' = 'Aruba Networks'
+        '24:DE:C6' = 'Aruba Networks'
+        '00:1B:D5' = 'Cisco'
+        '00:1E:BD' = 'Cisco'
+        '00:25:84' = 'Apple'
+        '00:26:BB' = 'Apple'
+        'DC:A6:32' = 'Raspberry Pi'
+        'B8:27:EB' = 'Raspberry Pi'
+        '00:0C:76' = 'Hewlett Packard'
+        '00:14:38' = 'Hewlett Packard'
+        '00:50:8B' = 'Hewlett Packard'
+        '00:1B:78' = 'Dell'
+        '00:14:22' = 'Dell'
+        'D4:BE:D9' = 'Dell'
+        '00:0D:88' = 'D-Link'
+        '00:17:9A' = 'D-Link'
+        '00:1C:F0' = 'D-Link'
+        '00:0F:B5' = 'Netgear'
+        '00:09:5B' = 'Netgear'
+        'A0:63:91' = 'Netgear'
+    }
+    
+    # MAC vendor API cache (shared across all lookups)
+    $script:MacVendorCache = [hashtable]::Synchronized(@{})
+    $script:LastApiCall = [DateTime]::MinValue
+    $script:ApiCallCount = 0
+    
+    # Function to lookup MAC vendor via API
+    function Get-MacVendorFromAPI {
+        param(
+            [string]$MacPrefix,
+            [hashtable]$Cache
+        )
+        
+        # Check cache first
+        if ($Cache.ContainsKey($MacPrefix)) {
+            return $Cache[$MacPrefix]
+        }
+        
+        try {
+            # Rate limiting: 1 request per second
+            $timeSinceLastCall = (Get-Date) - $script:LastApiCall
+            if ($timeSinceLastCall.TotalMilliseconds -lt 1000) {
+                Start-Sleep -Milliseconds (1000 - [int]$timeSinceLastCall.TotalMilliseconds)
+            }
+            
+            # API call
+            $apiUrl = "https://api.macvendors.com/$MacPrefix"
+            $response = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 3 -ErrorAction Stop
+            
+            $script:LastApiCall = Get-Date
+            $script:ApiCallCount++
+            
+            # Cache the result
+            $Cache[$MacPrefix] = $response
+            
+            return $response
+        }
+        catch {
+            # API failed, cache as "Unknown" to avoid repeated lookups
+            $Cache[$MacPrefix] = "Unknown"
+            return "Unknown"
+        }
     }
     
     $AllResults = @()
@@ -230,6 +289,7 @@ begin {
                 DeviceType = 'Unknown'
                 OS         = $null
                 MACAddress = $null
+                MACPrefix  = $null
                 Vendor     = $null
                 OpenPorts  = @()
                 Services   = @()
@@ -255,15 +315,19 @@ begin {
         
         # Get MAC address using ARP
         $macAddress = "N/A"
+        $macPrefix = $null
         $vendor = "Unknown"
         try {
             $arpOutput = & arp -a $IP 2>$null
             if ($arpOutput -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
                 $macAddress = $matches[0].ToUpper()
                 $macPrefix = ($macAddress -split '-')[0..2] -join ':'
+                
+                # Check local database first
                 if ($MacVendorMap.ContainsKey($macPrefix)) {
                     $vendor = $MacVendorMap[$macPrefix]
                 }
+                # If not in local DB, vendor will be looked up later via API if enabled
             }
         }
         catch { }
@@ -307,7 +371,7 @@ begin {
             $os = "Windows"
         }
         elseif ($openPorts -contains 22 -or $openPorts -contains 23 -or $openPorts -contains 443) {
-            if ($vendor -in @('Aruba', 'WatchGuard', 'Ubiquiti', '3Com')) {
+            if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link') {
                 $deviceType = "Network Device"
                 $os = "$vendor Device"
             }
@@ -323,6 +387,7 @@ begin {
             DeviceType = $deviceType
             OS         = $os
             MACAddress = $macAddress
+            MACPrefix  = $macPrefix
             Vendor     = $vendor
             OpenPorts  = $openPorts
             Services   = ($services | Select-Object -Unique) -join ', '
@@ -367,7 +432,8 @@ process {
     
     if (-not $Quiet) {
         $scanType = if ($QuickScan) { "Quick" } else { "Full" }
-        Write-Host "`nScanning $($AllIPs.Count) IPs ($scanType mode, $ThrottleLimit threads)..." -ForegroundColor Cyan
+        $apiStatus = if ($UseMacVendorAPI) { "with MAC Vendor API" } else { "local MAC DB" }
+        Write-Host "`nScanning $($AllIPs.Count) IPs ($scanType mode, $ThrottleLimit threads, $apiStatus)..." -ForegroundColor Cyan
         $startTime = Get-Date
     }
     
@@ -414,10 +480,50 @@ process {
         Start-Sleep -Milliseconds 50
     }
     
-    # Cleanup
+    # Cleanup runspaces
     $runspacePool.Close()
     $runspacePool.Dispose()
     Write-Progress -Activity "Network Discovery" -Completed
+    
+    # Enhanced MAC vendor lookup via API (post-processing)
+    if ($UseMacVendorAPI) {
+        $unknownVendors = $Results | Where-Object { 
+            $_.Status -eq 'Online' -and 
+            $_.Vendor -eq 'Unknown' -and 
+            $_.MACPrefix 
+        }
+        
+        if ($unknownVendors.Count -gt 0) {
+            if (-not $Quiet) {
+                Write-Host "`nLooking up $($unknownVendors.Count) unknown MAC vendors via API..." -ForegroundColor Yellow
+            }
+            
+            # Get unique MAC prefixes to lookup
+            $uniquePrefixes = $unknownVendors | 
+                Select-Object -ExpandProperty MACPrefix -Unique
+            
+            $lookupCount = 0
+            foreach ($prefix in $uniquePrefixes) {
+                $vendor = Get-MacVendorFromAPI -MacPrefix $prefix -Cache $script:MacVendorCache
+                
+                # Update all results with this MAC prefix
+                $Results | Where-Object { $_.MACPrefix -eq $prefix } | ForEach-Object {
+                    $_.Vendor = $vendor
+                }
+                
+                $lookupCount++
+                if (-not $Quiet -and $lookupCount % 5 -eq 0) {
+                    Write-Progress -Activity "MAC Vendor Lookup" -Status "$lookupCount of $($uniquePrefixes.Count) vendors" -PercentComplete (($lookupCount / $uniquePrefixes.Count) * 100)
+                }
+            }
+            
+            Write-Progress -Activity "MAC Vendor Lookup" -Completed
+            
+            if (-not $Quiet) {
+                Write-Host "API lookups completed: $script:ApiCallCount requests (cached: $($uniquePrefixes.Count - $script:ApiCallCount))" -ForegroundColor Green
+            }
+        }
+    }
     
     # Filter results
     if ($IncludeOffline) {
@@ -445,6 +551,10 @@ end {
             Write-Host "Offline Addresses:    $offlineCount"
         }
         Write-Host "Scan Duration:        $([math]::Round($elapsed, 1)) seconds"
+        
+        if ($UseMacVendorAPI) {
+            Write-Host "MAC Vendor Lookups:   $script:ApiCallCount API calls"
+        }
         
         $deviceTypes = $AllResults | Where-Object { $_.Status -eq 'Online' } | 
                        Group-Object DeviceType | 
@@ -518,7 +628,7 @@ end {
     <div class="summary">
         <strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br>
         <strong>Scan Range:</strong> $($AllIPs.Count) IP addresses<br>
-        <strong>Discovery Method:</strong> ICMP Ping $(if($ScanPorts){"+ Port Scan"})
+        <strong>Discovery Method:</strong> ICMP Ping $(if($ScanPorts){"+ Port Scan"}) $(if($UseMacVendorAPI){"+ MAC Vendor API"})
         
         <div class="summary-grid">
 "@
