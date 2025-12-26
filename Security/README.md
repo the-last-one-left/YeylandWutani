@@ -48,6 +48,136 @@ Collect evidence, analyze artifacts, and support incident investigation.
 - Appropriate security clearances and authorizations
 - Understanding of security concepts and potential impacts
 
+---
+
+## Available Tools
+
+### Get-SPOSecurityReport.ps1 - SharePoint Online Security Assessment
+
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-FF6600.svg)](https://docs.microsoft.com/powershell/)
+[![Platform](https://img.shields.io/badge/Platform-Microsoft%20365-6B7280.svg)](https://www.microsoft.com/microsoft-365)
+
+**Version:** 3.1 | **Author:** Yeyland Wutani LLC
+
+#### Overview
+Comprehensive SharePoint Online security and usage reporting tool designed for MSP security audits. Generates detailed reports on site permissions, external sharing configurations, anonymous access links, and storage distribution using Microsoft Graph SDK and SPO Management Shell with delegated authentication (no app registration required).
+
+#### Core Capabilities
+
+**Site Security Analysis**
+- **All Site Types**: Scans Team Sites, Communication Sites, Classic Sites, Hub Sites, and Teams Channels
+- **Permission Enumeration**: Site Admins, Owners, Members, and Visitors for every site
+- **External User Detection**: Identifies and flags guest accounts across the tenant
+- **OneDrive Exclusion**: Focuses on collaborative SharePoint sites by default (optional OneDrive inclusion)
+
+**External Sharing Assessment**
+- **Tenant-Level Settings**: Sharing capability, anonymous link expiration, domain restrictions
+- **Per-Site Configuration**: Individual site sharing settings with capability descriptions
+- **Sharing Link Discovery**: Anonymous links, organization links, and specific people links
+- **Deep Library Analysis**: Recursive scanning of document libraries for sharing exposure
+
+**Storage & Structure Analysis**
+- **Storage Metrics**: Site storage usage with quota percentages
+- **Folder Size Distribution**: Hierarchical breakdown of storage by folder
+- **Library Inventory**: Document library enumeration with size and type information
+- **Unique Permissions**: Items with broken inheritance flagged for review
+
+#### Key Features
+- **No App Registration**: Uses delegated authentication with interactive sign-in
+- **Branded HTML Reports**: Professional reports with collapsible sections and visual charts
+- **CSV Export**: Raw data exports for all collected metrics
+- **Configurable Depth**: Adjustable folder scan depth (1-10 levels)
+- **Progress Tracking**: Real-time progress with estimated completion
+
+#### Parameters
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `-TenantName` | String | **Required.** SharePoint tenant name (e.g., 'contoso' for contoso.sharepoint.com) |
+| `-OutputPath` | String | Directory for output files (default: current directory) |
+| `-IncludeLibraryDeepDive` | Switch | Enable detailed library analysis with sharing links and folder sizes |
+| `-IncludeOneDrive` | Switch | Include OneDrive for Business sites (excluded by default) |
+| `-SiteUrlFilter` | String | Filter sites by URL pattern (supports wildcards) |
+| `-MaxSites` | Int | Limit number of sites to process (useful for testing) |
+| `-MaxScanDepth` | Int | Folder depth for recursive scanning (1-10, default: 3) |
+| `-SkipTenantSettings` | Switch | Skip tenant-level settings (if limited permissions) |
+
+#### Usage Examples
+
+```powershell
+# Basic security report for all SharePoint sites
+.\Get-SPOSecurityReport.ps1 -TenantName "contoso"
+
+# Full deep-dive with library analysis
+.\Get-SPOSecurityReport.ps1 -TenantName "contoso" -IncludeLibraryDeepDive -OutputPath "C:\Reports"
+
+# Include OneDrive sites in the scan
+.\Get-SPOSecurityReport.ps1 -TenantName "contoso" -IncludeOneDrive
+
+# Filter to specific sites only
+.\Get-SPOSecurityReport.ps1 -TenantName "contoso" -SiteUrlFilter "*project*"
+
+# Test run with limited sites
+.\Get-SPOSecurityReport.ps1 -TenantName "contoso" -MaxSites 10 -IncludeLibraryDeepDive
+```
+
+#### Required Modules
+- Microsoft.Graph.Authentication (v2.0.0+)
+- Microsoft.Graph.Sites (v2.0.0+)
+- Microsoft.Graph.Users (v2.0.0+)
+- Microsoft.Graph.Groups (v2.0.0+)
+- Microsoft.Online.SharePoint.PowerShell (v16.0.0+)
+
+#### Required Permissions
+**Microsoft Graph (Delegated):**
+- Sites.Read.All
+- User.Read.All
+- Group.Read.All
+- GroupMember.Read.All
+
+**SharePoint Online:**
+- SharePoint Administrator or Global Administrator
+
+#### Output Files
+| File | Description |
+|------|-------------|
+| `SPO_SecurityReport_<timestamp>.html` | Branded HTML report with visual charts |
+| `SPO_Sites_<timestamp>.csv` | Site inventory with storage and sharing settings |
+| `SPO_SiteMembers_<timestamp>.csv` | User permissions by site |
+| `SPO_ExternalSharingSettings_<timestamp>.csv` | Sharing capability by site |
+| `SPO_Libraries_<timestamp>.csv` | Document library inventory |
+| `SPO_SharingLinks_<timestamp>.csv` | Discovered sharing links (deep dive) |
+| `SPO_UniquePermissions_<timestamp>.csv` | Items with unique permissions (deep dive) |
+| `SPO_FolderSizes_<timestamp>.csv` | Folder size distribution (deep dive) |
+| `SPO_Errors_<timestamp>.csv` | Errors encountered during scan |
+
+#### HTML Report Sections
+1. **Summary Dashboard** - Total sites, storage, external sharing counts
+2. **Tenant Settings** - Organization-wide sharing configuration
+3. **SharePoint Sites** - Sortable site list with key metrics
+4. **Site Permissions** - Expandable permission lists per site
+5. **External Sharing Overview** - Donut chart of sharing capabilities
+6. **Storage Distribution** - Expandable library/folder breakdown
+7. **External Sharing Links** - Anonymous and external links
+8. **Unique Permissions** - Items with broken inheritance
+9. **Errors** - Any issues encountered during collection
+
+#### Yeyland Wutani Use Cases
+- **Security Assessments**: Baseline external sharing posture for new clients
+- **Compliance Audits**: Document access controls for regulatory requirements
+- **Risk Identification**: Find anonymous links and overshared content
+- **Storage Analysis**: Identify large sites/libraries for quota planning
+- **Permission Reviews**: Regular audits of site access and guest users
+- **Incident Response**: Investigate potential data exposure incidents
+
+#### Performance Notes
+- Deep dive significantly increases scan time for large tenants
+- OneDrive inclusion adds substantial processing for user-heavy environments
+- Recommended to use `-MaxSites` for initial testing
+- Progress bar provides real-time completion estimates
+
+---
+
 ## External Resources
 
 ### CompromisedDiscovery-Graph - Microsoft 365 Security Analysis Toolkit
