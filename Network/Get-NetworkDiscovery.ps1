@@ -656,7 +656,7 @@ end {
         body { 
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
             margin: 20px; 
-            background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+            background-color: #6B7280;
         }
         .header {
             background: linear-gradient(135deg, #FF6600 0%, #6B7280 100%);
