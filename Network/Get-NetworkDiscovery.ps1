@@ -121,7 +121,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.4"
+    $ScriptVersion = "1.5"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -740,10 +740,32 @@ process {
                     $_.Vendor = $vendor
                     
                     # Re-evaluate device type based on new vendor information
-                    if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link') {
+                    # Check for network equipment vendors
+                    if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link') {
                         if ($_.OpenPorts -contains 22 -or $_.OpenPorts -contains 23 -or $_.OpenPorts -contains 443) {
                             $_.DeviceType = "Network Device"
                             $_.OS = "$vendor Device"
+                        }
+                    }
+                    # Check for printer vendors
+                    elseif ($vendor -match 'HP|Canon|Epson|Brother|Xerox|Lexmark|Ricoh' -and 
+                            ($_.OpenPorts -contains 515 -or $_.OpenPorts -contains 631 -or $_.OpenPorts -contains 9100)) {
+                        $_.DeviceType = "Printer"
+                        $_.OS = "$vendor Printer"
+                    }
+                    # Check for mobile device vendors
+                    elseif ($vendor -match 'Apple.*iPhone|Apple.*iPad|Samsung.*Mobile|LG Electronics|Motorola Mobility') {
+                        $_.DeviceType = "Mobile Device"
+                        if ($vendor -match 'Apple') { $_.OS = "iOS" }
+                        elseif ($vendor -match 'Samsung|LG|Motorola') { $_.OS = "Android" }
+                        else { $_.OS = "Mobile" }
+                    }
+                    # Check for known computer vendors
+                    elseif ($vendor -match 'Dell|HP|Lenovo|Microsoft|Intel') {
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "Workstation"
+                            if ($vendor -match 'Apple') { $_.OS = "macOS" }
+                            else { $_.OS = "Windows" }
                         }
                     }
                 }
@@ -964,6 +986,14 @@ end {
             border-left: 4px solid #FF6600;
             background-color: #fff0e6;
         }
+        .device-mobile { 
+            border-left: 4px solid #9C27B0;
+            background-color: #f3e5f5;
+        }
+        .device-iot { 
+            border-left: 4px solid #FF5722;
+            background-color: #fbe9e7;
+        }
         .footer { 
             margin-top: 40px; 
             text-align: center; 
@@ -1035,6 +1065,8 @@ end {
                             'Workstation' { 'device-workstation' }
                             'Printer' { 'device-printer' }
                             'Network Device' { 'device-network' }
+                            'Mobile Device' { 'device-mobile' }
+                            'IoT Device' { 'device-iot' }
                             default { '' }
                         }
                         
