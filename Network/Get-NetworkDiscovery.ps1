@@ -492,10 +492,22 @@ process {
     
     # Enhanced MAC vendor lookup via API (post-processing)
     if ($UseMacVendorAPI) {
+        # Debug: Show what we're working with
+        if (-not $Quiet) {
+            $onlineWithMac = $Results | Where-Object { $_.Status -eq 'Online' -and $_.MACAddress -ne 'N/A' }
+            $unknownInLocal = $onlineWithMac | Where-Object { $_.Vendor -eq 'Unknown' }
+            
+            Write-Host "`nMAC Vendor Analysis:" -ForegroundColor Cyan
+            Write-Host "  Online devices with MAC: $($onlineWithMac.Count)"
+            Write-Host "  Unknown vendors: $($unknownInLocal.Count)"
+        }
+        
         $unknownVendors = $Results | Where-Object { 
             $_.Status -eq 'Online' -and 
+            $_.MACAddress -ne 'N/A' -and
             $_.Vendor -eq 'Unknown' -and 
-            $_.MACPrefix 
+            $_.MACPrefix -ne $null -and
+            $_.MACPrefix -ne ''
         }
         
         if ($unknownVendors.Count -gt 0) {
@@ -504,7 +516,8 @@ process {
                 Select-Object -ExpandProperty MACPrefix -Unique
             
             if (-not $Quiet) {
-                Write-Host "`nLooking up $($uniquePrefixes.Count) unique MAC vendors via API (from $($unknownVendors.Count) devices)..." -ForegroundColor Yellow
+                Write-Host "  Unique MAC prefixes to lookup: $($uniquePrefixes.Count)" -ForegroundColor Yellow
+                Write-Host "`nLooking up MAC vendors via API..." -ForegroundColor Yellow
             }
             
             $lookupCount = 0
