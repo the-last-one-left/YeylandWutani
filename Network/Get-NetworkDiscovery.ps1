@@ -499,13 +499,13 @@ process {
         }
         
         if ($unknownVendors.Count -gt 0) {
-            if (-not $Quiet) {
-                Write-Host "`nLooking up $($unknownVendors.Count) unknown MAC vendors via API..." -ForegroundColor Yellow
-            }
-            
             # Get unique MAC prefixes to lookup
             $uniquePrefixes = $unknownVendors | 
                 Select-Object -ExpandProperty MACPrefix -Unique
+            
+            if (-not $Quiet) {
+                Write-Host "`nLooking up $($uniquePrefixes.Count) unique MAC vendors via API (from $($unknownVendors.Count) devices)..." -ForegroundColor Yellow
+            }
             
             $lookupCount = 0
             foreach ($prefix in $uniquePrefixes) {
@@ -525,8 +525,12 @@ process {
             Write-Progress -Activity "MAC Vendor Lookup" -Completed
             
             if (-not $Quiet) {
-                Write-Host "API lookups completed: $script:ApiCallCount requests (cached: $($uniquePrefixes.Count - $script:ApiCallCount))" -ForegroundColor Green
+                $cacheHits = $uniquePrefixes.Count - $script:ApiCallCount
+                Write-Host "API lookups completed: $script:ApiCallCount new requests, $cacheHits from cache" -ForegroundColor Green
             }
+        }
+        elseif ($UseMacVendorAPI -and -not $Quiet) {
+            Write-Host "`nNo unknown MAC vendors found - all identified from local database" -ForegroundColor Green
         }
     }
     
@@ -558,7 +562,8 @@ end {
         Write-Host "Scan Duration:        $([math]::Round($elapsed, 1)) seconds"
         
         if ($UseMacVendorAPI) {
-            Write-Host "MAC Vendor Lookups:   $script:ApiCallCount API calls"
+            $identifiedVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -ne 'Unknown' }).Count
+            Write-Host "MAC Vendors Found:    $identifiedVendors devices ($script:ApiCallCount API calls)"
         }
         
         $deviceTypes = $AllResults | Where-Object { $_.Status -eq 'Online' } | 
