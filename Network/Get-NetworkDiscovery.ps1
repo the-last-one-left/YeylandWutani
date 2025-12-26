@@ -121,7 +121,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.3"
+    $ScriptVersion = "1.4"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -562,7 +562,9 @@ process {
             
             if (-not $Quiet) {
                 $cacheHits = $uniquePrefixes.Count - $script:ApiCallCount
+                $successfulLookups = ($Results | Where-Object { $_.MACPrefix -and $_.Vendor -ne 'Unknown' }).Count
                 Write-Host "API lookups completed: $script:ApiCallCount new requests, $cacheHits from cache" -ForegroundColor Green
+                Write-Host "Vendors identified: $successfulLookups devices" -ForegroundColor Green
             }
         }
         elseif ($UseMacVendorAPI -and -not $Quiet) {
@@ -599,7 +601,8 @@ end {
         
         if ($UseMacVendorAPI) {
             $identifiedVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -ne 'Unknown' }).Count
-            Write-Host "MAC Vendors Found:    $identifiedVendors devices ($script:ApiCallCount API calls)"
+            $unknownVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -eq 'Unknown' }).Count
+            Write-Host "MAC Vendors:          $identifiedVendors identified, $unknownVendors unknown ($script:ApiCallCount API calls)"
         }
         
         $deviceTypes = $AllResults | Where-Object { $_.Status -eq 'Online' } | 
@@ -650,31 +653,153 @@ end {
 <head>
     <title>Network Discovery Report - $(Get-Date -Format 'yyyy-MM-dd HH:mm')</title>
     <style>
-        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f5f5f5; }
-        h1 { color: #FF6600; border-bottom: 3px solid #6B7280; padding-bottom: 10px; }
-        h2 { color: #6B7280; margin-top: 30px; }
-        .summary { background-color: white; padding: 15px; border-radius: 5px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 15px; margin-top: 15px; }
-        .stat-box { background-color: #f8f9fa; padding: 15px; border-radius: 5px; text-align: center; }
-        .stat-number { font-size: 32px; font-weight: bold; color: #FF6600; }
-        .stat-label { color: #6B7280; margin-top: 5px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 10px; background-color: white; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-        th { background-color: #6B7280; color: white; padding: 12px; text-align: left; }
-        td { padding: 10px; border-bottom: 1px solid #ddd; }
-        tr:hover { background-color: #f1f1f1; }
-        .device-server { background-color: #d1ecf1; }
-        .device-workstation { background-color: #d4edda; }
-        .device-printer { background-color: #fff3cd; }
-        .device-network { background-color: #f8d7da; }
-        .footer { margin-top: 30px; text-align: center; color: #6B7280; font-size: 12px; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 20px; 
+            background: linear-gradient(135deg, #f5f5f5 0%, #e0e0e0 100%);
+        }
+        .header {
+            background: linear-gradient(135deg, #FF6600 0%, #6B7280 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header h1 { 
+            margin: 0; 
+            font-size: 36px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .header .tagline {
+            font-size: 14px;
+            margin-top: 5px;
+            opacity: 0.9;
+            font-style: italic;
+        }
+        h2 { 
+            color: #FF6600; 
+            margin-top: 30px;
+            border-bottom: 3px solid #6B7280;
+            padding-bottom: 10px;
+        }
+        .summary { 
+            background-color: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 5px solid #FF6600;
+        }
+        .summary-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 15px; 
+            margin-top: 15px; 
+        }
+        .stat-box { 
+            background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+            padding: 20px; 
+            border-radius: 8px; 
+            text-align: center;
+            border: 2px solid #6B7280;
+            transition: transform 0.2s;
+        }
+        .stat-box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .stat-number { 
+            font-size: 36px; 
+            font-weight: bold; 
+            color: #FF6600;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
+        .stat-label { 
+            color: #6B7280; 
+            margin-top: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px; 
+            background-color: white; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th { 
+            background: linear-gradient(135deg, #6B7280 0%, #4a5568 100%);
+            color: white; 
+            padding: 12px; 
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+        td { 
+            padding: 12px; 
+            border-bottom: 1px solid #e0e0e0;
+        }
+        tr:hover { 
+            background-color: #fff5f0;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .device-server { 
+            border-left: 4px solid #0066cc;
+            background-color: #e8f4fd;
+        }
+        .device-workstation { 
+            border-left: 4px solid #28a745;
+            background-color: #e8f5e9;
+        }
+        .device-printer { 
+            border-left: 4px solid #ffc107;
+            background-color: #fff8e1;
+        }
+        .device-network { 
+            border-left: 4px solid #FF6600;
+            background-color: #fff0e6;
+        }
+        .footer { 
+            margin-top: 40px; 
+            text-align: center; 
+            color: #6B7280;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .footer .company { 
+            font-size: 20px;
+            font-weight: bold;
+            color: #FF6600;
+            margin-bottom: 5px;
+        }
+        .footer .tagline {
+            font-style: italic;
+            color: #6B7280;
+            margin-bottom: 10px;
+        }
     </style>
 </head>
 <body>
-    <h1>Network Discovery Report</h1>
+    <div class="header">
+        <h1>Network Discovery Report</h1>
+        <div class="tagline">Comprehensive Network Infrastructure Analysis</div>
+    </div>
+    
     <div class="summary">
-        <strong>Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br>
-        <strong>Scan Range:</strong> $($AllIPs.Count) IP addresses<br>
-        <strong>Discovery Method:</strong> ICMP Ping $(if($ScanPorts){"+ Port Scan"}) $(if($UseMacVendorAPI){"+ MAC Vendor API"})
+        <strong style="color: #FF6600;">Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br>
+        <strong style="color: #FF6600;">Scan Range:</strong> $($AllIPs.Count) IP addresses<br>
+        <strong style="color: #FF6600;">Discovery Method:</strong> ICMP Ping $(if($ScanPorts){"+ Port Scan"}) $(if($UseMacVendorAPI){"+ MAC Vendor API"})
         
         <div class="summary-grid">
 "@
@@ -733,8 +858,9 @@ end {
                     $html += @"
     </table>
     <div class="footer">
-        Yeyland Wutani LLC - Building Better Systems<br>
-        Network Discovery Report
+        <div class="company">Yeyland Wutani LLC</div>
+        <div class="tagline">Building Better Systems</div>
+        <div style="font-size: 11px; color: #999;">Network Discovery Report | Powered by Advanced Infrastructure Analysis</div>
     </div>
 </body>
 </html>
