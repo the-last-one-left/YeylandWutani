@@ -1,4 +1,4 @@
-#################################################################
+﻿#################################################################
 #
 #  Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition
 #  
@@ -118,7 +118,7 @@ $script:HighRiskISPs = @(
 
 # Theme Color Configuration
 $script:ThemeColors = @{
-    # LIGHT MODE COLORS - Yeyland Wutani brand colors (Orange & Grey)
+    # LIGHT MODE COLORS - Yeyland Wutani brand colors (Orange and Grey)
     Light = @{
         Primary         = [System.Drawing.Color]::FromArgb(255, 102, 0)     # Yeyland Wutani Orange
         Secondary       = [System.Drawing.Color]::FromArgb(107, 114, 128)  # Yeyland Wutani Grey
@@ -8500,8 +8500,8 @@ function Show-MainGUI {
     $disclaimerPanel.Controls.Add($disclaimerTitle)
 
     $disclaimerText = New-Object System.Windows.Forms.Label
-    $disclaimerText.Text = "This tool was developed by Yeyland Wutani LLC for security consulting engagements." + [Environment]::NewLine + 
-                          "LICENSED FOR AUTHORIZED YEYLAND WUTANI CONSULTING CLIENTS." + [Environment]::NewLine +
+    $disclaimerText.Text = "This tool was developed by Yeyland Wutani LLC for security engagements." + [Environment]::NewLine + 
+                          "Licensed for use by Yeyland Wutani and clients." + [Environment]::NewLine +
                           "Unauthorized use, distribution, or modification is strictly prohibited."
     $disclaimerText.Font = New-Object System.Drawing.Font("Segoe UI", 8)
     $disclaimerText.Size = New-Object System.Drawing.Size(760, 45)
