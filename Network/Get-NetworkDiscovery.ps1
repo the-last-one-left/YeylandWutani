@@ -500,6 +500,16 @@ process {
             Write-Host "`nMAC Vendor Analysis:" -ForegroundColor Cyan
             Write-Host "  Online devices with MAC: $($onlineWithMac.Count)"
             Write-Host "  Unknown vendors: $($unknownInLocal.Count)"
+            
+            # Show sample device for debugging
+            if ($unknownInLocal.Count -gt 0) {
+                $sample = $unknownInLocal | Select-Object -First 1
+                Write-Host "  Sample unknown device:" -ForegroundColor Gray
+                Write-Host "    IP: $($sample.IPAddress)" -ForegroundColor Gray
+                Write-Host "    MAC: $($sample.MACAddress)" -ForegroundColor Gray
+                Write-Host "    Prefix: $($sample.MACPrefix)" -ForegroundColor Gray
+                Write-Host "    Vendor: $($sample.Vendor)" -ForegroundColor Gray
+            }
         }
         
         $unknownVendors = $Results | Where-Object { 
