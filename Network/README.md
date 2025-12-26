@@ -150,78 +150,6 @@ $discovery | Where-Object { $_.Services -match 'DHCP' }
 
 ---
 
-### Network Documentation
-
-#### Get-NetworkDocumentation.ps1
-Professional network documentation generator from discovery data.
-
-**Key Features:**
-- Template-based documentation (Standard, Detailed, Executive)
-- Professional HTML reports for client deliverables
-- Device inventory with color-coded categorization
-- Executive summary with statistics
-- Network segment analysis
-- Customizable client branding
-- Ready-to-deliver professional formatting
-
-**Usage Examples:**
-```powershell
-# Generate standard client documentation
-.\Get-NetworkDocumentation.ps1 `
-    -DiscoveryFile "C:\Discovery\client_network.json" `
-    -ClientName "ABC Corporation" `
-    -OutputPath "C:\Deliverables\ABC_Network_Documentation.html"
-
-# Detailed documentation with diagrams
-.\Get-NetworkDocumentation.ps1 `
-    -DiscoveryFile "discovery.json" `
-    -ClientName "XYZ Inc" `
-    -Template Detailed `
-    -IncludeDiagram `
-    -OutputPath "C:\Docs\XYZ_Detailed.html"
-
-# Executive summary for management
-.\Get-NetworkDocumentation.ps1 `
-    -DiscoveryFile "scan.json" `
-    -ClientName "Acme Corp" `
-    -Template Executive `
-    -OutputPath "C:\Reports\Acme_Executive_Summary.html"
-```
-
-**Documentation Workflow:**
-```powershell
-# Step 1: Discover network
-.\Get-NetworkDiscovery.ps1 `
-    -Subnet "10.0.0.0/16" `
-    -ThrottleLimit 200 `
-    -ExportPath "C:\Temp\discovery.json"
-
-# Step 2: Generate professional documentation
-.\Get-NetworkDocumentation.ps1 `
-    -DiscoveryFile "C:\Temp\discovery.json" `
-    -ClientName "Client Name Here" `
-    -Template Standard `
-    -OutputPath "C:\Deliverables\Network_Documentation.html"
-
-# Step 3: Deliver to client
-# Email HTML file or print to PDF for physical delivery
-```
-
-**Report Contents:**
-- Executive Summary
-  - Total devices discovered
-  - Network segments identified
-  - Device breakdown by type (servers, workstations, printers, network devices)
-- Device Inventory
-  - Complete device list with IP, hostname, MAC, vendor
-  - Color-coded by device type
-  - Services/ports identified per device
-- Professional Footer
-  - Yeyland Wutani branding
-  - Generation timestamp
-  - Custom client branding (optional)
-
----
 
 ### Network Connectivity Testing
 
@@ -332,13 +260,6 @@ $timestamp = Get-Date -Format "yyyyMMdd"
     -ThrottleLimit 150 `
     -ExportPath "C:\Clients\$clientName\Discovery_$timestamp.json"
 
-# Generate professional documentation
-.\Get-NetworkDocumentation.ps1 `
-    -DiscoveryFile "C:\Clients\$clientName\Discovery_$timestamp.json" `
-    -ClientName $clientName `
-    -Template Detailed `
-    -OutputPath "C:\Clients\$clientName\Network_Documentation.html"
-
 # Test connectivity to critical servers
 $criticalServers = Import-Csv "C:\Clients\$clientName\critical_systems.csv"
 $criticalServers | .\Test-NetworkConnectivity.ps1 `
@@ -441,13 +362,6 @@ $available | Select-Object -First 10 -ExpandProperty IPAddress
 - Reserve static IP ranges (exclude from DHCP scope)
 - Document IP assignments in discovery exports
 - Track MAC addresses for device identification
-
-### Documentation
-- Generate documentation immediately after discovery
-- Update quarterly or after major network changes
-- Customize client name and branding
-- Store versioned copies with timestamps
-- Export to PDF for formal client deliverables
 
 ### Performance
 - **Small networks (<100 IPs)**: 25-50 threads
