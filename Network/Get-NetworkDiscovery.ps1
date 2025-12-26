@@ -151,42 +151,187 @@ begin {
         8080 = "HTTP-Alt"
     }
     
-    # Local MAC vendor database (fallback/cache accelerator)
+    # Comprehensive MAC vendor database with device type hints
+    # Format: 'MAC-Prefix' = 'Vendor Name|DeviceType|OS'
+    # DeviceType: Network, Printer, Computer, Mobile, IoT, Server, Unknown
     $MacVendors = @{
-        '00:50:56' = 'VMware'
-        '00:0C:29' = 'VMware'
-        '00:05:69' = 'VMware'
-        '00:1C:14' = 'VMware'
-        '00:1C:42' = 'Parallels'
-        '08:00:27' = 'VirtualBox'
-        '00:15:5D' = 'Microsoft (Hyper-V)'
-        '00:03:FF' = 'Microsoft'
-        'D4:C9:EF' = 'Aruba Networks'
-        '00:1A:1E' = 'WatchGuard'
-        'F0:9F:C2' = 'Ubiquiti'
-        '00:01:E3' = 'Siemens'
-        '00:04:76' = '3Com'
-        'B4:75:0E' = 'Aruba Networks'
-        '00:0B:86' = 'Aruba Networks'
-        '24:DE:C6' = 'Aruba Networks'
-        '00:1B:D5' = 'Cisco'
-        '00:1E:BD' = 'Cisco'
-        '00:25:84' = 'Apple'
-        '00:26:BB' = 'Apple'
-        'DC:A6:32' = 'Raspberry Pi'
-        'B8:27:EB' = 'Raspberry Pi'
-        '00:0C:76' = 'Hewlett Packard'
-        '00:14:38' = 'Hewlett Packard'
-        '00:50:8B' = 'Hewlett Packard'
-        '00:1B:78' = 'Dell'
-        '00:14:22' = 'Dell'
-        'D4:BE:D9' = 'Dell'
-        '00:0D:88' = 'D-Link'
-        '00:17:9A' = 'D-Link'
-        '00:1C:F0' = 'D-Link'
-        '00:0F:B5' = 'Netgear'
-        '00:09:5B' = 'Netgear'
-        'A0:63:91' = 'Netgear'
+        # Network Equipment Vendors
+        '00:1B:D5' = 'Cisco|Network|IOS'
+        '00:1E:BD' = 'Cisco|Network|IOS'
+        '00:24:97' = 'Cisco|Network|IOS'
+        '00:0C:85' = 'Cisco|Network|IOS'
+        '00:1D:A2' = 'Cisco|Network|IOS'
+        '00:26:0A' = 'Cisco|Network|IOS'
+        'D4:C9:EF' = 'Aruba Networks|Network|ArubaOS'
+        'B4:75:0E' = 'Aruba Networks|Network|ArubaOS'
+        '00:0B:86' = 'Aruba Networks|Network|ArubaOS'
+        '24:DE:C6' = 'Aruba Networks|Network|ArubaOS'
+        '6C:F3:7F' = 'Aruba Networks|Network|ArubaOS'
+        '00:1A:1E' = 'WatchGuard|Network|Fireware'
+        '00:90:7F' = 'WatchGuard|Network|Fireware'
+        'F0:9F:C2' = 'Ubiquiti|Network|EdgeOS'
+        '04:18:D6' = 'Ubiquiti|Network|EdgeOS'
+        '24:A4:3C' = 'Ubiquiti|Network|EdgeOS'
+        '68:D7:9A' = 'Ubiquiti|Network|EdgeOS'
+        '00:0F:B5' = 'Netgear|Network|Unknown'
+        '00:09:5B' = 'Netgear|Network|Unknown'
+        'A0:63:91' = 'Netgear|Network|Unknown'
+        '00:0D:88' = 'D-Link|Network|Unknown'
+        '00:17:9A' = 'D-Link|Network|Unknown'
+        '00:1C:F0' = 'D-Link|Network|Unknown'
+        '00:04:76' = '3Com|Network|Unknown'
+        '00:50:04' = '3Com|Network|Unknown'
+        '00:01:02' = '3Com|Network|Unknown'
+        '00:19:06' = 'Fortinet|Network|FortiOS'
+        '00:09:0F' = 'Fortinet|Network|FortiOS'
+        '70:4C:A5' = 'Fortinet|Network|FortiOS'
+        '00:13:C4' = 'TP-Link|Network|Unknown'
+        '50:C7:BF' = 'TP-Link|Network|Unknown'
+        'F4:F2:6D' = 'TP-Link|Network|Unknown'
+        '00:E0:4C' = 'Realtek|Network|Unknown'
+        '00:E0:4D' = 'Realtek|Network|Unknown'
+        '52:54:00' = 'Realtek|Network|Unknown'
+        '00:1F:33' = 'Netgear|Network|Unknown'
+        'E0:46:9A' = 'Netgear|Network|Unknown'
+        '00:22:6B' = 'Netgear|Network|Unknown'
+        
+        # HP Printers
+        '00:0C:76' = 'HP|Printer|Printer'
+        '00:14:38' = 'HP|Printer|Printer'
+        '00:1E:0B' = 'HP|Printer|Printer'
+        '00:21:5A' = 'HP|Printer|Printer'
+        '00:23:7D' = 'HP|Printer|Printer'
+        '00:26:55' = 'HP|Printer|Printer'
+        '3C:D9:2B' = 'HP|Printer|Printer'
+        'B4:99:BA' = 'HP|Printer|Printer'
+        'D4:85:64' = 'HP|Printer|Printer'
+        
+        # Canon Printers
+        '00:00:85' = 'Canon|Printer|Printer'
+        '00:1E:8F' = 'Canon|Printer|Printer'
+        '34:23:BA' = 'Canon|Printer|Printer'
+        '9C:E6:E7' = 'Canon|Printer|Printer'
+        
+        # Epson Printers
+        '00:00:48' = 'Epson|Printer|Printer'
+        '00:26:AB' = 'Epson|Printer|Printer'
+        '64:EB:8C' = 'Epson|Printer|Printer'
+        
+        # Brother Printers
+        '00:80:77' = 'Brother|Printer|Printer'
+        '00:1B:A9' = 'Brother|Printer|Printer'
+        '30:05:5C' = 'Brother|Printer|Printer'
+        
+        # Xerox Printers
+        '00:00:AA' = 'Xerox|Printer|Printer'
+        '08:00:03' = 'Xerox|Printer|Printer'
+        
+        # Dell Computers/Servers
+        '00:1B:78' = 'Dell|Computer|Windows'
+        '00:14:22' = 'Dell|Computer|Windows'
+        'D4:BE:D9' = 'Dell|Computer|Windows'
+        '00:1E:4F' = 'Dell|Computer|Windows'
+        '00:21:70' = 'Dell|Computer|Windows'
+        '00:24:E8' = 'Dell|Computer|Windows'
+        '18:03:73' = 'Dell|Computer|Windows'
+        'B8:2A:72' = 'Dell|Server|Windows Server'
+        'D0:67:E5' = 'Dell|Server|Windows Server'
+        
+        # HP Computers/Servers
+        '00:50:8B' = 'HP|Computer|Windows'
+        '00:1F:29' = 'HP|Computer|Windows'
+        '00:23:7D' = 'HP|Computer|Windows'
+        '00:26:55' = 'HP|Computer|Windows'
+        '2C:27:D7' = 'HP|Server|Windows Server'
+        '9C:B6:54' = 'HP|Server|Windows Server'
+        
+        # Lenovo/IBM
+        '00:1A:6B' = 'Lenovo|Computer|Windows'
+        '54:EE:75' = 'Lenovo|Computer|Windows'
+        '00:21:CC' = 'Lenovo|Computer|Windows'
+        '40:F2:E9' = 'Lenovo|Computer|Windows'
+        
+        # Apple Devices
+        '00:25:84' = 'Apple|Computer|macOS'
+        '00:26:BB' = 'Apple|Computer|macOS'
+        '3C:07:54' = 'Apple|Computer|macOS'
+        '68:5B:35' = 'Apple|Computer|macOS'
+        '98:01:A7' = 'Apple|Computer|macOS'
+        'A4:5E:60' = 'Apple|Computer|macOS'
+        'BC:92:6B' = 'Apple|Computer|macOS'
+        'F0:99:BF' = 'Apple|Computer|macOS'
+        '00:23:DF' = 'Apple|Mobile|iOS'
+        '10:40:F3' = 'Apple|Mobile|iOS'
+        '28:E1:4C' = 'Apple|Mobile|iOS'
+        'DC:2B:2A' = 'Apple|Mobile|iOS'
+        
+        # Microsoft
+        '00:03:FF' = 'Microsoft|Computer|Windows'
+        '00:50:F2' = 'Microsoft|Computer|Windows'
+        '7C:ED:8D' = 'Microsoft|Computer|Windows'
+        '00:15:5D' = 'Microsoft|Computer|Hyper-V'
+        
+        # Virtualization
+        '00:50:56' = 'VMware|Computer|Virtual'
+        '00:0C:29' = 'VMware|Computer|Virtual'
+        '00:05:69' = 'VMware|Computer|Virtual'
+        '00:1C:14' = 'VMware|Computer|Virtual'
+        '00:1C:42' = 'Parallels|Computer|Virtual'
+        '08:00:27' = 'VirtualBox|Computer|Virtual'
+        'DE:AD:BE' = 'VirtualBox|Computer|Virtual'
+        
+        # Raspberry Pi & IoT
+        'DC:A6:32' = 'Raspberry Pi|IoT|Linux'
+        'B8:27:EB' = 'Raspberry Pi|IoT|Linux'
+        'E4:5F:01' = 'Raspberry Pi|IoT|Linux'
+        '28:CD:C1' = 'Raspberry Pi|IoT|Linux'
+        
+        # Samsung
+        '00:12:FB' = 'Samsung|Computer|Unknown'
+        '00:1B:98' = 'Samsung|Mobile|Android'
+        '34:23:BA' = 'Samsung|Mobile|Android'
+        '38:AA:3C' = 'Samsung|Mobile|Android'
+        '88:30:8A' = 'Samsung|Mobile|Android'
+        
+        # LG
+        '00:1C:62' = 'LG|Mobile|Android'
+        '10:68:3F' = 'LG|Mobile|Android'
+        
+        # Motorola
+        '00:26:BA' = 'Motorola|Mobile|Android'
+        '48:2C:EA' = 'Motorola|Mobile|Android'
+        
+        # Intel NICs
+        '00:1B:21' = 'Intel|Computer|Unknown'
+        '00:1E:67' = 'Intel|Computer|Unknown'
+        '00:23:15' = 'Intel|Computer|Unknown'
+        'A0:36:9F' = 'Intel|Computer|Unknown'
+        
+        # APC (UPS/PDU)
+        '00:C0:B7' = 'APC|IoT|Embedded'
+        
+        # Synology NAS
+        '00:11:32' = 'Synology|Server|DSM'
+        
+        # QNAP NAS
+        '00:08:9B' = 'QNAP|Server|QTS'
+        '24:5E:BE' = 'QNAP|Server|QTS'
+        
+        # Amazon/Ring
+        '74:C2:46' = 'Amazon|IoT|Linux'
+        '00:FC:8B' = 'Amazon|IoT|Linux'
+        
+        # Google
+        '00:1A:11' = 'Google|IoT|Android'
+        'F4:F5:D8' = 'Google|IoT|Android'
+        
+        # Sonos
+        '00:0E:58' = 'Sonos|IoT|Embedded'
+        '5C:AA:FD' = 'Sonos|IoT|Embedded'
+        
+        # Nest
+        '18:B4:30' = 'Nest|IoT|Embedded'
+        '64:16:66' = 'Nest|IoT|Embedded'
     }
     
     # MAC vendor API cache (shared across all lookups)
