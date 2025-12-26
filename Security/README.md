@@ -5,12 +5,10 @@ Security assessment, hardening validation, and incident response tools for enter
 ## Contents
 
 This directory contains tools for:
-- **Security Auditing** - Local security policy and configuration validation
-- **Hardening Verification** - CIS benchmark and compliance checking
-- **Vulnerability Assessment** - Local system security posture evaluation
-- **Incident Response** - Data collection and forensic helpers
-- **Threat Detection** - Log analysis and anomaly identification
-- **Baseline Management** - Security configuration templates and validation
+- **Security Auditing** - Microsoft 365 and SharePoint security posture analysis
+- **Threat Detection** - Compromised account identification and risk scoring
+- **Compliance Validation** - MFA adoption, conditional access, and privilege reviews
+- **Incident Response** - Forensic data collection and attack pattern detection
 
 ## Security Notice
 
@@ -30,32 +28,147 @@ Unauthorized access to computer systems is illegal. Yeyland Wutani LLC assumes n
 - Follow incident response procedures when anomalies are detected
 - Document all security testing activities
 
-## Tool Categories
-
-### Assessment Scripts
-Evaluate current security posture against baselines and best practices.
-
-### Hardening Tools
-Apply or validate security configurations for systems and applications.
-
-### Response Utilities
-Collect evidence, analyze artifacts, and support incident investigation.
-
-## Requirements
-
-- PowerShell 5.1 or later (7+ recommended for cross-platform tools)
-- Administrative privileges for system-level operations
-- Appropriate security clearances and authorizations
-- Understanding of security concepts and potential impacts
-
 ---
 
 ## Available Tools
+
+### Get-M365SecurityAnalysis.ps1 - Microsoft 365 Security Analysis Tool
+
+[![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-FF6600.svg)](https://docs.microsoft.com/powershell/)
+[![Platform](https://img.shields.io/badge/Platform-Microsoft%20365-6B7280.svg)](https://www.microsoft.com/microsoft-365)
+[![Version](https://img.shields.io/badge/Version-10.2-FF6600.svg)]()
+
+**Version:** 10.2 | **Author:** Yeyland Wutani LLC
+
+#### Overview
+Comprehensive security analysis tool for Microsoft 365 tenants that detects compromised accounts, identifies security threats, and analyzes suspicious activity patterns using Microsoft Graph PowerShell APIs. This production-grade tool provides forensic-level insights into tenant security posture through an intuitive dark/light mode GUI interface.
+
+#### Core Capabilities
+
+**Authentication & Access Analysis**
+- **Sign-in Logs**: Geolocation analysis with IPv4/IPv6 support, unusual location detection, high-risk ISP identification (VPN/hosting/datacenter providers)
+- **Failed Login Patterns**: Password spray, brute force, and confirmed breach detection with IP correlation
+- **MFA Status Audit**: Comprehensive multi-factor authentication assessment with privileged account focus
+- **Conditional Access**: Policy configuration review and risk assessment
+
+**Threat Detection**
+- **Inbox Rules**: Forwarding, deletion, and suspicious pattern detection targeting data exfiltration
+- **Mailbox Delegations**: External delegate and high-privilege access identification
+- **Password Changes**: Suspicious password reset pattern analysis for credential harvesting detection
+- **Message Traces**: Exchange Online message trace with spam pattern analysis and configurable thresholds
+
+**Administrative Oversight**
+- **Admin Audit Logs**: High-risk operation monitoring with automated risk scoring
+- **App Registrations**: High-privilege permission and configuration analysis for OAuth abuse
+- **Risk Scoring**: User risk assessment (Critical/High/Medium/Low) with weighted threat indicators
+
+#### Attack Patterns Detected
+
+| Attack Type | Detection Method |
+|------------|-----------------|
+| Password Spray | Same IP, multiple user attempts |
+| Brute Force | Multiple failures, single user |
+| Confirmed Breach | Failed attempts followed by success from same IP |
+| Data Exfiltration | Suspicious forwarding rules, external delegates |
+| Privilege Escalation | High-risk app permissions, admin role changes |
+| Anomalous Access | Unexpected countries, impossible travel |
+| OAuth Abuse | Suspicious app registrations and permissions |
+
+#### Key Features
+
+- **Modern GUI**: Dark/light theme interface with real-time progress tracking
+- **Risk-Based Scoring**: Automated user risk calculation with customizable weights
+- **HTML Reporting**: Comprehensive reports with collapsible sections and color-coded risk indicators
+- **Geolocation Intelligence**: Cached IP geolocation with high-risk ISP identification
+- **Smart Fallbacks**: Automatic Exchange Online fallback for non-premium Azure AD tenants
+- **Batch Processing**: Handles large tenants with configurable batch sizes and rate limiting
+
+#### Required Modules
+- Microsoft.Graph.Authentication (v2.0.0+)
+- Microsoft.Graph.Users (v2.0.0+)
+- Microsoft.Graph.Identity.SignIns (v2.0.0+)
+- Microsoft.Graph.Reports (v2.0.0+)
+- ExchangeOnlineManagement (v3.0.0+)
+
+*Modules are auto-installed if missing*
+
+#### Required Permissions
+
+**Microsoft Graph API (Delegated):**
+- User.Read.All
+- AuditLog.Read.All
+- Directory.Read.All
+- Mail.Read / Mail.ReadWrite
+- MailboxSettings.Read / MailboxSettings.ReadWrite
+- SecurityEvents.Read.All
+- IdentityRiskEvent.Read.All
+- IdentityRiskyUser.Read.All
+- Application.Read.All
+- RoleManagement.Read.All
+- Policy.Read.All
+- UserAuthenticationMethod.Read.All
+
+**Exchange Online:**
+- Exchange Administrator or Security Reader role
+
+#### Usage
+
+```powershell
+# Launch the GUI application
+.\Get-M365SecurityAnalysis.ps1
+
+# Workflow:
+# 1. Click "Connect to Microsoft 365" and authenticate
+# 2. Set date range (default: 14 days)
+# 3. Run data collection operations as needed
+# 4. Generate HTML security report
+# 5. Review Critical/High-risk users and attack patterns
+```
+
+#### Output Files
+
+| File | Description |
+|------|-------------|
+| `SecurityReport.html` | Comprehensive HTML report with dark mode support |
+| `UserLocationData.csv` | Sign-in logs with geolocation |
+| `AdminAuditLogs_HighRisk.csv` | High-risk administrative actions |
+| `InboxRules.csv` | Mailbox forwarding and deletion rules |
+| `FailedLoginAnalysis.csv` | Attack pattern detection results |
+| `MFAStatus.csv` | Multi-factor authentication status |
+| `ETRSpamAnalysis.csv` | Spam pattern analysis |
+
+#### Risk Scoring Matrix
+
+| Factor | Points | Description |
+|--------|--------|-------------|
+| No MFA | 40 | Account without multi-factor authentication |
+| Confirmed Breach | 50 | 5+ failed logins then success from same IP |
+| High-Risk ISP | 25 | VPN/Hosting/Datacenter provider |
+| Suspicious Rules | 15 | Email forwarding or deletion rules |
+| Password Spray | 30 | Same IP, multiple user attempts |
+| Admin Without MFA | +10 | Additional risk for privileged accounts |
+
+#### Yeyland Wutani Use Cases
+- **Incident Response**: Rapid threat identification during active compromises
+- **Security Assessments**: Baseline tenant security posture evaluation
+- **Compliance Auditing**: MFA adoption, conditional access, and privileged access reviews
+- **Proactive Monitoring**: Scheduled runs for early threat detection
+- **Client Reporting**: Professional HTML reports for executive briefings
+
+#### Technical Notes
+- Supports Azure AD Free (limited features) and Azure AD Premium (full capabilities)
+- Automatic module installation for Microsoft.Graph and ExchangeOnlineManagement
+- Configurable date ranges (1-365 days, Exchange limited to 10 days)
+- Working directory default: `C:\Temp\<TenantName>\<Timestamp>\`
+- Detailed execution logging for troubleshooting and compliance
+
+---
 
 ### Get-SPOSecurityReport.ps1 - SharePoint Online Security Assessment
 
 [![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-FF6600.svg)](https://docs.microsoft.com/powershell/)
 [![Platform](https://img.shields.io/badge/Platform-Microsoft%20365-6B7280.svg)](https://www.microsoft.com/microsoft-365)
+[![Version](https://img.shields.io/badge/Version-3.1-FF6600.svg)]()
 
 **Version:** 3.1 | **Author:** Yeyland Wutani LLC
 
@@ -151,17 +264,6 @@ Comprehensive SharePoint Online security and usage reporting tool designed for M
 | `SPO_FolderSizes_<timestamp>.csv` | Folder size distribution (deep dive) |
 | `SPO_Errors_<timestamp>.csv` | Errors encountered during scan |
 
-#### HTML Report Sections
-1. **Summary Dashboard** - Total sites, storage, external sharing counts
-2. **Tenant Settings** - Organization-wide sharing configuration
-3. **SharePoint Sites** - Sortable site list with key metrics
-4. **Site Permissions** - Expandable permission lists per site
-5. **External Sharing Overview** - Donut chart of sharing capabilities
-6. **Storage Distribution** - Expandable library/folder breakdown
-7. **External Sharing Links** - Anonymous and external links
-8. **Unique Permissions** - Items with broken inheritance
-9. **Errors** - Any issues encountered during collection
-
 #### Yeyland Wutani Use Cases
 - **Security Assessments**: Baseline external sharing posture for new clients
 - **Compliance Audits**: Document access controls for regulatory requirements
@@ -170,125 +272,24 @@ Comprehensive SharePoint Online security and usage reporting tool designed for M
 - **Permission Reviews**: Regular audits of site access and guest users
 - **Incident Response**: Investigate potential data exposure incidents
 
-#### Performance Notes
-- Deep dive significantly increases scan time for large tenants
-- OneDrive inclusion adds substantial processing for user-heavy environments
-- Recommended to use `-MaxSites` for initial testing
-- Progress bar provides real-time completion estimates
-
 ---
 
-## External Resources
+## Tool Comparison
 
-### CompromisedDiscovery-Graph - Microsoft 365 Security Analysis Toolkit
-[![View Repository](https://img.shields.io/badge/GitHub-the--last--one--left%2FScripts-FF6600?style=flat-square&logo=github)](https://github.com/the-last-one-left/Scripts)
+| Feature | Get-M365SecurityAnalysis | Get-SPOSecurityReport |
+|---------|-------------------------|----------------------|
+| **Focus** | Account compromise & threats | SharePoint permissions & sharing |
+| **Interface** | GUI (Dark/Light mode) | Command-line |
+| **Authentication** | Graph + Exchange Online | Graph + SPO Management |
+| **Primary Output** | Risk-scored user analysis | Site permission inventory |
+| **Typical Use** | Incident response, security audits | Compliance, permission reviews |
 
-**Version:** 10.2 | **Platform:** PowerShell 5.1+ | **Author:** Zachary Child (Pacific Office Automation)
+## Requirements
 
-#### Overview
-Comprehensive security analysis tool for Microsoft 365 tenants that detects compromised accounts, identifies security threats, and analyzes suspicious activity patterns using Microsoft Graph PowerShell APIs. This production-grade tool has been battle-tested in enterprise MSP environments and provides forensic-level insights into tenant security posture.
-
-#### Core Capabilities
-
-**Authentication & Access Analysis**
-- **Sign-in Logs**: Geolocation analysis with IPv4/IPv6 support, unusual location detection, high-risk ISP identification (VPN/hosting/datacenter providers)
-- **Failed Login Patterns**: Password spray, brute force, and confirmed breach detection with IP correlation
-- **MFA Status Audit**: Comprehensive multi-factor authentication assessment with privileged account focus
-- **Conditional Access**: Policy configuration review and risk assessment
-
-**Threat Detection**
-- **Inbox Rules**: Forwarding, deletion, and suspicious pattern detection targeting data exfiltration
-- **Mailbox Delegations**: External delegate and high-privilege access identification
-- **Password Changes**: Suspicious password reset pattern analysis for credential harvesting detection
-- **Message Traces**: Exchange Online message trace with spam pattern analysis and configurable thresholds
-
-**Administrative Oversight**
-- **Admin Audit Logs**: High-risk operation monitoring with automated risk scoring
-- **App Registrations**: High-privilege permission and configuration analysis for OAuth abuse
-- **Risk Scoring**: User risk assessment (Critical/High/Medium/Low) with weighted threat indicators
-
-#### Attack Patterns Detected
-- Password Spray Attacks (same IP, multiple user attempts)
-- Brute Force Attacks (multiple failures, single user)
-- Successful Breach Patterns (failed attempts followed by success from same IP)
-- Data Exfiltration (suspicious forwarding rules, external delegates)
-- Privilege Escalation (high-risk app permissions, admin role changes)
-- Anomalous Geographic Access (unexpected countries, impossible travel)
-- OAuth Application Abuse (suspicious app registrations and permissions)
-
-#### Key Features
-- **Risk-Based Scoring**: Automated user risk calculation with customizable weights
-- **Modern GUI**: Dark/light theme interface with real-time progress tracking
-- **HTML Reporting**: Comprehensive reports with collapsible sections and color-coded risk indicators
-- **Geolocation Intelligence**: Cached IP geolocation with high-risk ISP identification
-- **Smart Fallbacks**: Automatic Exchange Online fallback for non-premium Azure AD tenants
-- **Batch Processing**: Handles large tenants with configurable batch sizes and rate limiting
-
-#### Required Permissions
-**Microsoft Graph API:**
-- User.Read.All
-- AuditLog.Read.All
-- Directory.Read.All
-- Mail.Read / Mail.ReadWrite
-- SecurityEvents.Read.All
-- IdentityRiskEvent.Read.All
-- Application.Read.All
-- Policy.Read.All
-- UserAuthenticationMethod.Read.All
-
-**Exchange Online:**
-- Exchange Administrator or Security Reader role
-
-#### Typical Workflow
-1. Launch tool: `.\CompromisedDiscovery-Graph.ps1`
-2. Connect to Microsoft Graph with admin credentials
-3. Run comprehensive data collection (default: 14-day lookback)
-4. Generate HTML security report with risk-scored findings
-5. Investigate Critical/High-risk users and attack patterns
-6. Remediate compromised accounts and suspicious configurations
-
-#### Output Files
-- `SecurityReport.html` - Comprehensive HTML report with dark mode
-- `UserLocationData.csv` - Sign-in logs with geolocation
-- `AdminAuditLogs_HighRisk.csv` - High-risk administrative actions
-- `InboxRules.csv` - Mailbox forwarding and deletion rules
-- `FailedLoginAnalysis.csv` - Attack pattern detection results
-- `MFAStatus.csv` - Multi-factor authentication status
-- `ETRSpamAnalysis.csv` - Spam pattern analysis
-
-#### Risk Scoring Matrix
-| Factor | Points | Description |
-|--------|--------|-------------|
-| No MFA | 40 | Account without multi-factor authentication |
-| Confirmed Breach | 50 | 5+ failed logins then success from same IP |
-| High-Risk ISP | 25 | VPN/Hosting/Datacenter provider |
-| Suspicious Rules | 15 | Email forwarding or deletion rules |
-| Password Spray | 30 | Same IP, multiple user attempts |
-| Admin Without MFA | +10 | Additional risk for privileged accounts |
-
-#### Yeyland Wutani Use Cases
-This tool complements Yeyland Wutani's security consulting offerings by providing:
-- **Incident Response**: Rapid threat identification during active compromises
-- **Security Assessments**: Baseline tenant security posture evaluation
-- **Compliance Auditing**: MFA adoption, conditional access, and privileged access reviews
-- **Proactive Monitoring**: Weekly scheduled runs for early threat detection
-- **Client Reporting**: Professional HTML reports for executive briefings
-
-#### Technical Notes
-- Supports Azure AD Free (limited features) and Azure AD Premium (full capabilities)
-- Automatic module installation for Microsoft.Graph and ExchangeOnlineManagement
-- Configurable date ranges (1-365 days, Exchange limited to 10 days)
-- Working directory default: `C:\Temp\<TenantName>\<Timestamp>\`
-- Detailed execution logging for troubleshooting and compliance
-
-#### MSP Integration Points
-For Yeyland Wutani consulting engagements:
-- Pre-engagement security assessments for new clients
-- Post-breach forensic analysis and remediation validation
-- Monthly/quarterly security posture reporting
-- Compliance audits (SOC 2, ISO 27001, NIST CSF)
-- Shadow IT discovery through app registration analysis
-- Privilege creep detection in delegations and role assignments
+- PowerShell 5.1 or later (7+ recommended for cross-platform tools)
+- Administrative privileges for system-level operations
+- Appropriate security clearances and authorizations
+- Understanding of security concepts and potential impacts
 
 ---
 
