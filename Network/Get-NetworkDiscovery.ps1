@@ -542,6 +542,14 @@ process {
                 # Update all results with this MAC prefix
                 $Results | Where-Object { $_.MACPrefix -eq $prefix } | ForEach-Object {
                     $_.Vendor = $vendor
+                    
+                    # Re-evaluate device type based on new vendor information
+                    if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link') {
+                        if ($_.OpenPorts -contains 22 -or $_.OpenPorts -contains 23 -or $_.OpenPorts -contains 443) {
+                            $_.DeviceType = "Network Device"
+                            $_.OS = "$vendor Device"
+                        }
+                    }
                 }
                 
                 $lookupCount++
