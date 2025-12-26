@@ -7,6 +7,8 @@
     gather system information, identify device types, and generate detailed inventory reports.
     Designed for MSP client onboarding and network documentation.
     
+    Compatible with PowerShell 5.1+ for maximum Windows Server compatibility.
+    
     Features:
     - Subnet/IP range scanning with parallel processing
     - Device type identification (server, workstation, printer, network device)
@@ -14,7 +16,6 @@
     - MAC address and vendor lookup
     - Open port scanning
     - DNS hostname resolution
-    - WMI-based detailed information (Windows devices)
     - Multiple export formats (CSV, JSON, HTML)
     - Visual network map generation
 
@@ -32,16 +33,9 @@
     Scan common ports to identify services. Default: True
     Ports scanned: 21,22,23,25,53,80,110,135,139,143,443,445,3389,8080,8443
 
-.PARAMETER DeepScan
-    Perform WMI queries for detailed Windows device information.
-    Requires administrative credentials on target devices.
-
-.PARAMETER Credential
-    PSCredential object for WMI/CIM authentication on Windows devices.
-
 .PARAMETER ThrottleLimit
     Maximum parallel scanning threads. Default: 50
-    Higher values = faster scanning but more network load.
+    Higher values = faster scanning but more CPU/network load.
 
 .PARAMETER Timeout
     Connection timeout in seconds per device. Default: 2
@@ -66,9 +60,9 @@
     Scan multiple subnets, generate HTML report.
 
 .EXAMPLE
-    .\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.50" -DeepScan -Credential (Get-Credential)
+    .\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.50"
     
-    Deep scan IP range with Windows WMI queries using credentials.
+    Scan specific IP range.
 
 .EXAMPLE
     .\Get-NetworkDiscovery.ps1 -Subnet "172.16.0.0/24" -ThrottleLimit 100 -ExportPath "C:\Reports\Client_Network.csv"
@@ -85,17 +79,6 @@
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
     
-    TYPICAL MSP WORKFLOWS:
-    
-    1. New Client Onboarding:
-       .\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24" -DeepScan -Credential $cred -ExportPath "C:\Clients\NewClient\Discovery.html"
-       
-    2. Network Documentation:
-       .\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/16" -ThrottleLimit 200 -ExportPath "Documentation\Network_Inventory.csv"
-       
-    3. Quick Subnet Check:
-       .\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.254" -Quiet
-       
     DEVICE TYPE DETECTION:
     - Servers: Windows Server OS, open server ports (445, 3389, etc.)
     - Workstations: Windows/Linux/Mac desktop OS
@@ -118,10 +101,6 @@ param(
     
     [bool]$ScanPorts = $true,
     
-    [switch]$DeepScan,
-    
-    [PSCredential]$Credential,
-    
     [ValidateRange(1, 500)]
     [int]$ThrottleLimit = 50,
     
@@ -143,7 +122,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.0"
+    $ScriptVersion = "1.1"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -186,7 +165,7 @@ begin {
         '00:1A:1E' = 'WatchGuard'
         'F0:9F:C2' = 'Ubiquiti'
         '00:01:E3' = 'Siemens'
-        '00:04:76' = ' 3Com'
+        '00:04:76' = '3Com'
         'B4:75:0E' = 'Aruba'
         '00:0B:86' = 'Aruba'
     }
@@ -223,17 +202,12 @@ begin {
         return $ips
     }
     
-    # Function to scan single IP
-    function Test-Device {
-        param(
-            [string]$IP,
-            [bool]$DoPortScan,
-            [int]$TimeoutSec,
-            [hashtable]$PortMap
-        )
+    # Scriptblock for scanning single IP (used in parallel jobs)
+    $ScanScriptBlock = {
+        param($IP, $DoPortScan, $TimeoutSec, $PortMap, $MacVendorMap)
         
         # Ping test
-        $pingResult = Test-Connection -ComputerName $IP -Count 1 -Quiet -TimeoutSeconds $TimeoutSec
+        $pingResult = Test-Connection -ComputerName $IP -Count 1 -Quiet -TimeToLive 64
         
         if (-not $pingResult) {
             return [PSCustomObject]@{
@@ -270,8 +244,8 @@ begin {
                 
                 # Lookup vendor
                 $macPrefix = ($macAddress -split '-')[0..2] -join ':'
-                if ($MacVendors.ContainsKey($macPrefix)) {
-                    $vendor = $MacVendors[$macPrefix]
+                if ($MacVendorMap.ContainsKey($macPrefix)) {
+                    $vendor = $MacVendorMap[$macPrefix]
                 }
             }
         }
@@ -389,144 +363,71 @@ process {
     
     if (-not $Quiet) {
         Write-Host "`nScanning $($AllIPs.Count) IP addresses with $ThrottleLimit parallel threads..." -ForegroundColor Cyan
-        Write-Host "Port Scanning: $ScanPorts | Deep Scan: $DeepScan | Timeout: $Timeout seconds`n" -ForegroundColor Gray
+        Write-Host "Port Scanning: $ScanPorts | Timeout: $Timeout seconds`n" -ForegroundColor Gray
     }
     
-    # Parallel scanning
-    $results = $AllIPs | ForEach-Object -Parallel {
-        $ip = $_
-        $portScan = $using:ScanPorts
-        $timeout = $using:Timeout
-        $portMap = $using:CommonPorts
-        $macVendors = $using:MacVendors
-        
-        # Import functions into parallel runspace
-        function Test-Device {
-            param(
-                [string]$IP,
-                [bool]$DoPortScan,
-                [int]$TimeoutSec,
-                [hashtable]$PortMap
-            )
+    # Parallel scanning using PowerShell jobs (compatible with PS 5.1)
+    $Jobs = @()
+    $Results = @()
+    $Completed = 0
+    
+    foreach ($IP in $AllIPs) {
+        # Wait if we've hit throttle limit
+        while ((Get-Job -State Running).Count -ge $ThrottleLimit) {
+            Start-Sleep -Milliseconds 100
             
-            $pingResult = Test-Connection -ComputerName $IP -Count 1 -Quiet -TimeoutSeconds $TimeoutSec
-            
-            if (-not $pingResult) {
-                return [PSCustomObject]@{
-                    IPAddress    = $IP
-                    Status       = 'Offline'
-                    Hostname     = $null
-                    DeviceType   = 'Unknown'
-                    OS           = $null
-                    MACAddress   = $null
-                    Vendor       = $null
-                    OpenPorts    = @()
-                    Services     = @()
-                    LastSeen     = $null
+            # Collect completed jobs
+            Get-Job -State Completed | ForEach-Object {
+                $Results += Receive-Job -Job $_
+                Remove-Job -Job $_
+                $Completed++
+                
+                if (-not $Quiet -and $Completed % 10 -eq 0) {
+                    $percentComplete = [math]::Round(($Completed / $AllIPs.Count) * 100, 1)
+                    Write-Progress -Activity "Network Discovery" -Status "$Completed of $($AllIPs.Count) IPs scanned ($percentComplete%)" -PercentComplete $percentComplete
                 }
-            }
-            
-            $hostname = $null
-            try {
-                $dnsResult = [System.Net.Dns]::GetHostEntry($IP)
-                $hostname = $dnsResult.HostName
-            }
-            catch {
-                $hostname = "N/A"
-            }
-            
-            $macAddress = $null
-            $vendor = "Unknown"
-            try {
-                $arpResult = arp -a $IP 2>$null | Where-Object { $_ -match $IP }
-                if ($arpResult -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
-                    $macAddress = $matches[0].ToUpper()
-                    
-                    # Assign $using: variable to local variable for method calls
-                    $macVendorLookup = $using:macVendors
-                    $macPrefix = ($macAddress -split '-')[0..2] -join ':'
-                    if ($macVendorLookup.ContainsKey($macPrefix)) {
-                        $vendor = $macVendorLookup[$macPrefix]
-                    }
-                }
-            }
-            catch {
-                $macAddress = "N/A"
-            }
-            
-            $openPorts = @()
-            $services = @()
-            
-            if ($DoPortScan) {
-                foreach ($port in $PortMap.Keys) {
-                    try {
-                        $tcpClient = New-Object System.Net.Sockets.TcpClient
-                        $connect = $tcpClient.BeginConnect($IP, $port, $null, $null)
-                        $wait = $connect.AsyncWaitHandle.WaitOne($TimeoutSec * 1000, $false)
-                        
-                        if ($wait) {
-                            try {
-                                $tcpClient.EndConnect($connect)
-                                $openPorts += $port
-                                $services += $PortMap[$port]
-                            }
-                            catch { }
-                        }
-                        $tcpClient.Close()
-                    }
-                    catch { }
-                }
-            }
-            
-            $deviceType = "Unknown"
-            $os = "Unknown"
-            
-            if ($openPorts -contains 445 -and $openPorts -contains 3389) {
-                $deviceType = "Server"
-                $os = "Windows Server"
-            }
-            elseif ($openPorts -contains 445 -or $openPorts -contains 139) {
-                $deviceType = "Workstation"
-                $os = "Windows"
-            }
-            elseif ($openPorts -contains 515 -or $openPorts -contains 631 -or $openPorts -contains 9100) {
-                $deviceType = "Printer"
-                $os = "Printer Firmware"
-            }
-            elseif ($openPorts -contains 22 -or $openPorts -contains 23 -or $openPorts -contains 443) {
-                if ($vendor -in @('Aruba', 'WatchGuard', 'Ubiquiti', '3Com')) {
-                    $deviceType = "Network Device"
-                    $os = "$vendor Device"
-                }
-                else {
-                    $deviceType = "Network Device"
-                }
-            }
-            
-            return [PSCustomObject]@{
-                IPAddress    = $IP
-                Status       = 'Online'
-                Hostname     = $hostname
-                DeviceType   = $deviceType
-                OS           = $os
-                MACAddress   = $macAddress
-                Vendor       = $vendor
-                OpenPorts    = $openPorts
-                Services     = ($services | Select-Object -Unique) -join ', '
-                LastSeen     = Get-Date
             }
         }
         
-        Test-Device -IP $ip -DoPortScan $portScan -TimeoutSec $timeout -PortMap $portMap
+        # Start new job
+        $Job = Start-Job -ScriptBlock $ScanScriptBlock -ArgumentList $IP, $ScanPorts, $Timeout, $CommonPorts, $MacVendors
+        $Jobs += $Job
+    }
+    
+    # Wait for remaining jobs to complete
+    if (-not $Quiet) {
+        Write-Progress -Activity "Network Discovery" -Status "Waiting for remaining scans to complete..."
+    }
+    
+    while ((Get-Job -State Running).Count -gt 0) {
+        Start-Sleep -Milliseconds 100
         
-    } -ThrottleLimit $ThrottleLimit
+        Get-Job -State Completed | ForEach-Object {
+            $Results += Receive-Job -Job $_
+            Remove-Job -Job $_
+            $Completed++
+            
+            if (-not $Quiet) {
+                $percentComplete = [math]::Round(($Completed / $AllIPs.Count) * 100, 1)
+                Write-Progress -Activity "Network Discovery" -Status "$Completed of $($AllIPs.Count) IPs scanned ($percentComplete%)" -PercentComplete $percentComplete
+            }
+        }
+    }
+    
+    # Collect any remaining results
+    Get-Job | ForEach-Object {
+        $Results += Receive-Job -Job $_
+        Remove-Job -Job $_
+    }
+    
+    Write-Progress -Activity "Network Discovery" -Completed
     
     # Filter results
     if ($IncludeOffline) {
-        $AllResults = $results
+        $AllResults = $Results
     }
     else {
-        $AllResults = $results | Where-Object { $_.Status -eq 'Online' }
+        $AllResults = $Results | Where-Object { $_.Status -eq 'Online' }
     }
 }
 
