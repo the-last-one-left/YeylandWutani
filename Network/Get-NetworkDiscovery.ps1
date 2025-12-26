@@ -1067,15 +1067,119 @@ end {
                             default { '' }
                         }
                         
+                        # Add device type icon
+                        $deviceIcon = switch ($device.DeviceType) {
+                            'Server' { '&#128187;' }  # 💻 Computer
+                            'Workstation' { '&#128421;' }  # 🖥️ Desktop
+                            'Printer' { '&#128424;' }  # 🖨️ Printer
+                            'Network Device' { '&#128225;' }  # 📡 Antenna
+                            'Mobile Device' { '&#128241;' }  # 📱 Mobile
+                            'IoT Device' { '&#128268;' }  # 💡 Bulb
+                            default { '&#10067;' }  # ❓ Question
+                        }
+                        
+                        # Convert services to clickable links
+                        $servicesHtml = ""
+                        if ($device.Services) {
+                            $serviceLinks = @()
+                            $serviceList = $device.Services -split ', '
+                            foreach ($svc in $serviceList) {
+                                $link = switch -Regex ($svc) {
+                                    'HTTP-Alt' { "<a href='http://$($device.IPAddress):8080' target='_blank' style='color: #FF6600;'>HTTP-Alt</a>" }
+                                    'HTTPS-Alt' { "<a href='https://$($device.IPAddress):8443' target='_blank' style='color: #FF6600;'>HTTPS-Alt</a>" }
+                                    '^HTTPS
+                    
+                    $html += @"
+    </table>
+    <div class="footer">
+        <div class="company">Yeyland Wutani LLC</div>
+        <div class="tagline">Building Better Systems</div>
+        <div style="font-size: 11px; color: #999;">Network Discovery Report | Powered by Advanced Infrastructure Analysis</div>
+    </div>
+</body>
+</html>
+"@
+                    
+                    $html | Out-File -FilePath $ExportPath -Encoding UTF8
+                    
+                    if (-not $Quiet) {
+                        Write-Host "Results exported to HTML: $ExportPath" -ForegroundColor Green
+                    }
+                }
+                
+                default {
+                    Write-Warning "Unsupported export format: $extension (use .csv, .json, or .html)"
+                }
+            }
+        }
+        catch {
+            Write-Error "Failed to export results: $_"
+        }
+    }
+    
+    if (-not $Quiet) {
+        Write-Host "Network discovery completed.`n" -ForegroundColor Cyan
+    }
+}
+ { "<a href='https://$($device.IPAddress)' target='_blank' style='color: #FF6600;'>HTTPS</a>" }
+                                    '^HTTP
+                    
+                    $html += @"
+    </table>
+    <div class="footer">
+        <div class="company">Yeyland Wutani LLC</div>
+        <div class="tagline">Building Better Systems</div>
+        <div style="font-size: 11px; color: #999;">Network Discovery Report | Powered by Advanced Infrastructure Analysis</div>
+    </div>
+</body>
+</html>
+"@
+                    
+                    $html | Out-File -FilePath $ExportPath -Encoding UTF8
+                    
+                    if (-not $Quiet) {
+                        Write-Host "Results exported to HTML: $ExportPath" -ForegroundColor Green
+                    }
+                }
+                
+                default {
+                    Write-Warning "Unsupported export format: $extension (use .csv, .json, or .html)"
+                }
+            }
+        }
+        catch {
+            Write-Error "Failed to export results: $_"
+        }
+    }
+    
+    if (-not $Quiet) {
+        Write-Host "Network discovery completed.`n" -ForegroundColor Cyan
+    }
+}
+ { "<a href='http://$($device.IPAddress)' target='_blank' style='color: #FF6600;'>HTTP</a>" }
+                                    'RDP' { "<a href='rdp://$($device.IPAddress):3389' style='color: #FF6600;'>RDP</a>" }
+                                    'SSH' { "<a href='ssh://$($device.IPAddress):22' style='color: #FF6600;'>SSH</a>" }
+                                    'Telnet' { "<a href='telnet://$($device.IPAddress):23' style='color: #FF6600;'>Telnet</a>" }
+                                    'VNC' { "<a href='vnc://$($device.IPAddress):5900' style='color: #FF6600;'>VNC</a>" }
+                                    default { $svc }
+                                }
+                                $serviceLinks += $link
+                            }
+                            $servicesHtml = $serviceLinks -join ', '
+                        }
+                        else {
+                            $servicesHtml = ""
+                        }
+                        
                         $html += @"
         <tr class="$rowClass">
             <td><strong>$($device.IPAddress)</strong></td>
             <td>$($device.Hostname)</td>
-            <td>$($device.DeviceType)</td>
+            <td>$deviceIcon $($device.DeviceType)</td>
             <td>$($device.OS)</td>
             <td>$($device.MACAddress)</td>
             <td>$($device.Vendor)</td>
-            <td>$($device.Services)</td>
+            <td>$servicesHtml</td>
         </tr>
 "@
                     }
