@@ -1290,7 +1290,7 @@ function Test-ScriptVersion {
     param (
         [Parameter(Mandatory = $false)]
         [ValidateNotNullOrEmpty()]
-        [string]$GitHubUrl = "https://raw.githubusercontent.com/the-last-one-left/Scripts/refs/heads/main/CompromisedDiscovery-Graph.ps1",
+        [string]$GitHubUrl = "https://raw.githubusercontent.com/the-last-one-left/YeylandWutani/refs/heads/main/Security/Get-M365SecurityAnalysis.ps1",
         
         [Parameter(Mandatory = $false)]
         [bool]$ShowMessageBox = $true
