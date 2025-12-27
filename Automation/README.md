@@ -1,10 +1,16 @@
 # Automation
 
-PowerShell scripts for system provisioning, cleanup operations, and file management automation.
+PowerShell scripts for system provisioning, cleanup operations, migration preparation, and file management automation.
 
 ---
 
 ## Available Scripts
+
+### Migration Preparation
+
+| Script | Description |
+|--------|-------------|
+| `Get-SPOMigrationReadiness.ps1` | Comprehensive file server assessment for SharePoint Online migration. Detects path length issues, invalid characters, restricted names, legacy Office formats, blocked files, folder item thresholds, and provides library structure recommendations. |
 
 ### Ransomware Cleanup
 
@@ -31,6 +37,12 @@ PowerShell scripts for system provisioning, cleanup operations, and file managem
 ## Usage Examples
 
 ```powershell
+# SharePoint migration readiness assessment
+.\Get-SPOMigrationReadiness.ps1 -Path "D:\FileShare" -OutputPath "C:\Reports"
+
+# Include permission analysis for migration planning
+.\Get-SPOMigrationReadiness.ps1 -Path "\\Server\Data" -IncludePermissions -TargetSiteUrl "https://contoso.sharepoint.com/sites/Projects"
+
 # Ransomware cleanup - report first (no changes)
 .\Remove-RansomwareArtifacts.ps1 -Path "D:\Data" -Action Report
 
@@ -43,12 +55,26 @@ PowerShell scripts for system provisioning, cleanup operations, and file managem
 # Find duplicate files with HTML report
 .\Find-DuplicateFiles.ps1 -Path "D:\Photos" -ExportPath "C:\Reports\Duplicates.html"
 
-# Delete duplicates (keep newest)
-.\Find-DuplicateFiles.ps1 -Path "D:\Archive" -Action Delete -KeepNewest
-
-# Convert legacy Excel files
+# Convert legacy Office files before migration
 .\Convert-LegacyExcel.ps1 -Path "D:\Documents" -Recurse
+.\Convert-LegacyWord.ps1 -Path "D:\Documents" -Recurse
 ```
+
+---
+
+## SharePoint Migration Readiness Checks
+
+The `Get-SPOMigrationReadiness.ps1` script checks for:
+
+| Issue Category | SharePoint Limit | Impact |
+|----------------|------------------|--------|
+| **Path Length** | 400 chars (URL), 218 chars (sync) | Files won't upload or sync |
+| **Invalid Characters** | " * : < > ? / \ \| | Upload failures |
+| **Restricted Names** | CON, PRN, AUX, NUL, COM0-9, LPT0-9 | Upload blocked |
+| **Legacy Office** | .doc, .xls, .ppt | No co-authoring, no web editing |
+| **Blocked Files** | .exe, .bat, .ps1, etc. | Upload blocked by policy |
+| **File Size** | 250 GB max | Upload failure |
+| **Folder Items** | 5,000 (view threshold) | Performance issues |
 
 ---
 
@@ -60,7 +86,7 @@ PowerShell scripts for system provisioning, cleanup operations, and file managem
 | `-Action` | Operation mode (Report, Delete, Move, etc.) |
 | `-WhatIf` | Preview changes without execution |
 | `-Interactive` | Prompt for confirmations |
-| `-ExportPath` | Output file location |
+| `-ExportPath` / `-OutputPath` | Output file location |
 
 ---
 
@@ -69,6 +95,7 @@ PowerShell scripts for system provisioning, cleanup operations, and file managem
 - PowerShell 5.1+
 - Microsoft Office (for document converters)
 - NTFS file system (for hardlink operations)
+- Read access to source paths (for migration readiness)
 - Administrative privileges (for some operations)
 
 ---
