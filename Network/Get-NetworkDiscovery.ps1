@@ -984,8 +984,8 @@ end {
         $offlineCount = ($AllResults | Where-Object { $_.Status -eq 'Offline' }).Count
         $elapsed = ((Get-Date) - $startTime).TotalSeconds
         
-        # Count hostname resolution success
-        $hostnameResolved = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Hostname -ne 'N/A' }).Count
+        # Count hostname resolution success (ensure 0 if none found)
+        $hostnameResolved = @($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Hostname -and $_.Hostname -ne 'N/A' }).Count
         
         Write-Host "`n================================================================" -ForegroundColor Cyan
         Write-Host " Network Discovery Summary" -ForegroundColor Cyan
