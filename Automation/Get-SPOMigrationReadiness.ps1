@@ -295,6 +295,16 @@ function Test-IsExcluded {
     return $false
 }
 
+function Get-CleanFileName {
+    param([string]$Name)
+    # Replace invalid SharePoint characters with underscore
+    $invalidChars = '["*:<>?/\\|]'
+    $cleaned = $Name -replace $invalidChars, '_'
+    # Collapse multiple spaces
+    $cleaned = $cleaned -replace '\s+', ' '
+    return $cleaned.Trim()
+}
+
 function Get-IssueSeverity {
     param([string]$IssueType, [PSObject]$IssueData)
     
@@ -410,7 +420,7 @@ function Test-InvalidCharacters {
             InvalidCharacters    = if ($foundInvalid.Count -gt 0) { $foundInvalid -join ', ' } else { '' }
             ProblematicCharacters = if ($foundProblematic.Count -gt 0) { $foundProblematic -join ', ' } else { '' }
             Severity             = if ($foundInvalid.Count -gt 0) { 'Critical' } else { 'Medium' }
-            SuggestedName        = ($ItemName -replace '[\"*:<>?/\\|]', '_') -replace '[\s]+', ' '
+            SuggestedName        = Get-CleanFileName -Name $ItemName
         })
         return $false
     }
@@ -1783,7 +1793,8 @@ foreach ($export in $csvExports.GetEnumerator()) {
     if ($export.Value.Count -gt 0) {
         $csvPath = Join-Path -Path $OutputPath -ChildPath "${baseFileName}_$($export.Key).csv"
         $export.Value | Export-Csv -Path $csvPath -NoTypeInformation -Encoding UTF8
-        Write-Log "CSV export: $($export.Key) ($($export.Value.Count) items)" -Level Debug
+        $exportCount = $export.Value.Count
+        Write-Log "CSV export: $($export.Key) - $exportCount items" -Level Debug
     }
 }
 
