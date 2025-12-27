@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Comprehensive Windows File Share Security Report Tool v1.0
+    Comprehensive Windows File Share Security Report Tool v1.1
     
 .DESCRIPTION
     MSP-friendly reporting tool for auditing Windows file shares and directories.
