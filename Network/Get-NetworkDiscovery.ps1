@@ -517,7 +517,8 @@ begin {
             }
         }
         
-        # Device is online - Multi-method hostname resolution
+        # Device is online - Quick hostname resolution (DNS only in runspace)
+        # NetBIOS is done in post-processing for speed
         $hostname = $null
         
         if (-not $DoPortScan) {
@@ -528,45 +529,20 @@ begin {
             try {
                 $dnsResult = [System.Net.Dns]::GetHostEntry($IP)
                 if ($dnsResult.HostName -and $dnsResult.HostName -ne $IP) {
-                    $hostname = $dnsResult.HostName
+                    # Extract computer name (strip domain suffix)
+                    $fullName = $dnsResult.HostName
+                    if ($fullName -match '\.') {
+                        # Has domain - extract first part (computer name)
+                        $hostname = $fullName.Split('.')[0]
+                    }
+                    else {
+                        $hostname = $fullName
+                    }
                 }
             }
             catch { }
             
-            # Method 2: NetBIOS name query (Windows machines)
-            if (-not $hostname) {
-                try {
-                    $nbtOutput = & nbtstat -A $IP 2>$null
-                    if ($nbtOutput) {
-                        foreach ($line in $nbtOutput) {
-                            # Match computer name entry: NAME <00> UNIQUE
-                            if ($line -match '^\s*(\S+)\s+<00>\s+UNIQUE') {
-                                $nbName = $matches[1].Trim()
-                                # Exclude workgroup/domain names and invalid entries
-                                if ($nbName -and $nbName.Length -le 15 -and $nbName -notmatch '^\s*$') {
-                                    $hostname = $nbName
-                                    break
-                                }
-                            }
-                        }
-                    }
-                }
-                catch { }
-            }
-            
-            # Method 3: DNS client cache (recent LLMNR/mDNS resolutions)
-            if (-not $hostname) {
-                try {
-                    $dnsCache = Get-DnsClientCache -ErrorAction SilentlyContinue | 
-                        Where-Object { $_.Data -eq $IP -and $_.Name -notmatch '^\d+\.\d+\.\d+\.\d+' }
-                    if ($dnsCache) {
-                        $hostname = ($dnsCache | Select-Object -First 1).Name
-                    }
-                }
-                catch { }
-            }
-            
-            # Set default if all methods failed
+            # Set default if DNS failed (NetBIOS done in post-processing)
             if (-not $hostname) {
                 $hostname = "N/A"
             }
@@ -921,6 +897,75 @@ process {
         }
         elseif (-not $Quiet) {
             Write-Host "`nNo unknown MAC vendors found - all identified from local database" -ForegroundColor Green
+        }
+    }
+    
+    # NetBIOS hostname resolution (post-processing for devices with N/A hostname)
+    $unresolvedHosts = $Results | Where-Object { 
+        $_.Status -eq 'Online' -and 
+        $_.Hostname -eq 'N/A' -and
+        # Only try NetBIOS on devices that might be Windows (SMB/NetBIOS/RDP ports)
+        ($_.OpenPorts -contains 445 -or $_.OpenPorts -contains 139 -or $_.OpenPorts -contains 135 -or $_.OpenPorts -contains 3389)
+    }
+    
+    if ($unresolvedHosts.Count -gt 0 -and -not $QuickScan) {
+        if (-not $Quiet) {
+            Write-Host "`nNetBIOS Hostname Resolution:" -ForegroundColor Cyan
+            Write-Host "  Windows devices without DNS hostname: $($unresolvedHosts.Count)" -ForegroundColor Yellow
+        }
+        
+        $nbResolved = 0
+        $nbCount = 0
+        foreach ($device in $unresolvedHosts) {
+            $nbCount++
+            
+            if (-not $Quiet) {
+                Write-Progress -Activity "NetBIOS Hostname Resolution" -Status "$nbCount of $($unresolvedHosts.Count): $($device.IPAddress)" -PercentComplete (($nbCount / $unresolvedHosts.Count) * 100)
+            }
+            
+            try {
+                # nbtstat with short timeout
+                $nbtJob = Start-Job -ScriptBlock {
+                    param($IP)
+                    & nbtstat -A $IP 2>$null
+                } -ArgumentList $device.IPAddress
+                
+                # Wait max 3 seconds
+                $completed = Wait-Job -Job $nbtJob -Timeout 3
+                
+                if ($completed) {
+                    $nbtOutput = Receive-Job -Job $nbtJob
+                    Remove-Job -Job $nbtJob -Force
+                    
+                    if ($nbtOutput) {
+                        foreach ($line in $nbtOutput) {
+                            # Match computer name: NAME <00> UNIQUE (first entry is usually computer name)
+                            if ($line -match '^\s*([A-Z0-9\-]+)\s+<00>\s+UNIQUE') {
+                                $nbName = $matches[1].Trim()
+                                if ($nbName -and $nbName.Length -ge 1 -and $nbName.Length -le 15) {
+                                    $device.Hostname = $nbName
+                                    $nbResolved++
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                else {
+                    # Timeout - kill the job
+                    Stop-Job -Job $nbtJob -ErrorAction SilentlyContinue
+                    Remove-Job -Job $nbtJob -Force -ErrorAction SilentlyContinue
+                }
+            }
+            catch {
+                # Silently continue on errors
+            }
+        }
+        
+        Write-Progress -Activity "NetBIOS Hostname Resolution" -Completed
+        
+        if (-not $Quiet) {
+            Write-Host "  Resolved via NetBIOS: $nbResolved hostnames" -ForegroundColor Green
         }
     }
     
