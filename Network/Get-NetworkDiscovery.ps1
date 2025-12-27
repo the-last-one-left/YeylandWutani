@@ -901,11 +901,18 @@ process {
     }
     
     # NetBIOS hostname resolution (post-processing for devices with N/A hostname)
-    $unresolvedHosts = $Results | Where-Object { 
+    # Debug: Check what ports are detected
+    $windowsDevices = $Results | Where-Object { 
         $_.Status -eq 'Online' -and 
-        $_.Hostname -eq 'N/A' -and
-        # Only try NetBIOS on devices that might be Windows (SMB/NetBIOS/RDP ports)
-        ($_.OpenPorts -contains 445 -or $_.OpenPorts -contains 139 -or $_.OpenPorts -contains 135 -or $_.OpenPorts -contains 3389)
+        $_.Hostname -eq 'N/A'
+    }
+    
+    $unresolvedHosts = @()
+    foreach ($dev in $windowsDevices) {
+        $ports = @($dev.OpenPorts)
+        if ($ports -contains 445 -or $ports -contains 139 -or $ports -contains 135 -or $ports -contains 3389) {
+            $unresolvedHosts += $dev
+        }
     }
     
     if ($unresolvedHosts.Count -gt 0 -and -not $QuickScan) {
@@ -1000,8 +1007,8 @@ end {
         Write-Host "Scan Duration:        $([math]::Round($elapsed, 1)) seconds"
         
         if ($UseMacVendorAPI) {
-            $identifiedVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -ne 'Unknown' }).Count
-            $unknownVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -eq 'Unknown' }).Count
+            $identifiedVendors = @($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -and $_.Vendor -ne 'Unknown' }).Count
+            $unknownVendors = @($AllResults | Where-Object { $_.Status -eq 'Online' -and ($_.Vendor -eq 'Unknown' -or -not $_.Vendor) }).Count
             Write-Host "MAC Vendors:          $identifiedVendors identified, $unknownVendors unknown ($script:ApiCallCount API calls)"
         }
         
