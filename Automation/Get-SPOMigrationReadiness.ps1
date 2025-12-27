@@ -212,8 +212,13 @@ function Test-Excluded {
 }
 
 function Get-CleanName {
-    param([string]$Name)
+    param([string]$Name, [switch]$IncludeProblematic)
+    # Replace truly invalid SharePoint characters
     $clean = $Name -replace '["*:<>?/\\|]', '_'
+    # Optionally replace problematic characters too
+    if ($IncludeProblematic) {
+        $clean = $clean -replace '[#%&~{}]', '_'
+    }
     $clean = $clean -replace '\s+', ' '
     return $clean.Trim()
 }
@@ -260,26 +265,40 @@ function Test-InvalidChars {
     $foundInvalid = @()
     $foundProblematic = @()
     
+    # Check for truly invalid characters (will block upload)
     foreach ($char in $script:InvalidChars) {
         if ($ItemName.Contains($char)) { $foundInvalid += $char }
     }
+    # Check for problematic characters (may cause URL issues)
     foreach ($char in $script:ProblematicChars) {
         if ($ItemName.Contains($char)) { $foundProblematic += $char }
     }
-    if ($ItemName -ne $ItemName.Trim()) { $foundInvalid += "[space]" }
-    if ($ItemName -match '\.{2,}') { $foundInvalid += "[..]" }
-    if ($ItemName.EndsWith('.') -and $ItemType -eq 'Folder') { $foundInvalid += "[ends .]" }
+    # Check for spacing issues
+    if ($ItemName -ne $ItemName.Trim()) { $foundInvalid += "[leading/trailing space]" }
+    if ($ItemName -match '\.{2,}') { $foundInvalid += "[consecutive periods]" }
+    if ($ItemName.EndsWith('.') -and $ItemType -eq 'Folder') { $foundInvalid += "[ends with period]" }
     
     if ($foundInvalid.Count -gt 0 -or $foundProblematic.Count -gt 0) {
+        # Determine severity - Critical if truly invalid, Medium if only problematic
         $sev = if ($foundInvalid.Count -gt 0) { 'Critical' } else { 'Medium' }
+        
+        # Build display string showing what was found
+        $allChars = @()
+        if ($foundInvalid.Count -gt 0) { $allChars += $foundInvalid }
+        if ($foundProblematic.Count -gt 0) { $allChars += $foundProblematic }
+        $charsDisplay = $allChars -join ', '
+        
+        # Generate suggested name - include problematic chars in replacement if they were found
+        $hasProblematic = $foundProblematic.Count -gt 0
+        $suggestedName = Get-CleanName -Name $ItemName -IncludeProblematic:$hasProblematic
+        
         $script:InvalidCharIssues.Add([PSCustomObject]@{
             Path = $FullPath
             Name = $ItemName
             ItemType = $ItemType
-            InvalidChars = ($foundInvalid -join ', ')
-            ProblematicChars = ($foundProblematic -join ', ')
+            CharactersFound = $charsDisplay
             Severity = $sev
-            SuggestedName = Get-CleanName -Name $ItemName
+            SuggestedName = $suggestedName
         })
     }
 }
