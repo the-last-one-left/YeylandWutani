@@ -80,9 +80,9 @@ $Global:ConnectionState = @{
     ConnectedAt  = $null        # Connection timestamp
 }
 
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # EXCHANGE ONLINE CONNECTION STATE
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # Separate tracking for Exchange Online connections
 # Exchange Online uses different authentication than Graph
 $Global:ExchangeOnlineState = @{
@@ -91,9 +91,9 @@ $Global:ExchangeOnlineState = @{
     ConnectionAttempts = 0      # Number of connection attempts (for retry logic)
 }
 
-#═══════════════════════════════════════════════════════════════════════════════
+#===============================================================================
 # HIGH-RISK ISP DETECTION
-#═══════════════════════════════════════════════════════════════════════════════
+#===============================================================================
 # List of Internet Service Providers associated with heightened security risk
 # These ISPs are commonly used by VPS/hosting providers and may indicate
 # suspicious activity when used for M365 sign-ins
