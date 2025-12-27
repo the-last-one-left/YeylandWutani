@@ -153,12 +153,12 @@ function Convert-ExcelFile {
 
 # Main execution
 try {
-    Write-Host "`n╔════════════════════════════════════════════════════════════╗" -ForegroundColor DarkGray
-    Write-Host "║   " -ForegroundColor DarkGray -NoNewline
+    Write-Host "`n+------------------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host "|   " -ForegroundColor DarkGray -NoNewline
     Write-Host "Yeyland Wutani" -ForegroundColor DarkYellow -NoNewline
-    Write-Host " - Legacy Excel Converter            ║" -ForegroundColor DarkGray
-    Write-Host "║   Building Better Systems                              ║" -ForegroundColor DarkGray
-    Write-Host "╚════════════════════════════════════════════════════════════╝`n" -ForegroundColor DarkGray
+    Write-Host " - Legacy Excel Converter            |" -ForegroundColor DarkGray
+    Write-Host "|   Building Better Systems                              |" -ForegroundColor DarkGray
+    Write-Host "+------------------------------------------------------------+`n" -ForegroundColor DarkGray
     
     Write-Log "Starting Excel conversion process"
     Write-Log "Source Path: $Path"
@@ -227,19 +227,19 @@ try {
         
         # Summary
         Write-Host "`n" -NoNewline
-        Write-Host "═══════════════════ Conversion Summary ═══════════════════" -ForegroundColor DarkGray
+        Write-Host "=================== Conversion Summary ===================" -ForegroundColor DarkGray
         Write-Log "Total files processed: $($xlsFiles.Count)"
         Write-Log "Successfully converted: $successCount" -Level SUCCESS
         if ($failCount -gt 0) {
             Write-Log "Failed conversions: $failCount" -Level ERROR
         }
         Write-Log "Log file: $logFile"
-        Write-Host "══════════════════════════════════════════════════════════`n" -ForegroundColor DarkGray
+        Write-Host "==========================================================`n" -ForegroundColor DarkGray
         
     } else {
         Write-Host "`nWhatIf: Would convert the following files:" -ForegroundColor Cyan
         foreach ($file in $xlsFiles) {
-            Write-Host "  → $($file.FullName)" -ForegroundColor Gray
+            Write-Host "  -> $($file.FullName)" -ForegroundColor Gray
         }
     }
     
