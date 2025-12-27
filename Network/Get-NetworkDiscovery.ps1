@@ -21,6 +21,7 @@
     - Locally administered MAC identification (VMs, randomized mobile MACs)
     - Open port scanning
     - DNS hostname resolution
+    - Console table output showing top 10 devices by services
     - Multiple export formats (CSV, JSON, HTML)
     - Clickable service links in HTML reports
     - Device type icons in reports
@@ -96,7 +97,7 @@
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 1.9
+    Version: 2.0
     
     AUTO-DETECTION:
     - Detects all active network adapters with valid IPv4 addresses
@@ -115,6 +116,11 @@
     - Locally administered MACs labeled as Randomized/VM
     - Smart home devices (WiZ, Espressif, Google, etc.) classified as IoT
     - Mesh WiFi (eero, etc.) classified as Network Device
+    
+    CONSOLE OUTPUT:
+    - Displays top 10 devices sorted by most services when no export path specified
+    - Color-coded by device type (Blue=Server, Green=Workstation, etc.)
+    - Use -ExportPath for complete results in CSV, JSON, or HTML format
 #>
 
 [CmdletBinding(DefaultParameterSetName='Subnet')]
@@ -156,7 +162,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.9"
+    $ScriptVersion = "2.0"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -1002,6 +1008,58 @@ end {
         }
         
         Write-Host "================================================================`n" -ForegroundColor Cyan
+        
+        # Display top 10 devices by service count when no export specified
+        if (-not $ExportPath) {
+            $onlineDevices = $AllResults | Where-Object { $_.Status -eq 'Online' }
+            
+            if ($onlineDevices.Count -gt 0) {
+                # Sort by number of open ports (most active first), then by IP
+                $top10 = $onlineDevices | 
+                    Sort-Object { @($_.OpenPorts).Count } -Descending | 
+                    Select-Object -First 10
+                
+                Write-Host "Top 10 Devices by Services:" -ForegroundColor Cyan
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                # Header
+                $header = "{0,-16} {1,-25} {2,-18} {3,-20} {4,-30}" -f "IP Address", "Hostname", "Device Type", "Vendor", "Services"
+                Write-Host $header -ForegroundColor Yellow
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                foreach ($device in $top10) {
+                    # Truncate long values for display
+                    $hostname = if ($device.Hostname.Length -gt 23) { $device.Hostname.Substring(0, 20) + "..." } else { $device.Hostname }
+                    $deviceType = if ($device.DeviceType.Length -gt 16) { $device.DeviceType.Substring(0, 13) + "..." } else { $device.DeviceType }
+                    $vendor = if ($device.Vendor.Length -gt 18) { $device.Vendor.Substring(0, 15) + "..." } else { $device.Vendor }
+                    $services = if ($device.Services.Length -gt 28) { $device.Services.Substring(0, 25) + "..." } else { $device.Services }
+                    if (-not $services) { $services = "-" }
+                    
+                    # Color based on device type
+                    $color = switch ($device.DeviceType) {
+                        'Server' { 'Blue' }
+                        'Workstation' { 'Green' }
+                        'Printer' { 'Yellow' }
+                        'Network Device' { 'DarkYellow' }
+                        'Mobile Device' { 'Magenta' }
+                        'IoT Device' { 'Red' }
+                        'Container' { 'Cyan' }
+                        default { 'White' }
+                    }
+                    
+                    $row = "{0,-16} {1,-25} {2,-18} {3,-20} {4,-30}" -f $device.IPAddress, $hostname, $deviceType, $vendor, $services
+                    Write-Host $row -ForegroundColor $color
+                }
+                
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                $remaining = $onlineDevices.Count - 10
+                if ($remaining -gt 0) {
+                    Write-Host "... and $remaining more devices. Use -ExportPath for full report." -ForegroundColor Gray
+                }
+                Write-Host ""
+            }
+        }
     }
     
     # Export results
