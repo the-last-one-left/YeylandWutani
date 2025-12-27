@@ -441,6 +441,46 @@ begin {
     $AllResults = @()
     $AllIPs = @()
     
+    # Function to auto-detect local subnets
+    function Get-LocalSubnets {
+        $subnets = @()
+        
+        # Get all network adapters with valid IPv4 addresses
+        $adapters = Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | 
+            Where-Object { 
+                $_.IPAddress -notmatch '^127\.' -and      # Exclude loopback
+                $_.IPAddress -notmatch '^169\.254\.' -and # Exclude APIPA
+                $_.PrefixLength -ge 8 -and                 # Valid prefix
+                $_.PrefixLength -le 30                     # Not too small
+            }
+        
+        foreach ($adapter in $adapters) {
+            $ip = $adapter.IPAddress
+            $prefix = $adapter.PrefixLength
+            
+            # Calculate network address
+            $ipBytes = [System.Net.IPAddress]::Parse($ip).GetAddressBytes()
+            [Array]::Reverse($ipBytes)
+            $ipInt = [System.BitConverter]::ToUInt32($ipBytes, 0)
+            
+            $maskInt = [Convert]::ToUInt32(('1' * $prefix + '0' * (32 - $prefix)), 2)
+            $networkInt = $ipInt -band $maskInt
+            
+            $networkBytes = [System.BitConverter]::GetBytes($networkInt)
+            [Array]::Reverse($networkBytes)
+            $networkAddr = [System.Net.IPAddress]::new($networkBytes).ToString()
+            
+            $cidr = "$networkAddr/$prefix"
+            
+            # Avoid duplicates
+            if ($cidr -notin $subnets) {
+                $subnets += $cidr
+            }
+        }
+        
+        return $subnets
+    }
+    
     # Function to convert subnet to IP list
     function Get-SubnetIPs {
         param([string]$CIDR)
@@ -667,6 +707,25 @@ process {
     # Build IP list
     switch ($PSCmdlet.ParameterSetName) {
         'Subnet' {
+            # Auto-detect if no subnet specified
+            if (-not $Subnet -or $Subnet.Count -eq 0) {
+                if (-not $Quiet) {
+                    Write-Host "No subnet specified - auto-detecting local networks..." -ForegroundColor Yellow
+                }
+                $Subnet = Get-LocalSubnets
+                
+                if ($Subnet.Count -eq 0) {
+                    throw "Could not detect any local subnets. Please specify -Subnet parameter."
+                }
+                
+                if (-not $Quiet) {
+                    Write-Host "Detected $($Subnet.Count) local subnet(s):" -ForegroundColor Green
+                    foreach ($net in $Subnet) {
+                        Write-Host "  - $net" -ForegroundColor Gray
+                    }
+                }
+            }
+            
             foreach ($net in $Subnet) {
                 if (-not $Quiet) {
                     Write-Host "Expanding subnet: $net" -ForegroundColor Yellow
