@@ -70,6 +70,16 @@ param(
 
 #region Configuration
 $ErrorActionPreference = "Continue"
+
+# Load System.Web for HtmlEncode
+Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
+
+# Fallback HTML encode function if System.Web not available
+function ConvertTo-HtmlSafe {
+    param([string]$Text)
+    if ([string]::IsNullOrEmpty($Text)) { return '' }
+    return $Text.Replace('&', '&amp;').Replace('<', '&lt;').Replace('>', '&gt;').Replace('"', '&quot;').Replace("'", '&#39;')
+}
 $ProgressPreference = "Continue"
 
 # Branding
@@ -643,9 +653,9 @@ function Get-HTMLReport {
         [void]$sb.AppendLine('<tr><th>Severity</th><th>Name</th><th>Invalid</th><th>Suggested</th></tr>')
         foreach ($item in ($script:InvalidCharIssues | Select-Object -First 100)) {
             $badgeClass = "badge-$($item.Severity.ToLower())"
-            $safeName = [System.Web.HttpUtility]::HtmlEncode($item.Name)
-            $safeChars = [System.Web.HttpUtility]::HtmlEncode($item.InvalidChars)
-            $safeSuggested = [System.Web.HttpUtility]::HtmlEncode($item.SuggestedName)
+            $safeName = ConvertTo-HtmlSafe $item.Name
+            $safeChars = ConvertTo-HtmlSafe $item.InvalidChars
+            $safeSuggested = ConvertTo-HtmlSafe $item.SuggestedName
             [void]$sb.AppendLine("<tr><td><span class=`"badge $badgeClass`">$($item.Severity)</span></td>")
             [void]$sb.AppendLine("<td>$safeName</td><td>$safeChars</td><td>$safeSuggested</td></tr>")
         }
@@ -659,7 +669,7 @@ function Get-HTMLReport {
         [void]$sb.AppendLine('<div class="table-container"><table>')
         [void]$sb.AppendLine('<tr><th>Name</th><th>Issue</th><th>Path</th></tr>')
         foreach ($item in $script:RestrictedNameIssues) {
-            $safeName = [System.Web.HttpUtility]::HtmlEncode($item.Name)
+            $safeName = ConvertTo-HtmlSafe $item.Name
             [void]$sb.AppendLine("<tr><td>$safeName</td><td>$($item.Issues)</td>")
             [void]$sb.AppendLine("<td class=`"path-cell`">$($item.Path)</td></tr>")
         }
