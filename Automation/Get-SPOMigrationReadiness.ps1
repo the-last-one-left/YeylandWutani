@@ -565,13 +565,19 @@ function Get-HTMLReport {
     
     $totalIssues = $critical + $high + $medium + $low
     
-    # Readiness score
+    # Readiness score - percentage-based with caps per severity
+    $totalFiles = [Math]::Max($script:TotalFiles, 1)
+    $criticalRate = ($critical / $totalFiles) * 100
+    $highRate = ($high / $totalFiles) * 100
+    $mediumRate = ($medium / $totalFiles) * 100
+    $lowRate = ($low / $totalFiles) * 100
+    
     $score = 100
-    $score -= ($critical * 10)
-    $score -= ($high * 5)
-    $score -= ($medium * 2)
-    $score -= ($low * 0.5)
-    $score = [Math]::Max(0, [Math]::Min(100, $score))
+    $score -= [Math]::Min(40, $criticalRate * 20)   # Critical: up to 40 points
+    $score -= [Math]::Min(25, $highRate * 15)       # High: up to 25 points
+    $score -= [Math]::Min(20, $mediumRate * 4)      # Medium: up to 20 points
+    $score -= [Math]::Min(15, $lowRate * 2)         # Low: up to 15 points
+    $score = [Math]::Max(0, [Math]::Round($score))
     
     $status = "Ready"
     $statusColor = "#28a745"
@@ -669,11 +675,11 @@ function Get-HTMLReport {
         [void]$sb.AppendLine('<section>')
         [void]$sb.AppendLine("<h2>Invalid Characters ($($script:InvalidCharIssues.Count))</h2>")
         [void]$sb.AppendLine('<div class="table-container"><table>')
-        [void]$sb.AppendLine('<tr><th>Severity</th><th>Name</th><th>Invalid</th><th>Suggested</th></tr>')
+        [void]$sb.AppendLine('<tr><th>Severity</th><th>Name</th><th>Characters Found</th><th>Suggested Name</th></tr>')
         foreach ($item in ($script:InvalidCharIssues | Select-Object -First 100)) {
             $badgeClass = "badge-$($item.Severity.ToLower())"
             $safeName = ConvertTo-HtmlSafe $item.Name
-            $safeChars = ConvertTo-HtmlSafe $item.InvalidChars
+            $safeChars = ConvertTo-HtmlSafe $item.CharactersFound
             $safeSuggested = ConvertTo-HtmlSafe $item.SuggestedName
             [void]$sb.AppendLine("<tr><td><span class=`"badge $badgeClass`">$($item.Severity)</span></td>")
             [void]$sb.AppendLine("<td>$safeName</td><td>$safeChars</td><td>$safeSuggested</td></tr>")
