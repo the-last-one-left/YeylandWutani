@@ -97,7 +97,7 @@
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 2.1
+    Version: 2.2
     
     AUTO-DETECTION:
     - Detects all active network adapters with valid IPv4 addresses
@@ -106,10 +106,10 @@
     - Supports multiple NICs (scans all detected subnets)
     
     HOSTNAME RESOLUTION (Multi-Method):
-    - Method 1: Reverse DNS lookup (PTR records)
-    - Method 2: NetBIOS name query (nbtstat -A) for Windows devices
-    - Method 3: DNS client cache lookup (recent LLMNR/mDNS resolutions)
-    - Uses first successful method, falls back through chain
+    - Phase 1 (parallel): Reverse DNS lookup with domain stripping
+    - Phase 2 (post-scan): NetBIOS query for Windows devices with SMB/RDP ports
+    - NetBIOS uses job-based timeout (3 sec max per host) for reliability
+    - Only queries devices likely to respond (port 139/445/135/3389 open)
     
     MAC VENDOR API:
     - Uses macvendors.com free API
@@ -168,7 +168,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "2.1"
+    $ScriptVersion = "2.2"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
