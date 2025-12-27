@@ -13,7 +13,7 @@
     - Size-based filtering (min/max thresholds)
     - Path exclusion patterns
     - Multiple export formats (CSV, HTML, JSON)
-    - Parallel processing for large datasets
+    - Parallel processing on PowerShell 7+ (falls back to sequential on 5.1)
     - Interactive deletion prompts with preview
     - Comprehensive logging and statistics
     - WhatIf support for safe testing
@@ -62,7 +62,7 @@
     Force GUI mode for folder/file selection even when parameters provided.
 
 .PARAMETER ThrottleLimit
-    Number of parallel threads for hash calculation. Default is 8.
+    Number of parallel threads for hash calculation (PS7+ only). Default is 8.
 
 .PARAMETER LogPath
     Custom log file path. Defaults to script directory.
@@ -101,7 +101,7 @@
 .NOTES
     Author: Yeyland Wutani - Building Better Systems
     Requires: PowerShell 5.1 or later
-    Version: 2.0
+    Version: 2.1
 #>
 
 [CmdletBinding(SupportsShouldProcess, DefaultParameterSetName='Report')]
@@ -166,6 +166,9 @@ param(
 $timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $logFile = Join-Path $LogPath "DuplicateFinder_$timestamp.log"
 
+# Detect PowerShell version for parallel processing support
+$script:CanUseParallel = $PSVersionTable.PSVersion.Major -ge 7
+
 function Write-Log {
     param(
         [string]$Message,
@@ -212,12 +215,65 @@ function Get-SaveFileGUI {
     return $null
 }
 
-function Get-FileHashParallel {
+function Get-FileHashSequential {
+    <#
+    .SYNOPSIS
+        Sequential file hashing for PowerShell 5.1 compatibility.
+    #>
     param(
         [System.IO.FileInfo[]]$Files,
         [string]$Algorithm
     )
     
+    $results = [System.Collections.Generic.List[PSObject]]::new()
+    $currentFile = 0
+    $totalFiles = $Files.Count
+    
+    foreach ($file in $Files) {
+        $currentFile++
+        $percentComplete = [math]::Round(($currentFile / $totalFiles) * 100)
+        Write-Progress -Activity "Calculating file hashes" -Status "Processing: $($file.Name)" -PercentComplete $percentComplete -CurrentOperation "$currentFile of $totalFiles files"
+        
+        try {
+            $hash = Get-FileHash -Path $file.FullName -Algorithm $Algorithm -ErrorAction Stop
+            $results.Add([PSCustomObject]@{
+                FullName = $file.FullName
+                Name = $file.Name
+                Directory = $file.DirectoryName
+                Size = $file.Length
+                Hash = $hash.Hash
+                Created = $file.CreationTime
+                Modified = $file.LastWriteTime
+                Extension = $file.Extension
+            })
+        } catch {
+            Write-Warning "Failed to hash $($file.FullName): $($_.Exception.Message)"
+        }
+    }
+    
+    Write-Progress -Activity "Calculating file hashes" -Completed
+    return $results
+}
+
+function Get-FileHashParallel {
+    <#
+    .SYNOPSIS
+        Parallel file hashing for PowerShell 7+. Falls back to sequential on PS 5.1.
+    #>
+    param(
+        [System.IO.FileInfo[]]$Files,
+        [string]$Algorithm
+    )
+    
+    # Use sequential processing on PowerShell 5.1
+    if (-not $script:CanUseParallel) {
+        Write-Log "Using sequential processing (PowerShell $($PSVersionTable.PSVersion))"
+        return Get-FileHashSequential -Files $Files -Algorithm $Algorithm
+    }
+    
+    Write-Log "Using parallel processing with $ThrottleLimit threads (PowerShell $($PSVersionTable.PSVersion))"
+    
+    # PowerShell 7+ parallel processing
     $results = $Files | ForEach-Object -ThrottleLimit $ThrottleLimit -Parallel {
         $file = $_
         $algo = $using:Algorithm
@@ -288,7 +344,7 @@ function Export-DuplicateReport {
     </style>
 </head>
 <body>
-    <h1>🔍 Duplicate Files Report</h1>
+    <h1>Duplicate Files Report</h1>
     <div class="summary">
         <strong>Scan Date:</strong> $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")<br>
         <strong>Source Path:</strong> $Path<br>
@@ -304,11 +360,11 @@ function Export-DuplicateReport {
             foreach ($group in $groupedDuplicates) {
                 $html += "<div class='duplicate-group'>"
                 $html += "<div class='hash'>Hash: $($group.Name)</div>"
-                $html += "<div class='size'>Size: $(Format-FileSize -Bytes $group.Group[0].Size) × $($group.Count) files</div>"
+                $html += "<div class='size'>Size: $(Format-FileSize -Bytes $group.Group[0].Size) x $($group.Count) files</div>"
                 
-                foreach ($file in $group.Group | Sort-Object -Property FullName) {
+                foreach ($file in ($group.Group | Sort-Object -Property FullName)) {
                     $html += "<div class='file-item'>"
-                    $html += "<div class='path'>📄 $($file.FullName)</div>"
+                    $html += "<div class='path'>$($file.FullName)</div>"
                     $html += "<small>Modified: $($file.Modified) | Created: $($file.Created)</small>"
                     $html += "</div>"
                 }
@@ -337,9 +393,10 @@ function Remove-DuplicateFiles {
     $savedSpace = 0
     
     foreach ($group in $groupedDuplicates) {
-        $files = $group.Group | Sort-Object -Property $(if ($KeepNewest) { 'Modified' } else { 'Created' }) -Descending
+        $sortProperty = if ($KeepNewest) { 'Modified' } else { 'Created' }
+        $files = $group.Group | Sort-Object -Property $sortProperty -Descending
         $keepFile = $files[0]
-        $deleteFiles = $files[1..($files.Count - 1)]
+        $deleteFiles = @($files | Select-Object -Skip 1)
         
         Write-Host "`nDuplicate Set (Hash: $($group.Name)):" -ForegroundColor DarkYellow
         Write-Host "  KEEPING: $($keepFile.FullName)" -ForegroundColor Green
@@ -390,7 +447,7 @@ function Move-DuplicateFiles {
     
     foreach ($group in $groupedDuplicates) {
         $files = $group.Group | Sort-Object -Property Created
-        $duplicateFiles = $files[1..($files.Count - 1)]
+        $duplicateFiles = @($files | Select-Object -Skip 1)
         
         foreach ($file in $duplicateFiles) {
             if ($PSCmdlet.ShouldProcess($file.FullName, "Move to $Destination")) {
@@ -398,11 +455,13 @@ function Move-DuplicateFiles {
                     $destFile = Join-Path $Destination $file.Name
                     
                     if (Test-Path $destFile) {
-                        $destFile = Join-Path $Destination "$([System.IO.Path]::GetFileNameWithoutExtension($file.Name))_$(Get-Random)$($file.Extension)"
+                        $baseName = [System.IO.Path]::GetFileNameWithoutExtension($file.Name)
+                        $extension = $file.Extension
+                        $destFile = Join-Path $Destination "$baseName`_$(Get-Random)$extension"
                     }
                     
                     Move-Item -Path $file.FullName -Destination $destFile -Force -ErrorAction Stop
-                    Write-Log "Moved: $($file.FullName) → $destFile" -Level SUCCESS
+                    Write-Log "Moved: $($file.FullName) -> $destFile" -Level SUCCESS
                     $movedCount++
                 } catch {
                     Write-Log "Failed to move $($file.FullName): $($_.Exception.Message)" -Level ERROR
@@ -431,7 +490,7 @@ function New-HardlinkForDuplicates {
     foreach ($group in $groupedDuplicates) {
         $files = $group.Group | Sort-Object -Property Created
         $masterFile = $files[0]
-        $duplicateFiles = $files[1..($files.Count - 1)]
+        $duplicateFiles = @($files | Select-Object -Skip 1)
         
         foreach ($file in $duplicateFiles) {
             if ($PSCmdlet.ShouldProcess($file.FullName, "Create hardlink to $($masterFile.FullName)")) {
@@ -441,7 +500,7 @@ function New-HardlinkForDuplicates {
                     $result = cmd /c mklink /H "`"$($file.FullName)`"" "`"$($masterFile.FullName)`"" 2>&1
                     
                     if ($LASTEXITCODE -eq 0) {
-                        Write-Log "Hardlinked: $($file.FullName) → $($masterFile.FullName)" -Level SUCCESS
+                        Write-Log "Hardlinked: $($file.FullName) -> $($masterFile.FullName)" -Level SUCCESS
                         $linkedCount++
                         $savedSpace += $file.Size
                     } else {
@@ -462,14 +521,16 @@ function New-HardlinkForDuplicates {
 
 # Main execution
 try {
-    Write-Host "`n╔════════════════════════════════════════════════════════════╗" -ForegroundColor DarkGray
-    Write-Host "║   " -ForegroundColor DarkGray -NoNewline
+    Write-Host "`n+------------------------------------------------------------+" -ForegroundColor DarkGray
+    Write-Host "|   " -ForegroundColor DarkGray -NoNewline
     Write-Host "Yeyland Wutani" -ForegroundColor DarkYellow -NoNewline
-    Write-Host " - Duplicate File Finder              ║" -ForegroundColor DarkGray
-    Write-Host "║   Building Better Systems                              ║" -ForegroundColor DarkGray
-    Write-Host "╚════════════════════════════════════════════════════════════╝`n" -ForegroundColor DarkGray
+    Write-Host " - Duplicate File Finder              |" -ForegroundColor DarkGray
+    Write-Host "|   Building Better Systems                              |" -ForegroundColor DarkGray
+    Write-Host "+------------------------------------------------------------+`n" -ForegroundColor DarkGray
     
     Write-Log "=== Duplicate File Finder Started ==="
+    Write-Log "PowerShell Version: $($PSVersionTable.PSVersion)"
+    Write-Log "Parallel Processing: $(if ($script:CanUseParallel) { 'Available' } else { 'Not available (requires PS 7+)' })"
     
     # Get scan path
     if ([string]::IsNullOrWhiteSpace($Path) -or $UseGUI) {
@@ -534,7 +595,10 @@ try {
     # Phase 1: Group by size for quick filtering
     Write-Host "[Phase 2] Grouping by file size..." -ForegroundColor Cyan
     $sizeGroups = $allFiles | Group-Object -Property Length | Where-Object { $_.Count -gt 1 }
-    $candidates = $sizeGroups | ForEach-Object { $_.Group }
+    $candidates = @()
+    foreach ($group in $sizeGroups) {
+        $candidates += $group.Group
+    }
     
     Write-Log "Identified $($candidates.Count) files with matching sizes (potential duplicates)"
     
@@ -545,7 +609,11 @@ try {
     
     # Phase 2: Calculate hashes
     Write-Host "[Phase 3] Calculating file hashes (this may take a while)..." -ForegroundColor Cyan
-    Write-Host "  Using $HashAlgorithm with $ThrottleLimit parallel threads" -ForegroundColor Gray
+    if ($script:CanUseParallel) {
+        Write-Host "  Using $HashAlgorithm with $ThrottleLimit parallel threads" -ForegroundColor Gray
+    } else {
+        Write-Host "  Using $HashAlgorithm (sequential mode - PS 5.1)" -ForegroundColor Gray
+    }
     
     $hashedFiles = Get-FileHashParallel -Files $candidates -Algorithm $HashAlgorithm
     Write-Log "Successfully hashed $($hashedFiles.Count) files"
@@ -573,11 +641,11 @@ try {
     
     # Statistics
     Write-Host "`n" -NoNewline
-    Write-Host "═══════════════════ Duplicate Analysis ═══════════════════" -ForegroundColor DarkGray
+    Write-Host "=================== Duplicate Analysis ===================" -ForegroundColor DarkGray
     Write-Log "Found $($duplicateGroups.Count) sets of duplicates"
     Write-Log "Total duplicate files: $duplicateFileCount"
     Write-Log "Wasted space: $(Format-FileSize -Bytes $wastedSpace)" -Level WARNING
-    Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor DarkGray
+    Write-Host "===========================================================" -ForegroundColor DarkGray
     
     # Display sample duplicates
     Write-Host "`nSample duplicates:" -ForegroundColor Cyan
@@ -586,7 +654,7 @@ try {
         Write-Host "`n  Hash: $($group.Name)" -ForegroundColor DarkYellow
         Write-Host "  Size: $(Format-FileSize -Bytes $group.Group[0].Size)" -ForegroundColor Gray
         foreach ($file in $group.Group) {
-            Write-Host "    → $($file.FullName)" -ForegroundColor Gray
+            Write-Host "    -> $($file.FullName)" -ForegroundColor Gray
         }
     }
     
@@ -618,10 +686,10 @@ try {
             'Delete' {
                 $result = Remove-DuplicateFiles -Duplicates $allDuplicates -KeepNewest $KeepNewest -Interactive $Interactive
                 Write-Host "`n" -NoNewline
-                Write-Host "═══════════════════ Deletion Summary ═════════════════════" -ForegroundColor DarkGray
+                Write-Host "=================== Deletion Summary =====================" -ForegroundColor DarkGray
                 Write-Log "Files deleted: $($result.DeletedCount)" -Level SUCCESS
                 Write-Log "Space recovered: $(Format-FileSize -Bytes $result.SavedSpace)" -Level SUCCESS
-                Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor DarkGray
+                Write-Host "===========================================================" -ForegroundColor DarkGray
             }
             'Move' {
                 $movedCount = Move-DuplicateFiles -Duplicates $allDuplicates -Destination $DestinationPath
@@ -630,10 +698,10 @@ try {
             'Hardlink' {
                 $result = New-HardlinkForDuplicates -Duplicates $allDuplicates -MasterPath $DestinationPath
                 Write-Host "`n" -NoNewline
-                Write-Host "═══════════════════ Hardlink Summary ═════════════════════" -ForegroundColor DarkGray
+                Write-Host "=================== Hardlink Summary =====================" -ForegroundColor DarkGray
                 Write-Log "Hardlinks created: $($result.LinkedCount)" -Level SUCCESS
                 Write-Log "Space saved: $(Format-FileSize -Bytes $result.SavedSpace)" -Level SUCCESS
-                Write-Host "══════════════════════════════════════════════════════════" -ForegroundColor DarkGray
+                Write-Host "===========================================================" -ForegroundColor DarkGray
             }
         }
     }
