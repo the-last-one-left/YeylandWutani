@@ -1749,7 +1749,7 @@ $overallStats = @{
 foreach ($scanPath in $validPaths) {
     Write-Host ""
     Write-Log "Starting scan of: $scanPath" -Level Info
-    Write-Log "Max depth: $MaxDepth | Include permissions: $IncludePermissions" -Level Debug
+    Write-Log "Max depth: $MaxDepth - Include permissions: $IncludePermissions" -Level Debug
     
     $stats = Start-MigrationScan -ScanPath $scanPath
     
