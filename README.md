@@ -31,8 +31,7 @@ YeylandWutani/
 ├── Security/            # Security assessment and hardening tools
 ├── Monitoring/          # System health and log analysis utilities
 ├── ActiveDirectory/     # AD administration and audit scripts
-├── Network/             # Network configuration and diagnostics
-└── Documentation/       # Templates, guides, and best practices
+└── Network/             # Network configuration and diagnostics
 ```
 
 ---
@@ -55,7 +54,6 @@ YeylandWutani/
 - Health check and diagnostic scripts
 - Backup validation utilities
 - Performance analysis tools
-- Documentation generators
 
 ---
 
