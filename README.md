@@ -1,3 +1,7 @@
+<div align="center">
+
+![Yeyland Wutani LLC](YeylandWutani.png)
+
 # Yeyland Wutani LLC
 
 **IT Consulting & Cybersecurity Services | Building Better Systems**
@@ -5,6 +9,8 @@
 ![License](https://img.shields.io/badge/license-MIT-FF6600.svg)
 ![PowerShell](https://img.shields.io/badge/PowerShell-5.1%2B-FF6600.svg)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux-6B7280.svg)
+
+</div>
 
 ---
 
@@ -151,8 +157,8 @@ For consulting inquiries, custom development, or support contracts, reach out to
 
 <div align="center">
 
-**Building Better Systems**
+![Yeyland Wutani LLC](YeylandWutani.png)
 
-![Yeyland Wutani LLC](https://img.shields.io/badge/Yeyland%20Wutani%20LLC-FF6600?style=for-the-badge)
+**Building Better Systems**
 
 </div>

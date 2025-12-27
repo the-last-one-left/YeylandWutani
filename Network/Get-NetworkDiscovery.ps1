@@ -77,7 +77,7 @@
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 1.7
+    Version: 1.8
     
     MAC VENDOR API:
     - Uses macvendors.com free API
@@ -125,7 +125,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.7"
+    $ScriptVersion = "1.8"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -353,14 +353,21 @@ begin {
             return $Cache[$MacPrefix]
         }
         
-        # Skip locally administered MACs (second hex digit is 2, 6, A, or E)
+        # Detect locally administered MACs (second hex digit is 2, 6, A, or E)
         # These are not in the IEEE OUI database
         $firstOctet = $MacPrefix.Split(':')[0]
         if ($firstOctet -and $firstOctet.Length -eq 2) {
             $secondNibble = $firstOctet[1]
             if ($secondNibble -match '[26AEae]') {
-                $Cache[$MacPrefix] = "Local/Virtual"
-                return "Local/Virtual"
+                # Docker containers use 02:42:xx:xx:xx:xx prefix
+                if ($MacAddress -match '^02-42-') {
+                    $Cache[$MacPrefix] = "Docker Container"
+                    return "Docker Container"
+                }
+                else {
+                    $Cache[$MacPrefix] = "Randomized/VM"
+                    return "Randomized/VM"
+                }
             }
         }
         
@@ -769,33 +776,74 @@ process {
                     $_.Vendor = $vendor
                     
                     # Re-evaluate device type based on new vendor information
-                    # Check for network equipment vendors
-                    if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link') {
-                        if ($_.OpenPorts -contains 22 -or $_.OpenPorts -contains 23 -or $_.OpenPorts -contains 443) {
-                            $_.DeviceType = "Network Device"
-                            $_.OS = "$vendor Device"
+                    # Docker containers
+                    if ($vendor -eq 'Docker Container') {
+                        $_.DeviceType = "Container"
+                        $_.OS = "Docker"
+                    }
+                    # Randomized/VM MACs
+                    elseif ($vendor -eq 'Randomized/VM') {
+                        # Keep existing type if classified, otherwise mark as Unknown
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.OS = "Virtual/Mobile"
                         }
                     }
-                    # Check for printer vendors
-                    elseif ($vendor -match 'HP|Canon|Epson|Brother|Xerox|Lexmark|Ricoh' -and 
+                    # Mesh WiFi / Network equipment vendors
+                    elseif ($vendor -match 'eero|Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link|Linksys|ASUS|MikroTik') {
+                        $_.DeviceType = "Network Device"
+                        $_.OS = "$vendor"
+                    }
+                    # Smart home / IoT vendors
+                    elseif ($vendor -match 'WiZ|Espressif|Tuya|Signify|Philips Hue|LIFX|Wyze|Ring|Nest|ecobee|Honeywell|Chamberlain|Lutron|Sonos|Roku|Amazon|FireTV') {
+                        $_.DeviceType = "IoT Device"
+                        $_.OS = "Smart Home"
+                    }
+                    # Google devices (Chromecast, Nest, Home)
+                    elseif ($vendor -match 'Google') {
+                        $_.DeviceType = "IoT Device"
+                        $_.OS = "Google Home"
+                    }
+                    # Samsung - likely TV or mobile
+                    elseif ($vendor -match 'Samsung') {
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "IoT Device"
+                            $_.OS = "Samsung Smart"
+                        }
+                    }
+                    # Motherboard/NIC vendors with SSH/HTTPS likely a server or workstation
+                    elseif ($vendor -match 'ASRock|ASUS|Gigabyte|MSI|Supermicro|ASUSTeK') {
+                        if ($_.OpenPorts -contains 22 -or $_.OpenPorts -contains 443 -or $_.OpenPorts -contains 80) {
+                            $_.DeviceType = "Server"
+                            $_.OS = "Linux/BSD"
+                        }
+                        elseif ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "Workstation"
+                            $_.OS = "Unknown"
+                        }
+                    }
+                    # Printer vendors
+                    elseif ($vendor -match 'HP Inc|Canon|Epson|Brother|Xerox|Lexmark|Ricoh|Kyocera' -and 
                             ($_.OpenPorts -contains 515 -or $_.OpenPorts -contains 631 -or $_.OpenPorts -contains 9100)) {
                         $_.DeviceType = "Printer"
                         $_.OS = "$vendor Printer"
                     }
-                    # Check for mobile device vendors
-                    elseif ($vendor -match 'Apple.*iPhone|Apple.*iPad|Samsung.*Mobile|LG Electronics|Motorola Mobility') {
+                    # Mobile device vendors
+                    elseif ($vendor -match 'Apple.*iPhone|Apple.*iPad|LG Electronics|Motorola Mobility|OnePlus|Xiaomi|OPPO|Huawei') {
                         $_.DeviceType = "Mobile Device"
                         if ($vendor -match 'Apple') { $_.OS = "iOS" }
-                        elseif ($vendor -match 'Samsung|LG|Motorola') { $_.OS = "Android" }
-                        else { $_.OS = "Mobile" }
+                        else { $_.OS = "Android" }
                     }
-                    # Check for known computer vendors
-                    elseif ($vendor -match 'Dell|HP|Lenovo|Microsoft|Intel') {
+                    # Known computer/server vendors
+                    elseif ($vendor -match 'Dell|Lenovo|Microsoft|Intel Corporate|Hewlett Packard') {
                         if ($_.DeviceType -eq "Unknown") {
                             $_.DeviceType = "Workstation"
-                            if ($vendor -match 'Apple') { $_.OS = "macOS" }
-                            else { $_.OS = "Windows" }
+                            $_.OS = "Windows"
                         }
+                    }
+                    # Apple computers
+                    elseif ($vendor -match 'Apple' -and $_.DeviceType -eq "Unknown") {
+                        $_.DeviceType = "Workstation"
+                        $_.OS = "macOS"
                     }
                 }
                 
@@ -1023,6 +1071,10 @@ end {
             border-left: 4px solid #FF5722;
             background-color: #fbe9e7;
         }
+        .device-container { 
+            border-left: 4px solid #2196F3;
+            background-color: #e3f2fd;
+        }
         .footer { 
             margin-top: 40px; 
             text-align: center; 
@@ -1098,6 +1150,7 @@ end {
                             'Network Device' { 'device-network' }
                             'Mobile Device' { 'device-mobile' }
                             'IoT Device' { 'device-iot' }
+                            'Container' { 'device-container' }
                             default { '' }
                         }
                         
@@ -1109,6 +1162,7 @@ end {
                             'Network Device' { '&#128225;' }
                             'Mobile Device' { '&#128241;' }
                             'IoT Device' { '&#128268;' }
+                            'Container' { '&#128230;' }
                             default { '&#10067;' }
                         }
                         
