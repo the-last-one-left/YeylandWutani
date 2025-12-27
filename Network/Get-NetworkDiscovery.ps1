@@ -549,18 +549,889 @@ begin {
             }
         }
         
-        # Device is online - gather info
-        $hostname = "N/A"
+        # Device is online - gather info using multi-method hostname resolution
+        $hostname = $null
+        $hostnameSource = $null
+        
         if (-not $DoPortScan) {
-            # QuickScan - skip DNS lookup for speed
+            # QuickScan - skip hostname lookup for speed
             $hostname = "N/A"
         }
         else {
+            # Method 1: Reverse DNS lookup (requires PTR records)
             try {
                 $dnsResult = [System.Net.Dns]::GetHostEntry($IP)
-                $hostname = $dnsResult.HostName
+                if ($dnsResult.HostName -and $dnsResult.HostName -ne $IP) {
+                    $hostname = $dnsResult.HostName
+                    $hostnameSource = "DNS"
+                }
             }
-            catch {
+            catch { }
+            
+            # Method 2: NetBIOS name query (Windows machines)
+            if (-not $hostname -or $hostname -eq "N/A") {
+                try {
+                    $nbtOutput = & nbtstat -A $IP 2>$null
+                    if ($nbtOutput) {
+                        # Parse nbtstat output for computer name (type <00> UNIQUE)
+                        foreach ($line in $nbtOutput) {
+                            if ($line -match '^\s*([\w\-]+)\s+<00>\s+UNIQUE') {
+                                $nbName = $matches[1].Trim()
+                                if ($nbName -and $nbName.Length -gt 0 -and $nbName -notmatch '^\s*
+        
+        # Get MAC address using ARP
+        $macAddress = $null
+        $macPrefix = $null
+        $vendor = "Unknown"
+        $vendorHint = $null  # DeviceType|OS from MAC database
+        try {
+            # Use arp -a without IP filter, then parse for our specific IP
+            $arpOutput = & arp -a 2>$null
+            
+            # Find the line containing our IP address
+            $arpLine = $arpOutput | Where-Object { $_ -match "\b$([regex]::Escape($IP))\b" }
+            
+            if ($arpLine -and $arpLine -match '([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2})') {
+                $macAddress = $matches[0].ToUpper().Replace(':', '-')
+                $macPrefix = ($macAddress -split '-')[0..2] -join ':'
+                
+                # Check local database first (format: Vendor|DeviceType|OS)
+                if ($MacVendorMap.ContainsKey($macPrefix)) {
+                    $macData = $MacVendorMap[$macPrefix] -split '\|'
+                    $vendor = $macData[0]
+                    if ($macData.Count -ge 3) {
+                        $vendorHint = "$($macData[1])|$($macData[2])"
+                    }
+                }
+                # If not in local DB, vendor remains "Unknown" and will be looked up via API if enabled
+            }
+        }
+        catch { }
+        
+        # Set display value for MAC if not found
+        if (-not $macAddress) {
+            $macAddress = "N/A"
+        }
+        
+        # Port scanning
+        $openPorts = @()
+        $services = @()
+        
+        if ($DoPortScan) {
+            foreach ($port in $PortMap.Keys) {
+                try {
+                    $tcpClient = New-Object System.Net.Sockets.TcpClient
+                    $connect = $tcpClient.BeginConnect($IP, $port, $null, $null)
+                    $wait = $connect.AsyncWaitHandle.WaitOne($TimeoutMs, $false)
+                    
+                    if ($wait) {
+                        try {
+                            $tcpClient.EndConnect($connect)
+                            $openPorts += $port
+                            $services += $PortMap[$port]
+                        }
+                        catch { }
+                    }
+                    $tcpClient.Close()
+                    $tcpClient.Dispose()
+                }
+                catch { }
+            }
+        }
+        
+        # Determine device type
+        $deviceType = "Unknown"
+        $os = "Unknown"
+        
+        # First check MAC vendor hints if available
+        if ($vendorHint) {
+            $hintParts = $vendorHint -split '\|'
+            $macDeviceType = $hintParts[0]
+            $macOS = $hintParts[1]
+            
+            # Use MAC hints as primary classification
+            switch ($macDeviceType) {
+                'Printer' {
+                    $deviceType = "Printer"
+                    $os = "$vendor Printer"
+                }
+                'Network' {
+                    $deviceType = "Network Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "$vendor Device" }
+                }
+                'Server' {
+                    $deviceType = "Server"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Server" }
+                }
+                'Computer' {
+                    $deviceType = "Workstation"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Unknown" }
+                }
+                'Mobile' {
+                    $deviceType = "Mobile Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "Mobile" }
+                }
+                'IoT' {
+                    $deviceType = "IoT Device"
+                    $os = if ($macOS -ne 'Unknown') { $macOS } else { "$vendor" }
+                }
+            }
+        }
+        
+        # Fall back to port-based detection if MAC hints didn't classify it
+        if ($deviceType -eq "Unknown" -and $openPorts.Count -gt 0) {
+            # Server indicators (RDP + SMB)
+            if ($openPorts -contains 445 -and $openPorts -contains 3389) {
+                $deviceType = "Server"
+                $os = "Windows Server"
+            }
+            # Workstation indicators (SMB/NetBIOS)
+            elseif ($openPorts -contains 445 -or $openPorts -contains 139) {
+                $deviceType = "Workstation"
+                $os = "Windows"
+            }
+            # Printer indicators (LPD, IPP, Raw)
+            elseif ($openPorts -contains 515 -or $openPorts -contains 631 -or $openPorts -contains 9100) {
+                $deviceType = "Printer"
+                $os = "Printer Firmware"
+            }
+            # Network device indicators (SSH/Telnet/HTTPS)
+            elseif ($openPorts -contains 22 -or $openPorts -contains 23 -or $openPorts -contains 443) {
+                if ($vendor -match 'Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link') {
+                    $deviceType = "Network Device"
+                    $os = "$vendor Device"
+                }
+                else {
+                    $deviceType = "Network Device"
+                }
+            }
+        }
+        
+        return [PSCustomObject]@{
+            IPAddress  = $IP
+            Status     = 'Online'
+            Hostname   = $hostname
+            DeviceType = $deviceType
+            OS         = $os
+            MACAddress = $macAddress
+            MACPrefix  = $macPrefix
+            Vendor     = $vendor
+            OpenPorts  = $openPorts
+            Services   = ($services | Select-Object -Unique) -join ', '
+            LastSeen   = Get-Date
+        }
+    }
+}
+
+process {
+    # Build IP list
+    switch ($PSCmdlet.ParameterSetName) {
+        'Subnet' {
+            # Auto-detect if no subnet specified
+            if (-not $Subnet -or $Subnet.Count -eq 0) {
+                if (-not $Quiet) {
+                    Write-Host "No subnet specified - auto-detecting local networks..." -ForegroundColor Yellow
+                }
+                $Subnet = Get-LocalSubnets
+                
+                if ($Subnet.Count -eq 0) {
+                    throw "Could not detect any local subnets. Please specify -Subnet parameter."
+                }
+                
+                if (-not $Quiet) {
+                    Write-Host "Detected $($Subnet.Count) local subnet(s):" -ForegroundColor Green
+                    foreach ($net in $Subnet) {
+                        Write-Host "  - $net" -ForegroundColor Gray
+                    }
+                }
+            }
+            
+            foreach ($net in $Subnet) {
+                if (-not $Quiet) {
+                    Write-Host "Expanding subnet: $net" -ForegroundColor Yellow
+                }
+                $AllIPs += Get-SubnetIPs -CIDR $net
+            }
+        }
+        
+        'IPRange' {
+            if ($IPRange -match '^(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})-(\d{1,3}\.\d{1,3}\.\d{1,3}\.)(\d{1,3})$') {
+                $startNum = [int]$matches[2]
+                $endNum = [int]$matches[4]
+                for ($i = $startNum; $i -le $endNum; $i++) {
+                    $AllIPs += $matches[1] + $i
+                }
+            }
+            else {
+                throw "Invalid IP range format. Use: 192.168.1.1-192.168.1.254"
+            }
+        }
+        
+        'IPList' {
+            $AllIPs = Get-Content $IPList | Where-Object { $_ -match '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$' }
+        }
+    }
+    
+    if ($AllIPs.Count -eq 0) {
+        throw "No valid IP addresses to scan"
+    }
+    
+    if (-not $Quiet) {
+        $scanType = if ($QuickScan) { "Quick" } else { "Full" }
+        $apiStatus = if ($UseMacVendorAPI) { "with MAC Vendor API" } else { "local MAC DB" }
+        Write-Host "`nScanning $($AllIPs.Count) IPs ($scanType mode, $ThrottleLimit threads, $apiStatus)..." -ForegroundColor Cyan
+        $startTime = Get-Date
+    }
+    
+    # Create runspace pool for parallel execution
+    $runspacePool = [runspacefactory]::CreateRunspacePool(1, $ThrottleLimit)
+    $runspacePool.Open()
+    $runspaces = @()
+    
+    # Start scanning jobs
+    foreach ($IP in $AllIPs) {
+        $powershell = [powershell]::Create()
+        $powershell.RunspacePool = $runspacePool
+        
+        [void]$powershell.AddScript($ScanScriptBlock)
+        [void]$powershell.AddArgument($IP)
+        [void]$powershell.AddArgument($ScanPorts)
+        [void]$powershell.AddArgument($Timeout)
+        [void]$powershell.AddArgument($CommonPorts)
+        [void]$powershell.AddArgument($MacVendors)
+        
+        $runspaces += [PSCustomObject]@{
+            Pipe   = $powershell
+            Handle = $powershell.BeginInvoke()
+        }
+    }
+    
+    # Collect results
+    $completed = 0
+    $Results = @()
+    
+    while ($runspaces.Handle.IsCompleted -contains $false) {
+        $runspaces | Where-Object { $_.Handle.IsCompleted -eq $true } | ForEach-Object {
+            $Results += $_.Pipe.EndInvoke($_.Handle)
+            $_.Pipe.Dispose()
+            $completed++
+            
+            if (-not $Quiet -and $completed % 20 -eq 0) {
+                $percentComplete = [math]::Round(($completed / $AllIPs.Count) * 100, 1)
+                Write-Progress -Activity "Network Discovery" -Status "$completed of $($AllIPs.Count) IPs scanned ($percentComplete%)" -PercentComplete $percentComplete
+            }
+        }
+        
+        $runspaces = $runspaces | Where-Object { $_.Handle.IsCompleted -eq $false }
+        Start-Sleep -Milliseconds 50
+    }
+    
+    # Cleanup runspaces
+    $runspacePool.Close()
+    $runspacePool.Dispose()
+    Write-Progress -Activity "Network Discovery" -Completed
+    
+    # Enhanced MAC vendor lookup via API (post-processing)
+    if ($UseMacVendorAPI) {
+        # Debug: Show what we're working with
+        if (-not $Quiet) {
+            $onlineWithMac = $Results | Where-Object { $_.Status -eq 'Online' -and $_.MACAddress -ne 'N/A' }
+            $unknownInLocal = $onlineWithMac | Where-Object { $_.Vendor -eq 'Unknown' }
+            
+            Write-Host "`nMAC Vendor Analysis:" -ForegroundColor Cyan
+            Write-Host "  Online devices with MAC: $($onlineWithMac.Count)"
+            Write-Host "  Unknown vendors: $($unknownInLocal.Count)"
+            
+            # Show sample device for debugging
+            if ($unknownInLocal.Count -gt 0) {
+                $sample = $unknownInLocal | Select-Object -First 1
+                Write-Host "  Sample unknown device:" -ForegroundColor Gray
+                Write-Host "    IP: $($sample.IPAddress)" -ForegroundColor Gray
+                Write-Host "    MAC: $($sample.MACAddress)" -ForegroundColor Gray
+                Write-Host "    Prefix: $($sample.MACPrefix)" -ForegroundColor Gray
+                Write-Host "    Vendor: $($sample.Vendor)" -ForegroundColor Gray
+            }
+        }
+        
+        $unknownVendors = $Results | Where-Object { 
+            $_.Status -eq 'Online' -and 
+            $_.MACAddress -ne 'N/A' -and
+            $_.Vendor -eq 'Unknown' -and 
+            $_.MACPrefix -ne $null -and
+            $_.MACPrefix -ne ''
+        }
+        
+        if ($unknownVendors.Count -gt 0) {
+            # Build prefix-to-MAC mapping (use first MAC found for each prefix)
+            $prefixToMac = @{}
+            $unknownVendors | ForEach-Object {
+                if (-not $prefixToMac.ContainsKey($_.MACPrefix)) {
+                    $prefixToMac[$_.MACPrefix] = $_.MACAddress
+                }
+            }
+            $uniquePrefixes = $prefixToMac.Keys
+            
+            if (-not $Quiet) {
+                Write-Host "  Unique MAC prefixes to lookup: $($uniquePrefixes.Count)" -ForegroundColor Yellow
+                Write-Host "`nLooking up MAC vendors via API..." -ForegroundColor Yellow
+            }
+            
+            $lookupCount = 0
+            foreach ($prefix in $uniquePrefixes) {
+                $fullMac = $prefixToMac[$prefix]
+                $vendor = Get-MacVendorFromAPI -MacAddress $fullMac -MacPrefix $prefix -Cache $script:MacVendorCache
+                
+                # Update all results with this MAC prefix
+                $Results | Where-Object { $_.MACPrefix -eq $prefix } | ForEach-Object {
+                    $_.Vendor = $vendor
+                    
+                    # Re-evaluate device type based on new vendor information
+                    # Docker containers
+                    if ($vendor -eq 'Docker Container') {
+                        $_.DeviceType = "Container"
+                        $_.OS = "Docker"
+                    }
+                    # Randomized/VM MACs
+                    elseif ($vendor -eq 'Randomized/VM') {
+                        # Keep existing type if classified, otherwise mark as Unknown
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.OS = "Virtual/Mobile"
+                        }
+                    }
+                    # Mesh WiFi / Network equipment vendors
+                    elseif ($vendor -match 'eero|Aruba|WatchGuard|Ubiquiti|3Com|Cisco|Netgear|D-Link|Fortinet|TP-Link|Linksys|ASUS|MikroTik') {
+                        $_.DeviceType = "Network Device"
+                        $_.OS = "$vendor"
+                    }
+                    # Smart home / IoT vendors
+                    elseif ($vendor -match 'WiZ|Espressif|Tuya|Signify|Philips Hue|LIFX|Wyze|Ring|Nest|ecobee|Honeywell|Chamberlain|Lutron|Sonos|Roku|Amazon|FireTV') {
+                        $_.DeviceType = "IoT Device"
+                        $_.OS = "Smart Home"
+                    }
+                    # Google devices (Chromecast, Nest, Home)
+                    elseif ($vendor -match 'Google') {
+                        $_.DeviceType = "IoT Device"
+                        $_.OS = "Google Home"
+                    }
+                    # Samsung - likely TV or mobile
+                    elseif ($vendor -match 'Samsung') {
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "IoT Device"
+                            $_.OS = "Samsung Smart"
+                        }
+                    }
+                    # Motherboard/NIC vendors with SSH/HTTPS likely a server or workstation
+                    elseif ($vendor -match 'ASRock|ASUS|Gigabyte|MSI|Supermicro|ASUSTeK') {
+                        if ($_.OpenPorts -contains 22 -or $_.OpenPorts -contains 443 -or $_.OpenPorts -contains 80) {
+                            $_.DeviceType = "Server"
+                            $_.OS = "Linux/BSD"
+                        }
+                        elseif ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "Workstation"
+                            $_.OS = "Unknown"
+                        }
+                    }
+                    # Printer vendors
+                    elseif ($vendor -match 'HP Inc|Canon|Epson|Brother|Xerox|Lexmark|Ricoh|Kyocera' -and 
+                            ($_.OpenPorts -contains 515 -or $_.OpenPorts -contains 631 -or $_.OpenPorts -contains 9100)) {
+                        $_.DeviceType = "Printer"
+                        $_.OS = "$vendor Printer"
+                    }
+                    # Mobile device vendors
+                    elseif ($vendor -match 'Apple.*iPhone|Apple.*iPad|LG Electronics|Motorola Mobility|OnePlus|Xiaomi|OPPO|Huawei') {
+                        $_.DeviceType = "Mobile Device"
+                        if ($vendor -match 'Apple') { $_.OS = "iOS" }
+                        else { $_.OS = "Android" }
+                    }
+                    # Known computer/server vendors
+                    elseif ($vendor -match 'Dell|Lenovo|Microsoft|Intel Corporate|Hewlett Packard') {
+                        if ($_.DeviceType -eq "Unknown") {
+                            $_.DeviceType = "Workstation"
+                            $_.OS = "Windows"
+                        }
+                    }
+                    # Apple computers
+                    elseif ($vendor -match 'Apple' -and $_.DeviceType -eq "Unknown") {
+                        $_.DeviceType = "Workstation"
+                        $_.OS = "macOS"
+                    }
+                }
+                
+                $lookupCount++
+                if (-not $Quiet -and $lookupCount % 5 -eq 0) {
+                    Write-Progress -Activity "MAC Vendor Lookup" -Status "$lookupCount of $($uniquePrefixes.Count) vendors" -PercentComplete (($lookupCount / $uniquePrefixes.Count) * 100)
+                }
+            }
+            
+            Write-Progress -Activity "MAC Vendor Lookup" -Completed
+            
+            if (-not $Quiet) {
+                $cacheHits = $uniquePrefixes.Count - $script:ApiCallCount
+                $successfulLookups = ($Results | Where-Object { $_.MACPrefix -and $_.Vendor -ne 'Unknown' }).Count
+                Write-Host "API lookups completed: $script:ApiCallCount new requests, $cacheHits from cache" -ForegroundColor Green
+                Write-Host "Vendors identified: $successfulLookups devices" -ForegroundColor Green
+            }
+        }
+        elseif ($UseMacVendorAPI -and -not $Quiet) {
+            Write-Host "`nNo unknown MAC vendors found - all identified from local database" -ForegroundColor Green
+        }
+    }
+    
+    # Filter results
+    if ($IncludeOffline) {
+        $AllResults = $Results
+    }
+    else {
+        $AllResults = $Results | Where-Object { $_.Status -eq 'Online' }
+    }
+}
+
+end {
+    # Display summary
+    if (-not $Quiet) {
+        $onlineCount = ($AllResults | Where-Object { $_.Status -eq 'Online' }).Count
+        $offlineCount = ($AllResults | Where-Object { $_.Status -eq 'Offline' }).Count
+        $elapsed = ((Get-Date) - $startTime).TotalSeconds
+        
+        Write-Host "`n================================================================" -ForegroundColor Cyan
+        Write-Host " Network Discovery Summary" -ForegroundColor Cyan
+        Write-Host "================================================================" -ForegroundColor Cyan
+        Write-Host "Total IPs Scanned:    $($AllIPs.Count)"
+        Write-Host "Online Devices:       " -NoNewline
+        Write-Host "$onlineCount" -ForegroundColor Green
+        if ($IncludeOffline) {
+            Write-Host "Offline Addresses:    $offlineCount"
+        }
+        Write-Host "Scan Duration:        $([math]::Round($elapsed, 1)) seconds"
+        
+        if ($UseMacVendorAPI) {
+            $identifiedVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -ne 'Unknown' }).Count
+            $unknownVendors = ($AllResults | Where-Object { $_.Status -eq 'Online' -and $_.Vendor -eq 'Unknown' }).Count
+            Write-Host "MAC Vendors:          $identifiedVendors identified, $unknownVendors unknown ($script:ApiCallCount API calls)"
+        }
+        
+        $deviceTypes = $AllResults | Where-Object { $_.Status -eq 'Online' } | 
+                       Group-Object DeviceType | 
+                       Sort-Object Count -Descending
+        
+        if ($deviceTypes) {
+            Write-Host "`nDevice Types Discovered:"
+            foreach ($type in $deviceTypes) {
+                Write-Host "  $($type.Name): $($type.Count)" -ForegroundColor Gray
+            }
+        }
+        
+        Write-Host "================================================================`n" -ForegroundColor Cyan
+        
+        # Display top 10 devices by service count when no export specified
+        if (-not $ExportPath) {
+            $onlineDevices = $AllResults | Where-Object { $_.Status -eq 'Online' }
+            
+            if ($onlineDevices.Count -gt 0) {
+                # Sort by number of open ports (most active first), then by IP
+                $top10 = $onlineDevices | 
+                    Sort-Object { @($_.OpenPorts).Count } -Descending | 
+                    Select-Object -First 10
+                
+                Write-Host "Top 10 Devices by Services:" -ForegroundColor Cyan
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                # Header
+                $header = "{0,-16} {1,-25} {2,-18} {3,-20} {4,-30}" -f "IP Address", "Hostname", "Device Type", "Vendor", "Services"
+                Write-Host $header -ForegroundColor Yellow
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                foreach ($device in $top10) {
+                    # Truncate long values for display
+                    $hostname = if ($device.Hostname.Length -gt 23) { $device.Hostname.Substring(0, 20) + "..." } else { $device.Hostname }
+                    $deviceType = if ($device.DeviceType.Length -gt 16) { $device.DeviceType.Substring(0, 13) + "..." } else { $device.DeviceType }
+                    $vendor = if ($device.Vendor.Length -gt 18) { $device.Vendor.Substring(0, 15) + "..." } else { $device.Vendor }
+                    $services = if ($device.Services.Length -gt 28) { $device.Services.Substring(0, 25) + "..." } else { $device.Services }
+                    if (-not $services) { $services = "-" }
+                    
+                    # Color based on device type
+                    $color = switch ($device.DeviceType) {
+                        'Server' { 'Blue' }
+                        'Workstation' { 'Green' }
+                        'Printer' { 'Yellow' }
+                        'Network Device' { 'DarkYellow' }
+                        'Mobile Device' { 'Magenta' }
+                        'IoT Device' { 'Red' }
+                        'Container' { 'Cyan' }
+                        default { 'White' }
+                    }
+                    
+                    $row = "{0,-16} {1,-25} {2,-18} {3,-20} {4,-30}" -f $device.IPAddress, $hostname, $deviceType, $vendor, $services
+                    Write-Host $row -ForegroundColor $color
+                }
+                
+                Write-Host "-" * 120 -ForegroundColor Gray
+                
+                $remaining = $onlineDevices.Count - 10
+                if ($remaining -gt 0) {
+                    Write-Host "... and $remaining more devices. Use -ExportPath for full report." -ForegroundColor Gray
+                }
+                Write-Host ""
+            }
+        }
+    }
+    
+    # Export results
+    if ($ExportPath) {
+        $extension = [System.IO.Path]::GetExtension($ExportPath).ToLower()
+        
+        try {
+            switch ($extension) {
+                '.csv' {
+                    $csvData = $AllResults | Select-Object IPAddress, Status, Hostname, DeviceType, 
+                        OS, MACAddress, Vendor, Services, LastSeen
+                    $csvData | Export-Csv -Path $ExportPath -NoTypeInformation
+                    
+                    if (-not $Quiet) {
+                        Write-Host "Results exported to CSV: $ExportPath" -ForegroundColor Green
+                    }
+                }
+                
+                '.json' {
+                    $AllResults | ConvertTo-Json -Depth 3 | Out-File -FilePath $ExportPath -Encoding UTF8
+                    
+                    if (-not $Quiet) {
+                        Write-Host "Results exported to JSON: $ExportPath" -ForegroundColor Green
+                    }
+                }
+                
+                '.html' {
+                    $onlineDevices = $AllResults | Where-Object { $_.Status -eq 'Online' }
+                    $deviceGroups = $onlineDevices | Group-Object DeviceType
+                    
+                    $html = @"
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Network Discovery Report - $(Get-Date -Format 'yyyy-MM-dd HH:mm')</title>
+    <style>
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            margin: 20px; 
+            background-color: #6B7280;
+        }
+        .header {
+            background: linear-gradient(135deg, #FF6600 0%, #6B7280 100%);
+            color: white;
+            padding: 30px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        .header h1 { 
+            margin: 0; 
+            font-size: 36px;
+            text-shadow: 2px 2px 4px rgba(0,0,0,0.3);
+        }
+        .header .tagline {
+            font-size: 14px;
+            margin-top: 5px;
+            opacity: 0.9;
+            font-style: italic;
+        }
+        h2 { 
+            color: #FF6600; 
+            margin-top: 30px;
+            border-bottom: 3px solid #6B7280;
+            padding-bottom: 10px;
+        }
+        .summary { 
+            background-color: white; 
+            padding: 20px; 
+            border-radius: 8px; 
+            margin-bottom: 20px; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-left: 5px solid #FF6600;
+        }
+        .summary-grid { 
+            display: grid; 
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); 
+            gap: 15px; 
+            margin-top: 15px; 
+        }
+        .stat-box { 
+            background: linear-gradient(135deg, #fff 0%, #f8f9fa 100%);
+            padding: 20px; 
+            border-radius: 8px; 
+            text-align: center;
+            border: 2px solid #6B7280;
+            transition: transform 0.2s;
+        }
+        .stat-box:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 4px 8px rgba(0,0,0,0.15);
+        }
+        .stat-number { 
+            font-size: 36px; 
+            font-weight: bold; 
+            color: #FF6600;
+            text-shadow: 1px 1px 2px rgba(0,0,0,0.1);
+        }
+        .stat-label { 
+            color: #6B7280; 
+            margin-top: 8px;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 12px;
+            letter-spacing: 1px;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px; 
+            background-color: white; 
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+        th { 
+            background: linear-gradient(135deg, #6B7280 0%, #4a5568 100%);
+            color: white; 
+            padding: 12px; 
+            text-align: left;
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 11px;
+            letter-spacing: 0.5px;
+        }
+        td { 
+            padding: 12px; 
+            border-bottom: 1px solid #e0e0e0;
+        }
+        tr:hover { 
+            background-color: #fff5f0;
+        }
+        tr:last-child td {
+            border-bottom: none;
+        }
+        .device-server { 
+            border-left: 4px solid #0066cc;
+            background-color: #e8f4fd;
+        }
+        .device-workstation { 
+            border-left: 4px solid #28a745;
+            background-color: #e8f5e9;
+        }
+        .device-printer { 
+            border-left: 4px solid #ffc107;
+            background-color: #fff8e1;
+        }
+        .device-network { 
+            border-left: 4px solid #FF6600;
+            background-color: #fff0e6;
+        }
+        .device-mobile { 
+            border-left: 4px solid #9C27B0;
+            background-color: #f3e5f5;
+        }
+        .device-iot { 
+            border-left: 4px solid #FF5722;
+            background-color: #fbe9e7;
+        }
+        .device-container { 
+            border-left: 4px solid #2196F3;
+            background-color: #e3f2fd;
+        }
+        .footer { 
+            margin-top: 40px; 
+            text-align: center; 
+            color: #6B7280;
+            padding: 20px;
+            background-color: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .footer .company { 
+            font-size: 20px;
+            font-weight: bold;
+            color: #FF6600;
+            margin-bottom: 5px;
+        }
+        .footer .tagline {
+            font-style: italic;
+            color: #6B7280;
+            margin-bottom: 10px;
+        }
+        a { text-decoration: none; }
+        a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Network Discovery Report</h1>
+        <div class="tagline">Comprehensive Network Infrastructure Analysis</div>
+    </div>
+    
+    <div class="summary">
+        <strong style="color: #FF6600;">Generated:</strong> $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')<br>
+        <strong style="color: #FF6600;">Scan Range:</strong> $($AllIPs.Count) IP addresses<br>
+        <strong style="color: #FF6600;">Discovery Method:</strong> ICMP Ping $(if($ScanPorts){"+ Port Scan"}) $(if($UseMacVendorAPI){"+ MAC Vendor API"})
+        
+        <div class="summary-grid">
+"@
+                    
+                    foreach ($group in $deviceGroups) {
+                        $html += @"
+            <div class="stat-box">
+                <div class="stat-number">$($group.Count)</div>
+                <div class="stat-label">$($group.Name)</div>
+            </div>
+"@
+                    }
+                    
+                    $html += @"
+        </div>
+    </div>
+    
+    <h2>Discovered Devices</h2>
+    <table>
+        <tr>
+            <th>IP Address</th>
+            <th>Hostname</th>
+            <th>Device Type</th>
+            <th>OS</th>
+            <th>MAC Address</th>
+            <th>Vendor</th>
+            <th>Services</th>
+        </tr>
+"@
+                    
+                    foreach ($device in ($onlineDevices | Sort-Object { 
+                        $octets = $_.IPAddress.Split('.')
+                        [int]$octets[0] * 16777216 + [int]$octets[1] * 65536 + [int]$octets[2] * 256 + [int]$octets[3]
+                    })) {
+                        $rowClass = switch ($device.DeviceType) {
+                            'Server' { 'device-server' }
+                            'Workstation' { 'device-workstation' }
+                            'Printer' { 'device-printer' }
+                            'Network Device' { 'device-network' }
+                            'Mobile Device' { 'device-mobile' }
+                            'IoT Device' { 'device-iot' }
+                            'Container' { 'device-container' }
+                            default { '' }
+                        }
+                        
+                        # Add device type icon
+                        $deviceIcon = switch ($device.DeviceType) {
+                            'Server' { '&#128187;' }
+                            'Workstation' { '&#128421;' }
+                            'Printer' { '&#128424;' }
+                            'Network Device' { '&#128225;' }
+                            'Mobile Device' { '&#128241;' }
+                            'IoT Device' { '&#128268;' }
+                            'Container' { '&#128230;' }
+                            default { '&#10067;' }
+                        }
+                        
+                        # Convert services to clickable links
+                        $servicesHtml = ""
+                        if ($device.Services) {
+                            $serviceLinks = @()
+                            $serviceList = $device.Services -split ', '
+                            foreach ($svc in $serviceList) {
+                                $link = switch -Regex ($svc) {
+                                    'HTTP-Alt' { "<a href='http://$($device.IPAddress):8080' target='_blank' style='color: #FF6600;'>HTTP-Alt</a>" }
+                                    '^HTTPS$' { "<a href='https://$($device.IPAddress)' target='_blank' style='color: #FF6600;'>HTTPS</a>" }
+                                    '^HTTP$' { "<a href='http://$($device.IPAddress)' target='_blank' style='color: #FF6600;'>HTTP</a>" }
+                                    'RDP' { "<span style='color: #FF6600;'>RDP</span>" }
+                                    'SSH' { "<span style='color: #FF6600;'>SSH</span>" }
+                                    default { $svc }
+                                }
+                                $serviceLinks += $link
+                            }
+                            $servicesHtml = $serviceLinks -join ', '
+                        }
+                        
+                        $html += @"
+        <tr class="$rowClass">
+            <td><strong>$($device.IPAddress)</strong></td>
+            <td>$($device.Hostname)</td>
+            <td>$deviceIcon $($device.DeviceType)</td>
+            <td>$($device.OS)</td>
+            <td>$($device.MACAddress)</td>
+            <td>$($device.Vendor)</td>
+            <td>$servicesHtml</td>
+        </tr>
+"@
+                    }
+                    
+                    $html += @"
+    </table>
+    <div class="footer">
+        <div class="company">Yeyland Wutani LLC</div>
+        <div class="tagline">Building Better Systems</div>
+        <div style="font-size: 11px; color: #999;">Network Discovery Report | Powered by Advanced Infrastructure Analysis</div>
+    </div>
+</body>
+</html>
+"@
+                    
+                    $html | Out-File -FilePath $ExportPath -Encoding UTF8
+                    
+                    if (-not $Quiet) {
+                        Write-Host "Results exported to HTML: $ExportPath" -ForegroundColor Green
+                    }
+                }
+                
+                default {
+                    Write-Warning "Unsupported export format: $extension (use .csv, .json, or .html)"
+                }
+            }
+        }
+        catch {
+            Write-Error "Failed to export results: $_"
+        }
+    }
+    
+    if (-not $Quiet) {
+        Write-Host "Network discovery completed.`n" -ForegroundColor Cyan
+    }
+}
+) {
+                                    $hostname = $nbName
+                                    $hostnameSource = "NetBIOS"
+                                    break
+                                }
+                            }
+                        }
+                    }
+                }
+                catch { }
+            }
+            
+            # Method 3: Check DNS cache (Get-DnsClientCache) for recent LLMNR/mDNS resolutions
+            if (-not $hostname -or $hostname -eq "N/A") {
+                try {
+                    $dnsCache = Get-DnsClientCache -ErrorAction SilentlyContinue | 
+                        Where-Object { $_.Data -eq $IP -and $_.Name -notmatch '^\d+\.\d+\.\d+\.\d+' }
+                    if ($dnsCache) {
+                        $hostname = ($dnsCache | Select-Object -First 1).Name
+                        $hostnameSource = "DNSCache"
+                    }
+                }
+                catch { }
+            }
+            
+            # Method 4: LLMNR query via ping (works on local subnet)
+            if (-not $hostname -or $hostname -eq "N/A") {
+                try {
+                    # Try to resolve using Windows name resolution (includes LLMNR)
+                    $resolved = [System.Net.Dns]::GetHostByAddress($IP)
+                    if ($resolved.HostName -and $resolved.HostName -ne $IP) {
+                        $hostname = $resolved.HostName
+                        $hostnameSource = "LLMNR"
+                    }
+                }
+                catch { }
+            }
+            
+            # Set default if all methods failed
+            if (-not $hostname) {
                 $hostname = "N/A"
             }
         }
