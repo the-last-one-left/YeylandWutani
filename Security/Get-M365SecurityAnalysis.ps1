@@ -8,34 +8,34 @@
 #  detect security threats, and analyze suspicious activity patterns.
 #
 #  CAPABILITIES:
-#  ┌─────────────────────────────────────────────────────────────┐
-#  │ DATA COLLECTION                                             │
-#  ├─────────────────────────────────────────────────────────────┤
-#  │ • Sign-in logs with geolocation analysis                    │
-#  │ • Admin audit logs with risk assessment                     │
-#  │ • Inbox rules (forwarding, deletion, suspicious patterns)   │
-#  │ • Mailbox delegations                                       │
-#  │ • App registrations and service principals                  │
-#  │ • Conditional Access policies                               │
-#  │ • Exchange message traces (ETR format)                      │
-#  └─────────────────────────────────────────────────────────────┘
+#  +-------------------------------------------------------------+
+#  | DATA COLLECTION                                             |
+#  +-------------------------------------------------------------+
+#  | - Sign-in logs with geolocation analysis                    |
+#  | - Admin audit logs with risk assessment                     |
+#  | - Inbox rules (forwarding, deletion, suspicious patterns)   |
+#  | - Mailbox delegations                                       |
+#  | - App registrations and service principals                  |
+#  | - Conditional Access policies                               |
+#  | - Exchange message traces (ETR format)                      |
+#  +-------------------------------------------------------------+
 #
-#  ┌─────────────────────────────────────────────────────────────┐
-#  │ ANALYSIS & DETECTION                                        │
-#  ├─────────────────────────────────────────────────────────────┤
-#  │ • Unusual location detection                                │
-#  │ • Spam pattern analysis with risk scoring                   │
-#  │ • High-risk operation monitoring                            │
-#  │ • Suspicious rule detection                                 │
-#  │ • Risk-based user scoring                                   │
-#  │ • HTML report generation with detailed findings             │
-#  └─────────────────────────────────────────────────────────────┘
+#  +-------------------------------------------------------------+
+#  | ANALYSIS & DETECTION                                        |
+#  +-------------------------------------------------------------+
+#  | - Unusual location detection                                |
+#  | - Spam pattern analysis with risk scoring                   |
+#  | - High-risk operation monitoring                            |
+#  | - Suspicious rule detection                                 |
+#  | - Risk-based user scoring                                   |
+#  | - HTML report generation with detailed findings             |
+#  +-------------------------------------------------------------+
 #
 #  REQUIREMENTS:
-#  • PowerShell 5.1 or later
-#  • Microsoft.Graph.* modules (auto-installed if missing)
-#  • ExchangeOnlineManagement module (auto-installed if missing)
-#  • Administrative permissions in Microsoft 365 tenant:
+#  - PowerShell 5.1 or later
+#  - Microsoft.Graph.* modules (auto-installed if missing)
+#  - ExchangeOnlineManagement module (auto-installed if missing)
+#  - Administrative permissions in Microsoft 365 tenant:
 #    - Global Administrator, Security Administrator, or
 #    - Security Reader + Exchange Administrator (recommended minimum)
 #
