@@ -97,7 +97,7 @@
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 2.2
+    Version: 2.3
     
     AUTO-DETECTION:
     - Detects all active network adapters with valid IPv4 addresses
@@ -168,7 +168,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "2.2"
+    $ScriptVersion = "2.3"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
