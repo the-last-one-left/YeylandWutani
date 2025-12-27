@@ -11,11 +11,14 @@
     Uses runspace pools for fast parallel scanning.
     
     Features:
+    - Automatic local subnet detection (scans all connected networks if no input provided)
     - Subnet/IP range scanning with parallel processing
-    - Device type identification (server, workstation, printer, network device, mobile, IoT)
+    - Device type identification (server, workstation, printer, network device, mobile, IoT, container)
     - Operating system detection
     - MAC address and vendor lookup (local + online API)
-    - 150+ vendor OUI database
+    - 150+ vendor OUI database with smart device classification
+    - Docker container detection
+    - Locally administered MAC identification (VMs, randomized mobile MACs)
     - Open port scanning
     - DNS hostname resolution
     - Multiple export formats (CSV, JSON, HTML)
@@ -25,6 +28,7 @@
 .PARAMETER Subnet
     Network subnet(s) to scan in CIDR notation (e.g., "192.168.1.0/24").
     Accepts multiple subnets via comma separation or pipeline.
+    If not specified, automatically detects and scans all local subnets.
 
 .PARAMETER IPRange
     IP range to scan using start-end format (e.g., "192.168.1.1-192.168.1.254").
@@ -59,9 +63,19 @@
     Suppress progress output. Shows only final summary.
 
 .EXAMPLE
+    .\Get-NetworkDiscovery.ps1
+    
+    Auto-detect local subnet(s) and scan all connected networks.
+
+.EXAMPLE
+    .\Get-NetworkDiscovery.ps1 -UseMacVendorAPI
+    
+    Auto-scan local networks with enhanced MAC vendor lookup.
+
+.EXAMPLE
     .\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24"
     
-    Scan entire /24 subnet, identify all active devices.
+    Scan specific /24 subnet, identify all active devices.
 
 .EXAMPLE
     .\Get-NetworkDiscovery.ps1 -Subnet "172.16.0.0/24" -QuickScan
@@ -73,17 +87,34 @@
     
     Full scan with online MAC vendor lookup, export to HTML with clickable links.
 
+.EXAMPLE
+    .\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24","192.168.2.0/24" -ExportPath "C:\Reports\MultiSite.html"
+    
+    Scan multiple subnets and combine results into single report.
+
 .NOTES
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 1.8
+    Version: 1.9
+    
+    AUTO-DETECTION:
+    - Detects all active network adapters with valid IPv4 addresses
+    - Calculates subnet from IP address and subnet mask
+    - Excludes loopback (127.x.x.x) and APIPA (169.254.x.x) addresses
+    - Supports multiple NICs (scans all detected subnets)
     
     MAC VENDOR API:
     - Uses macvendors.com free API
     - Rate limit: 1 request/second (automatically throttled)
     - Results cached to avoid duplicate lookups
     - Fallback to local vendor database if API unavailable
+    
+    DEVICE CLASSIFICATION:
+    - Docker containers detected by 02:42:xx MAC prefix
+    - Locally administered MACs labeled as Randomized/VM
+    - Smart home devices (WiZ, Espressif, Google, etc.) classified as IoT
+    - Mesh WiFi (eero, etc.) classified as Network Device
 #>
 
 [CmdletBinding(DefaultParameterSetName='Subnet')]
@@ -125,7 +156,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.8"
+    $ScriptVersion = "1.9"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
