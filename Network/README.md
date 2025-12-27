@@ -6,66 +6,110 @@ Network discovery, connectivity testing, and documentation tools for MSP client 
 
 ### Network Discovery & Inventory
 
-#### Get-NetworkDiscovery.ps1
+#### Get-NetworkDiscovery.ps1 (v1.9)
 Comprehensive network discovery tool for MSP client onboarding and network documentation.
 
 **Key Features:**
+- **Auto-detection**: Automatically discovers and scans all local subnets when no input provided
 - Parallel subnet scanning with configurable thread limits (1-500 threads)
 - CIDR notation support (e.g., 192.168.1.0/24)
 - IP range scanning (e.g., 192.168.1.1-192.168.1.254)
 - Batch scanning from IP list files
-- Device type identification (Server, Workstation, Printer, Network Device)
+- Device type identification (Server, Workstation, Printer, Network Device, Mobile, IoT, Container)
 - Operating system detection
-- MAC address and vendor lookup
+- **MAC Vendor API**: Online vendor lookup via macvendors.com for comprehensive device identification
+- **Docker Container Detection**: Identifies Docker containers by MAC prefix (02:42:xx)
+- **Locally Administered MAC Detection**: Identifies VMs and randomized mobile MACs
+- **Smart IoT Classification**: Recognizes smart home devices (WiZ, Espressif, Google Home, eero, etc.)
 - Port scanning for service identification
 - DNS hostname resolution
 - Multiple export formats (CSV, JSON, HTML)
+- Clickable service links in HTML reports
+- Device type icons in HTML reports
 
 **Device Type Detection:**
 The script intelligently identifies device types based on:
-- **Servers**: Windows Server OS detection, RDP (3389) + SMB (445) open
-- **Workstations**: Windows desktop OS, SMB/NetBIOS ports
-- **Printers**: Printer-specific ports (515 LPD, 631 IPP, 9100 raw)
-- **Network Devices**: SSH/Telnet/HTTPS with vendor identification (Aruba, WatchGuard, Ubiquiti)
+- **Servers**: Windows Server OS detection, RDP (3389) + SMB (445) open, motherboard vendors with SSH/HTTPS
+- **Workstations**: Windows desktop OS, SMB/NetBIOS ports, Dell/HP/Lenovo MACs
+- **Printers**: Printer-specific ports (515 LPD, 631 IPP, 9100 raw) + printer vendor MACs
+- **Network Devices**: SSH/Telnet/HTTPS with vendor identification (Aruba, WatchGuard, Ubiquiti, eero, etc.)
+- **Containers**: Docker containers identified by 02:42:xx MAC prefix
+- **IoT Devices**: Smart home vendors (WiZ, Espressif, Google, Nest, Sonos, Ring, etc.)
+- **Mobile Devices**: Apple iOS, Samsung, LG, Motorola mobile device MACs
 - **Unknown**: Responds to ping but insufficient data for classification
+
+**MAC Vendor Classification:**
+| Vendor Pattern | Device Type | Example Devices |
+|----------------|-------------|-----------------|
+| Docker (02:42:xx) | Container | Docker containers |
+| eero, Linksys, MikroTik | Network Device | Mesh WiFi, routers |
+| WiZ, Espressif, Tuya | IoT Device | Smart bulbs, ESP32 devices |
+| Google, Nest | IoT Device | Chromecast, Nest thermostats |
+| Samsung | IoT Device | Smart TVs, appliances |
+| ASRock, ASUS, Gigabyte | Server/Workstation | Custom-built systems |
+| Dell, Lenovo, HP | Workstation | Business computers |
+| Apple | Workstation/Mobile | Macs, iPhones, iPads |
 
 **Common Ports Scanned:**
 - 21 (FTP), 22 (SSH), 23 (Telnet)
-- 25 (SMTP), 53 (DNS), 80 (HTTP), 110 (POP3)
-- 135 (RPC), 139 (NetBIOS), 143 (IMAP)
+- 80 (HTTP), 135 (RPC), 139 (NetBIOS)
 - 443 (HTTPS), 445 (SMB)
-- 515 (LPD), 631 (IPP), 9100 (Printer)
-- 3306 (MySQL), 3389 (RDP), 5900 (VNC)
-- 8080 (HTTP-Alt), 8443 (HTTPS-Alt)
+- 3389 (RDP), 8080 (HTTP-Alt)
 
 **Usage Examples:**
+
 ```powershell
-# New client - discover entire network
-.\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24" -ExportPath "C:\Clients\NewClient\Discovery.html"
+# Auto-detect and scan local network (NEW!)
+.\Get-NetworkDiscovery.ps1
+
+# Auto-scan with MAC vendor API for best device identification
+.\Get-NetworkDiscovery.ps1 -UseMacVendorAPI
+
+# Auto-scan with HTML export
+.\Get-NetworkDiscovery.ps1 -UseMacVendorAPI -ExportPath "C:\Reports\Network.html"
+
+# Scan specific subnet
+.\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24"
+
+# Full scan with MAC vendor lookup
+.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -UseMacVendorAPI -ExportPath "C:\Reports\Network.html"
 
 # Fast scan multiple subnets (100 threads)
 .\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24","10.0.1.0/24","10.0.2.0/24" -ThrottleLimit 100 -ExportPath "C:\Discovery\MultiSubnet.csv"
 
+# Quick ping-only scan (no port scanning)
+.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -QuickScan
+
 # Scan specific IP range
-.\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.50" -ScanPorts $true
+.\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.50"
 
 # Batch scan from file
 Get-Content subnets.txt | .\Get-NetworkDiscovery.ps1 -Quiet -ExportPath "C:\Reports\AllNetworks.json"
 
 # Include offline IPs in report (for IP allocation tracking)
 .\Get-NetworkDiscovery.ps1 -Subnet "172.16.0.0/24" -IncludeOffline -ExportPath "C:\IPTracking\Subnet.csv"
-
-# Quick ping-only scan (no port scanning)
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -ScanPorts $false -Quiet
 ```
 
 **Real-World MSP Scenarios:**
 
-**Scenario 1: New Client Onboarding**
+**Scenario 1: Quick Network Assessment (NEW!)**
 ```powershell
-# Day 1 - Initial discovery
+# Walk into client site, plug in, auto-discover everything
+.\Get-NetworkDiscovery.ps1 -UseMacVendorAPI -ExportPath "C:\Reports\QuickScan.html"
+
+# Script automatically:
+# - Detects local subnet(s) from NIC configuration
+# - Scans all connected networks
+# - Identifies device types including IoT, containers, VMs
+# - Exports professional HTML report
+```
+
+**Scenario 2: New Client Onboarding**
+```powershell
+# Day 1 - Initial discovery with full vendor lookup
 .\Get-NetworkDiscovery.ps1 `
     -Subnet "192.168.1.0/24" `
+    -UseMacVendorAPI `
     -ThrottleLimit 100 `
     -ExportPath "C:\Clients\ABC_Corp\Initial_Discovery_$(Get-Date -Format 'yyyyMMdd').html"
 
@@ -74,16 +118,47 @@ Get-Content subnets.txt | .\Get-NetworkDiscovery.ps1 -Quiet -ExportPath "C:\Repo
 # - Servers that need monitoring
 # - Workstations for patching
 # - Printers for managed print services
-# - Network devices for backup configs
+# - Network devices (including mesh WiFi like eero)
+# - IoT devices (smart home, Google Home, etc.)
+# - Docker containers
 # - Unknown devices for further investigation
 ```
 
-**Scenario 2: Network Audit for Compliance**
+**Scenario 3: Docker/Container Environment Discovery**
 ```powershell
-# Scan all subnets
+# Scan development network with Docker hosts
+.\Get-NetworkDiscovery.ps1 `
+    -Subnet "172.16.0.0/24" `
+    -UseMacVendorAPI `
+    -ExportPath "C:\Reports\ContainerNetwork.html"
+
+# Report will show:
+# - Docker containers with blue highlighting (📦 icon)
+# - Host servers running containers
+# - Differentiate containers from VMs/randomized MACs
+```
+
+**Scenario 4: Smart Home/IoT Audit**
+```powershell
+# Identify all IoT devices on home/small business network
+.\Get-NetworkDiscovery.ps1 -UseMacVendorAPI
+
+# Automatically classifies:
+# - WiZ smart bulbs → IoT Device
+# - Google Home/Chromecast → IoT Device  
+# - eero mesh nodes → Network Device
+# - Nest thermostats → IoT Device
+# - Ring doorbells → IoT Device
+# - Espressif/Tuya devices → IoT Device
+```
+
+**Scenario 5: Network Audit for Compliance**
+```powershell
+# Scan all subnets with full device classification
 $subnets = "10.0.0.0/24","10.0.1.0/24","10.0.2.0/24","10.0.10.0/24"
 
 $subnets | .\Get-NetworkDiscovery.ps1 `
+    -UseMacVendorAPI `
     -ThrottleLimit 200 `
     -IncludeOffline `
     -ExportPath "C:\Audits\Network_Inventory_$(Get-Date -Format 'yyyy-MM-dd').csv"
@@ -92,64 +167,41 @@ $subnets | .\Get-NetworkDiscovery.ps1 `
 $devices = Import-Csv "C:\Audits\Network_Inventory_2025-12-26.csv"
 
 # Find potential security issues
-$devices | Where-Object { $_.Services -match 'Telnet|FTP' }  # Insecure protocols
-$devices | Where-Object { $_.DeviceType -eq 'Unknown' }      # Unidentified devices
-```
-
-**Scenario 3: IP Address Management**
-```powershell
-# Track IP allocation in growing network
-.\Get-NetworkDiscovery.ps1 `
-    -Subnet "192.168.1.0/24" `
-    -IncludeOffline `
-    -ScanPorts $false `
-    -ExportPath "C:\IPAM\Subnet_192.168.1.csv"
-
-# Identify available IPs for new devices
-$scan = Import-Csv "C:\IPAM\Subnet_192.168.1.csv"
-$available = $scan | Where-Object { $_.Status -eq 'Offline' }
-Write-Host "Available IPs: $($available.Count)"
-$available | Select-Object -First 10 -ExpandProperty IPAddress
-```
-
-**Scenario 4: Troubleshooting Network Issues**
-```powershell
-# Quick scan to find missing server
-.\Get-NetworkDiscovery.ps1 `
-    -Subnet "10.0.0.0/24" `
-    -ScanPorts $true `
-    -Quiet | Where-Object { $_.Hostname -match 'SERVER' }
-
-# Identify rogue DHCP servers
-$discovery = .\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24" -Quiet
-$discovery | Where-Object { $_.Services -match 'DHCP' }
+$devices | Where-Object { $_.Services -match 'Telnet|FTP' }      # Insecure protocols
+$devices | Where-Object { $_.DeviceType -eq 'Unknown' }          # Unidentified devices
+$devices | Where-Object { $_.DeviceType -eq 'IoT Device' }       # IoT devices (often unsecured)
+$devices | Where-Object { $_.Vendor -eq 'Randomized/VM' }        # VMs or randomized MACs
 ```
 
 **HTML Report Features:**
 - Visual dashboard with device type statistics
-- Color-coded device categorization
-  - Blue: Servers
-  - Green: Workstations
-  - Yellow: Printers
-  - Red: Network Devices
+- Color-coded device categorization:
+  - 🖥️ Blue: Servers
+  - 💻 Green: Workstations
+  - 🖨️ Yellow: Printers
+  - 📡 Orange: Network Devices
+  - 📱 Purple: Mobile Devices
+  - 🔌 Deep Orange: IoT Devices
+  - 📦 Light Blue: Containers
+- Clickable HTTP/HTTPS/SSH links
 - Sortable device inventory table
 - IP address, hostname, MAC, vendor, services
 - Yeyland Wutani branding (orange/grey)
 - Professional client-deliverable format
 
 **Performance Optimization:**
-- Default: 50 parallel threads (balanced)
-- Fast LANs: 100-200 threads (faster, higher network load)
-- Slow/WAN links: 10-25 threads (slower, gentler on network)
+- Default: 100 parallel threads (balanced)
+- Fast LANs: 150-200 threads (faster, higher network load)
+- Slow/WAN links: 25-50 threads (slower, gentler on network)
 - Massive networks: 200-500 threads (very fast, requires powerful hardware)
 
-**Timeout Recommendations:**
-- Local LAN: 1-2 seconds
-- Cross-site VPN: 3-5 seconds
-- Slow WAN: 5-10 seconds
+**MAC Vendor API Notes:**
+- Uses macvendors.com free API
+- Rate limited: 1 request/second (automatically throttled)
+- Results cached to avoid duplicate lookups
+- Fallback to local 150+ vendor OUI database if API unavailable
 
 ---
-
 
 ### Network Connectivity Testing
 
@@ -188,77 +240,36 @@ Advanced connectivity testing and diagnostics for troubleshooting.
 Get-Content servers.txt | .\Test-NetworkConnectivity.ps1 `
     -Port 80,443,3389 `
     -ExportPath "C:\Reports\Connectivity.html"
-
-# Monitor with email alerts
-.\Test-NetworkConnectivity.ps1 `
-    -Target "vpn.company.com" `
-    -Port 443,1194 `
-    -AlertOnFailure `
-    -EmailTo "alerts@company.com" `
-    -EmailFrom "monitor@company.com" `
-    -SmtpServer "smtp.company.com"
-```
-
-**Troubleshooting Scenarios:**
-
-**Scenario 1: Can't RDP to Server**
-```powershell
-.\Test-NetworkConnectivity.ps1 `
-    -Target "server01.domain.local" `
-    -Port 3389 `
-    -IncludeTraceroute `
-    -IncludeDNS
-
-# Check results:
-# - Ping: OK = Network layer good
-# - Port 3389: Closed = RDP service issue
-# - Traceroute: Shows path, identify network hops
-# - DNS: Resolves correctly = DNS working
-```
-
-**Scenario 2: Website Not Loading**
-```powershell
-.\Test-NetworkConnectivity.ps1 `
-    -Target "www.company.com" `
-    -Port 80,443 `
-    -IncludeDNS
-
-# Check results:
-# - DNS: Failed = DNS resolution issue
-# - Ping: Failed = Hosting/connectivity issue
-# - Port 80: Closed, Port 443: Open = HTTP redirect to HTTPS
-```
-
-**Scenario 3: Inter-Site Connectivity**
-```powershell
-# Test connectivity to branch office
-.\Test-NetworkConnectivity.ps1 `
-    -Target "10.1.0.1" `
-    -Port 445,3389 `
-    -IncludeTraceroute `
-    -Count 10
-
-# Traceroute shows:
-# - Number of hops between sites
-# - Latency at each hop
-# - Identify where delays occur
 ```
 
 ---
 
 ## Common Workflows
 
+### Quick Network Assessment (NEW!)
+```powershell
+# Fastest way to discover a network - just run the script!
+.\Get-NetworkDiscovery.ps1 -UseMacVendorAPI -ExportPath "C:\Reports\Discovery.html"
+
+# The script will:
+# 1. Auto-detect your local subnet(s) from NIC configuration
+# 2. Scan all detected networks in parallel
+# 3. Identify all device types including IoT and containers
+# 4. Generate a professional HTML report
+```
+
 ### New Client Onboarding
 ```powershell
-# Day 1 - Network Discovery
+# Day 1 - Network Discovery with full classification
 $clientName = "ABC Corporation"
 $timestamp = Get-Date -Format "yyyyMMdd"
 
-# Discover all subnets
+# Discover all subnets with MAC vendor lookup
 .\Get-NetworkDiscovery.ps1 `
     -Subnet "192.168.1.0/24","192.168.2.0/24","192.168.10.0/24" `
+    -UseMacVendorAPI `
     -ThrottleLimit 150 `
-    -ExportPath "C:\Clients\$clientName\Discovery_$timestamp.json"
+    -ExportPath "C:\Clients\$clientName\Discovery_$timestamp.html"
 
 # Test connectivity to critical servers
 $criticalServers = Import-Csv "C:\Clients\$clientName\critical_systems.csv"
@@ -272,36 +283,28 @@ $criticalServers | .\Test-NetworkConnectivity.ps1 `
 # Scheduled task - runs monthly
 $month = Get-Date -Format "yyyy-MM"
 
-# Rediscover network
+# Rediscover network with full vendor classification
 .\Get-NetworkDiscovery.ps1 `
     -Subnet "10.0.0.0/16" `
+    -UseMacVendorAPI `
     -ThrottleLimit 200 `
     -IncludeOffline `
     -ExportPath "C:\Audits\Monthly\Discovery_$month.json"
 
-# Compare to last month
-$thisMonth = Import-Csv "C:\Audits\Monthly\Discovery_$month.json"
-$lastMonth = Import-Csv "C:\Audits\Monthly\Discovery_$(Get-Date (Get-Date).AddMonths(-1) -Format 'yyyy-MM').json"
+# Compare to last month - find new/removed devices
+$thisMonth = Get-Content "C:\Audits\Monthly\Discovery_$month.json" | ConvertFrom-Json
+$lastMonth = Get-Content "C:\Audits\Monthly\Discovery_$((Get-Date).AddMonths(-1).ToString('yyyy-MM')).json" | ConvertFrom-Json
 
 # Find new devices
 $newDevices = $thisMonth | Where-Object { 
     $_.IPAddress -notin $lastMonth.IPAddress -and $_.Status -eq 'Online' 
 }
 
-# Find removed devices
-$removedDevices = $lastMonth | Where-Object { 
-    $_.IPAddress -notin $thisMonth.IPAddress -and $_.Status -eq 'Online' 
-}
-
-# Report changes
-if ($newDevices) {
-    Write-Host "New devices detected: $($newDevices.Count)" -ForegroundColor Yellow
-    $newDevices | Format-Table IPAddress, Hostname, DeviceType
-}
-
-if ($removedDevices) {
-    Write-Host "Devices no longer detected: $($removedDevices.Count)" -ForegroundColor Red
-    $removedDevices | Format-Table IPAddress, Hostname, DeviceType
+# Find new IoT devices (security concern)
+$newIoT = $newDevices | Where-Object { $_.DeviceType -eq 'IoT Device' }
+if ($newIoT) {
+    Write-Host "WARNING: New IoT devices detected!" -ForegroundColor Yellow
+    $newIoT | Format-Table IPAddress, Vendor, OS
 }
 ```
 
@@ -311,7 +314,7 @@ if ($removedDevices) {
 .\Get-NetworkDiscovery.ps1 `
     -Subnet "192.168.1.0/24" `
     -IncludeOffline `
-    -ScanPorts $false `
+    -QuickScan `
     -ExportPath "C:\IPAM\Current_Allocation.csv"
 
 # Find available IPs for new server
@@ -322,26 +325,6 @@ Write-Host "`nAvailable IP Addresses in 192.168.1.0/24:"
 Write-Host "Total IPs: $($allocation.Count)"
 Write-Host "In Use: $(($allocation | Where-Object { $_.Status -eq 'Online' }).Count)"
 Write-Host "Available: $($available.Count)"
-Write-Host "`nFirst 10 available IPs:"
-$available | Select-Object -First 10 -ExpandProperty IPAddress
-```
-
-### Troubleshooting Workflow
-```powershell
-# Step 1: Can we ping it?
-.\Test-NetworkConnectivity.ps1 -Target "problem-server"
-
-# Step 2: Is DNS working?
-.\Test-NetworkConnectivity.ps1 -Target "problem-server" -IncludeDNS
-
-# Step 3: What ports are open?
-.\Test-NetworkConnectivity.ps1 -Target "problem-server" -Port 22,80,443,3389,445
-
-# Step 4: Where is the network path issue?
-.\Test-NetworkConnectivity.ps1 -Target "problem-server" -IncludeTraceroute
-
-# Step 5: Scan entire subnet to see what else is affected
-.\Get-NetworkDiscovery.ps1 -Subnet "192.168.1.0/24" -Quiet
 ```
 
 ---
@@ -349,34 +332,25 @@ $available | Select-Object -First 10 -ExpandProperty IPAddress
 ## Best Practices
 
 ### Network Discovery
+- **Just run it**: No parameters needed - auto-detects local subnets
+- **Use MAC Vendor API**: Provides best device classification (`-UseMacVendorAPI`)
 - **Start small**: Test with small IP range first (/28 or /27)
-- **Adjust threads**: Start with 50, increase to 100-200 for large scans
+- **Adjust threads**: Start with 100, increase to 150-200 for large scans
 - **Use timeouts wisely**: LAN=1-2s, VPN=3-5s, WAN=5-10s
 - **Schedule scans**: Monthly discovery to track changes
 - **Export JSON**: Preserve full data for post-processing
 - **Client deliverables**: Use HTML exports for professional reports
 
-### IP Management
-- Include offline IPs in scans to track full allocation
-- Maintain historical CSV files for trend analysis
-- Reserve static IP ranges (exclude from DHCP scope)
-- Document IP assignments in discovery exports
-- Track MAC addresses for device identification
+### IoT Security
+- Enable MAC Vendor API to identify all IoT devices
+- Review IoT devices for security implications
+- Segment IoT devices on separate VLANs
+- Monitor for new IoT devices monthly
 
-### Performance
-- **Small networks (<100 IPs)**: 25-50 threads
-- **Medium networks (100-500 IPs)**: 50-150 threads
-- **Large networks (500+ IPs)**: 150-500 threads
-- Monitor network load during scans
-- Schedule intensive scans during off-hours
-- Use -Quiet for scheduled/automated scans
-
-### Security Considerations
-- Obtain authorization before scanning client networks
-- Avoid scanning public IP ranges
-- Use -ScanPorts $false for quick/non-intrusive scans
-- Secure exported data (contains network topology)
-- Don't include deep scan credentials in scripts
+### Container Environments
+- Docker containers are automatically identified
+- Differentiated from VMs and randomized mobile MACs
+- Useful for tracking container sprawl
 
 ---
 
@@ -385,62 +359,20 @@ $available | Select-Object -First 10 -ExpandProperty IPAddress
 - **PowerShell 5.1 or later**
 - **Network access** to target subnets
 - **ICMP allowed** through firewalls (for ping)
-- **Administrative credentials** (for deep scans, optional)
-- **Adequate bandwidth** for parallel scanning
+- **Internet access** (optional, for MAC Vendor API)
 
 ---
 
-## Troubleshooting
+## Version History
 
-### No Devices Found
-```powershell
-# Verify network connectivity
-Test-Connection -ComputerName "192.168.1.1" -Count 4
-
-# Check if ICMP is blocked
-# Try single IP with verbose
-.\Get-NetworkDiscovery.ps1 -IPRange "192.168.1.1-192.168.1.1" -ScanPorts $false
-
-# Verify CIDR notation
-# Correct: 192.168.1.0/24
-# Wrong: 192.168.1.0-24 or 192.168.1.1/255.255.255.0
-```
-
-### Slow Scanning
-```powershell
-# Increase parallel threads
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -ThrottleLimit 200
-
-# Reduce timeout
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -Timeout 1
-
-# Disable port scanning
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24" -ScanPorts $false
-```
-
-### Memory Issues
-```powershell
-# Reduce parallel threads
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/16" -ThrottleLimit 25
-
-# Scan in smaller chunks
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.0.0/24"
-.\Get-NetworkDiscovery.ps1 -Subnet "10.0.1.0/24"
-# Combine results after
-```
-
----
-
-## Future Enhancements
-
-Planned additions to Network tools:
-- WatchGuard firewall configuration backup via SSH
-- Aruba switch configuration backup via SSH/SCP
-- SNMP-based device polling
-- Network device config diff/change detection
-- Automated network diagram generation (Visio/Graphviz)
-- VLAN discovery and documentation
-- Bandwidth utilization monitoring
+| Version | Features |
+|---------|----------|
+| 1.9 | Auto-detection of local subnets, no parameters required |
+| 1.8 | Docker container detection, IoT vendor classification, Container device type |
+| 1.7 | Locally administered MAC detection (Randomized/VM), enhanced vendor matching |
+| 1.6 | MAC Vendor API integration with rate limiting and caching |
+| 1.5 | HTML reports with clickable links and device icons |
+| 1.0 | Initial release with parallel scanning and basic device classification |
 
 ---
 
