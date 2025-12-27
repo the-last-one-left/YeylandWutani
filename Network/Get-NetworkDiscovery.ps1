@@ -77,7 +77,7 @@
     Author: Yeyland Wutani LLC
     Website: https://github.com/YeylandWutani
     Requires: PowerShell 5.1+
-    Version: 1.6
+    Version: 1.7
     
     MAC VENDOR API:
     - Uses macvendors.com free API
@@ -125,7 +125,7 @@ param(
 )
 
 begin {
-    $ScriptVersion = "1.6"
+    $ScriptVersion = "1.7"
     $ScriptName = "Get-NetworkDiscovery"
     
     if (-not $Quiet) {
@@ -343,36 +343,58 @@ begin {
     # Function to lookup MAC vendor via API
     function Get-MacVendorFromAPI {
         param(
+            [string]$MacAddress,
             [string]$MacPrefix,
             [hashtable]$Cache
         )
         
-        # Check cache first
+        # Check cache first (by prefix for efficiency)
         if ($Cache.ContainsKey($MacPrefix)) {
             return $Cache[$MacPrefix]
+        }
+        
+        # Skip locally administered MACs (second hex digit is 2, 6, A, or E)
+        # These are not in the IEEE OUI database
+        $firstOctet = $MacPrefix.Split(':')[0]
+        if ($firstOctet -and $firstOctet.Length -eq 2) {
+            $secondNibble = $firstOctet[1]
+            if ($secondNibble -match '[26AEae]') {
+                $Cache[$MacPrefix] = "Local/Virtual"
+                return "Local/Virtual"
+            }
         }
         
         try {
             # Rate limiting: 1 request per second
             $timeSinceLastCall = (Get-Date) - $script:LastApiCall
-            if ($timeSinceLastCall.TotalMilliseconds -lt 1000) {
-                Start-Sleep -Milliseconds (1000 - [int]$timeSinceLastCall.TotalMilliseconds)
+            if ($timeSinceLastCall.TotalMilliseconds -lt 1100) {
+                Start-Sleep -Milliseconds (1100 - [int]$timeSinceLastCall.TotalMilliseconds)
             }
             
-            # API call
-            $apiUrl = "https://api.macvendors.com/$MacPrefix"
-            $response = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 3 -ErrorAction Stop
+            # API call - use full MAC address (dash-separated) for best results
+            $apiMac = $MacAddress.Replace(':', '-')
+            $apiUrl = "https://api.macvendors.com/$apiMac"
+            $response = Invoke-RestMethod -Uri $apiUrl -Method Get -TimeoutSec 5 -ErrorAction Stop
             
             $script:LastApiCall = Get-Date
             $script:ApiCallCount++
             
-            # Cache the result
+            # Cache the result by prefix for efficiency
             $Cache[$MacPrefix] = $response
             
             return $response
         }
+        catch [System.Net.WebException] {
+            # 404 = MAC not found in database, cache as Unknown
+            if ($_.Exception.Response.StatusCode -eq 404) {
+                $Cache[$MacPrefix] = "Unknown"
+                return "Unknown"
+            }
+            # Other network errors - don't cache, might be transient
+            return "Unknown"
+        }
         catch {
-            # API failed, cache as "Unknown" to avoid repeated lookups
+            # API failed for other reasons, cache as Unknown to avoid repeated lookups
             $Cache[$MacPrefix] = "Unknown"
             return "Unknown"
         }
@@ -723,9 +745,14 @@ process {
         }
         
         if ($unknownVendors.Count -gt 0) {
-            # Get unique MAC prefixes to lookup
-            $uniquePrefixes = $unknownVendors | 
-                Select-Object -ExpandProperty MACPrefix -Unique
+            # Build prefix-to-MAC mapping (use first MAC found for each prefix)
+            $prefixToMac = @{}
+            $unknownVendors | ForEach-Object {
+                if (-not $prefixToMac.ContainsKey($_.MACPrefix)) {
+                    $prefixToMac[$_.MACPrefix] = $_.MACAddress
+                }
+            }
+            $uniquePrefixes = $prefixToMac.Keys
             
             if (-not $Quiet) {
                 Write-Host "  Unique MAC prefixes to lookup: $($uniquePrefixes.Count)" -ForegroundColor Yellow
@@ -734,7 +761,8 @@ process {
             
             $lookupCount = 0
             foreach ($prefix in $uniquePrefixes) {
-                $vendor = Get-MacVendorFromAPI -MacPrefix $prefix -Cache $script:MacVendorCache
+                $fullMac = $prefixToMac[$prefix]
+                $vendor = Get-MacVendorFromAPI -MacAddress $fullMac -MacPrefix $prefix -Cache $script:MacVendorCache
                 
                 # Update all results with this MAC prefix
                 $Results | Where-Object { $_.MACPrefix -eq $prefix } | ForEach-Object {
