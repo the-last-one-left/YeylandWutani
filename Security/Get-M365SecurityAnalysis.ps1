@@ -47,9 +47,9 @@
 #  error handling, performance optimization
 #  
 #  COPYRIGHT & LICENSING:
-#  © Yeyland Wutani LLC - Professional Security Toolkit
+#  (c) Yeyland Wutani LLC - Professional Security Toolkit
 #  
-#  ⚠️  AUTHORIZED USE ONLY ⚠️
+#  *** AUTHORIZED USE ONLY ***
 #  This tool is developed by Yeyland Wutani LLC.
 #  Licensed for use by Yeyland Wutani consulting clients.
 #  Unauthorized use, distribution, or modification is strictly prohibited.
@@ -59,16 +59,16 @@
 
 #region SCRIPT CONFIGURATION AND INITIALIZATION
 
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # SCRIPT VERSION
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
 $ScriptVer = "10.2"
 
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # GLOBAL CONNECTION STATE
-#──────────────────────────────────────────────────────────────
+#--------------------------------------------------------------
 # Tracks the current Microsoft Graph connection status
 # This is updated throughout the script lifecycle to maintain
 # connection awareness and enable proper cleanup
