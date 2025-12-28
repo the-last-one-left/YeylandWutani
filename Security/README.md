@@ -1,6 +1,6 @@
 # Security
 
-Security assessment, threat detection, and compliance tools for Microsoft 365 and Windows file systems.
+Security assessment, threat detection, compliance tools, and certificate management for Microsoft 365, Windows file systems, and enterprise infrastructure.
 
 ---
 
@@ -8,9 +8,66 @@ Security assessment, threat detection, and compliance tools for Microsoft 365 an
 
 | Script | Description |
 |--------|-------------|
+| `Find-WildcardCertificateUsage.ps1` | Discover everywhere a wildcard (or any) SSL certificate is used across Windows servers |
 | `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules, admin logs |
 | `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links, storage analysis |
 | `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs, high-risk ACLs |
+
+---
+
+## Find-WildcardCertificateUsage.ps1 (v1.0)
+
+**Purpose:** Essential tool for certificate renewals and compliance auditing. Discovers all locations where a specific certificate (especially wildcards) is deployed across your infrastructure.
+
+**Discovery Methods:**
+- **Certificate Store Enumeration**: Scans LocalMachine\My store on remote servers via PowerShell Remoting
+- **IIS Bindings**: Identifies which websites are using the certificate
+- **RDP Configuration**: Checks Remote Desktop certificate assignments via WMI
+- **HTTP.SYS Bindings**: Examines SSL bindings registered with HTTP.SYS
+- **SSL Port Probing**: Directly connects to common SSL ports to identify certificates in use
+
+**Search Options:**
+- Thumbprint (most reliable - same wildcard cert has identical thumbprints everywhere)
+- Subject pattern (e.g., `*.contoso.com`)
+- Friendly name
+
+**Usage:**
+```powershell
+# Find by thumbprint (recommended for wildcards)
+.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2C3D4E5F6789012345678901234567890ABCD"
+
+# Find by subject pattern
+.\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.contoso.com"
+
+# Find by friendly name
+.\Find-WildcardCertificateUsage.ps1 -FriendlyName "Contoso Wildcard 2024"
+
+# Search specific servers (from list)
+.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -ComputerName (Get-Content servers.txt)
+
+# Limit to specific OU in AD
+.\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.domain.com" -OUSearchBase "OU=Servers,DC=domain,DC=com"
+
+# Port-only scan (when remoting unavailable)
+.\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*wildcard*" -SkipRemoting -ScanPorts 443,8443,3389
+
+# Custom ports and timeout
+.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -ScanPorts 443,8443,636,5986 -TimeoutSeconds 10
+
+# Include workstations (not just servers)
+.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -IncludeClients
+```
+
+**Output:**
+- HTML report with Yeyland Wutani branding
+- CSV exports for certificate instances, IIS bindings, RDP services, port scan results
+- Expiration warnings (yellow <30 days, red if expired)
+
+**Requirements:**
+- PowerShell 5.1+
+- PowerShell Remoting enabled on target servers (for full discovery)
+- Active Directory PowerShell module (for automatic server discovery)
+- Admin rights for certificate store access
 
 ---
 
@@ -115,7 +172,8 @@ These tools are for authorized security testing only. Users must obtain proper a
 - Microsoft Graph PowerShell modules (for M365/SPO tools)
 - Exchange Online Management module (for M365 tool)
 - SharePoint Online Management Shell (for SPO tool)
-- Admin rights for file system scanning
+- Active Directory PowerShell module (for certificate discovery)
+- Admin rights for file system and certificate scanning
 - Appropriate admin roles for cloud tools (Security Reader, SharePoint Admin, etc.)
 
 ---
