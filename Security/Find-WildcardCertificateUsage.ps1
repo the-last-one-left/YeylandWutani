@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Comprehensive Wildcard Certificate Usage Discovery Tool v1.0
+    Comprehensive Wildcard Certificate Usage Discovery Tool v1.1
     
 .DESCRIPTION
     MSP-focused tool for discovering everywhere a wildcard (or any) SSL certificate is used
@@ -18,6 +18,12 @@
     - Subject Pattern (e.g., *.contoso.com)
     - Friendly Name
     
+    Supports target specification:
+    - Individual hostnames or IPs
+    - CIDR notation (e.g., 192.168.1.0/24)
+    - IP ranges (e.g., 192.168.1.1-50)
+    - Automatic AD discovery
+    
 .PARAMETER Thumbprint
     The certificate thumbprint to search for. This is the most reliable method as
     the same wildcard certificate will have identical thumbprints everywhere.
@@ -29,7 +35,9 @@
     Certificate friendly name to search for (partial match supported).
     
 .PARAMETER ComputerName
-    Array of computer names to scan. If not specified, queries AD for Windows Servers.
+    Array of computer names, IPs, CIDR ranges, or IP ranges to scan.
+    Supports: hostnames, IPs, CIDR (192.168.1.0/24), ranges (192.168.1.1-50)
+    If not specified, queries AD for Windows Servers.
     
 .PARAMETER OUSearchBase
     Limit AD computer query to specific OU. Example: "OU=Servers,DC=contoso,DC=com"
@@ -63,8 +71,12 @@
     Find all servers using a certificate with the specified thumbprint
     
 .EXAMPLE
-    .\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.contoso.com"
-    Find all certificates matching the wildcard subject pattern
+    .\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.contoso.com" -ComputerName "192.168.1.0/24"
+    Scan entire /24 subnet for certificates matching the subject pattern
+
+.EXAMPLE
+    .\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.contoso.com" -ComputerName "10.0.0.1-20"
+    Scan IP range 10.0.0.1 through 10.0.0.20
 
 .EXAMPLE
     .\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2C3D4..." -ComputerName (Get-Content servers.txt)
@@ -76,7 +88,7 @@
 
 .NOTES
     Author: Yeyland Wutani LLC
-    Version: 1.0
+    Version: 1.1
     Website: https://github.com/YeylandWutani
     
     Requirements:
@@ -140,7 +152,7 @@ param(
 
 $ErrorActionPreference = 'Continue'
 $Script:StartTime = Get-Date
-$Script:Version = "1.0"
+$Script:Version = "1.1"
 
 # Branding colors (HTML)
 $Script:BrandOrange = "#FF6600"
@@ -190,6 +202,86 @@ function Write-StatusMessage {
     Write-Host "$prefix $Message" -ForegroundColor $color
 }
 
+function Expand-CIDRNotation {
+    param([string]$CIDR)
+    
+    # Check if it's CIDR notation
+    if ($CIDR -notmatch '^(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})/(\d{1,2})$') {
+        return $null  # Not CIDR
+    }
+    
+    $ipAddress = $matches[1]
+    $prefixLength = [int]$matches[2]
+    
+    if ($prefixLength -lt 16 -or $prefixLength -gt 30) {
+        Write-StatusMessage "CIDR prefix /$prefixLength not supported (use /16 to /30)" -Type Warning
+        return @()
+    }
+    
+    try {
+        $ipBytes = [System.Net.IPAddress]::Parse($ipAddress).GetAddressBytes()
+        [Array]::Reverse($ipBytes)
+        $ipInt = [BitConverter]::ToUInt32($ipBytes, 0)
+        
+        $hostBits = 32 - $prefixLength
+        $numHosts = [Math]::Pow(2, $hostBits) - 2  # Exclude network and broadcast
+        
+        if ($numHosts -gt 65534) {
+            Write-StatusMessage "Subnet too large (max /16 = 65534 hosts)" -Type Warning
+            return @()
+        }
+        
+        $mask = [uint32]([Math]::Pow(2, 32) - 1) -shl $hostBits
+        $networkInt = $ipInt -band $mask
+        
+        $ips = [System.Collections.ArrayList]::new()
+        
+        Write-StatusMessage "Expanding CIDR $CIDR to $([int]$numHosts) addresses..."
+        
+        # Start from network + 1, end before broadcast
+        for ($i = 1; $i -le $numHosts; $i++) {
+            $currentInt = $networkInt + $i
+            $bytes = [BitConverter]::GetBytes([uint32]$currentInt)
+            [Array]::Reverse($bytes)
+            $ip = [System.Net.IPAddress]::new($bytes)
+            [void]$ips.Add($ip.ToString())
+        }
+        
+        return $ips.ToArray()
+    }
+    catch {
+        Write-StatusMessage "Failed to parse CIDR: $($_.Exception.Message)" -Type Error
+        return @()
+    }
+}
+
+function Expand-IPRange {
+    param([string]$Range)
+    
+    # Check for range notation: 192.168.1.1-50
+    if ($Range -match '^(\d{1,3}\.\d{1,3}\.\d{1,3})\.(\d{1,3})-(\d{1,3})$') {
+        $baseOctets = $matches[1]
+        $startLast = [int]$matches[2]
+        $endLast = [int]$matches[3]
+        
+        if ($startLast -gt $endLast -or $endLast -gt 254 -or $startLast -lt 1) {
+            Write-StatusMessage "Invalid IP range: $Range" -Type Warning
+            return @()
+        }
+        
+        $count = $endLast - $startLast + 1
+        Write-StatusMessage "Expanding range $Range to $count addresses..."
+        
+        $ips = @()
+        for ($i = $startLast; $i -le $endLast; $i++) {
+            $ips += "$baseOctets.$i"
+        }
+        return $ips
+    }
+    
+    return $null  # Not a range
+}
+
 function Get-TargetComputers {
     param(
         [string[]]$ComputerName,
@@ -198,8 +290,34 @@ function Get-TargetComputers {
     )
     
     if ($ComputerName) {
-        Write-StatusMessage "Using provided computer list: $($ComputerName.Count) computers"
-        return $ComputerName
+        # Expand any CIDR notation or IP ranges
+        $expandedList = [System.Collections.ArrayList]::new()
+        
+        foreach ($entry in $ComputerName) {
+            # Try CIDR expansion
+            $cidrResult = Expand-CIDRNotation -CIDR $entry
+            if ($cidrResult -ne $null) {
+                foreach ($ip in $cidrResult) {
+                    [void]$expandedList.Add($ip)
+                }
+                continue
+            }
+            
+            # Try IP range expansion
+            $rangeResult = Expand-IPRange -Range $entry
+            if ($rangeResult -ne $null) {
+                foreach ($ip in $rangeResult) {
+                    [void]$expandedList.Add($ip)
+                }
+                continue
+            }
+            
+            # Not CIDR or range, add as-is
+            [void]$expandedList.Add($entry)
+        }
+        
+        Write-StatusMessage "Target list: $($expandedList.Count) addresses"
+        return $expandedList.ToArray()
     }
     
     Write-StatusMessage "Querying Active Directory for Windows computers..."
@@ -258,6 +376,9 @@ function Get-SSLCertificateFromPort {
         Error = $null
     }
     
+    $tcpClient = $null
+    $sslStream = $null
+    
     try {
         $tcpClient = New-Object System.Net.Sockets.TcpClient
         $connectResult = $tcpClient.BeginConnect($ComputerName, $Port, $null, $null)
@@ -300,8 +421,8 @@ function Get-SSLCertificateFromPort {
         $result.Error = $_.Exception.Message
     }
     finally {
-        if ($tcpClient) { $tcpClient.Dispose() }
-        if ($sslStream) { $sslStream.Dispose() }
+        if ($sslStream) { try { $sslStream.Dispose() } catch {} }
+        if ($tcpClient) { try { $tcpClient.Dispose() } catch {} }
     }
     
     return $result
@@ -516,7 +637,6 @@ function Invoke-CertificateStoreDiscovery {
         $invokeParams['Credential'] = $Credential
     }
     
-    # PowerShell 5.1 doesn't have -ThrottleLimit for Invoke-Command, use jobs approach
     $remoteResults = Invoke-Command @invokeParams
     
     foreach ($result in $remoteResults) {
@@ -608,7 +728,7 @@ function Invoke-SSLPortScanning {
         foreach ($port in $Ports) {
             $scanCounter++
             $pct = [math]::Round(($scanCounter / $totalScans) * 100, 0)
-            Write-Progress -Activity "SSL Port Scanning" -Status "$computer`:$port" -PercentComplete $pct
+            Write-Progress -Activity "SSL Port Scanning" -Status "$computer`:$port ($scanCounter of $totalScans)" -PercentComplete $pct
             
             $scanResult = Get-SSLCertificateFromPort -ComputerName $computer -Port $port -Timeout ($Timeout * 1000)
             
@@ -686,7 +806,7 @@ function New-HTMLReport {
         .summary-card .label { font-size: 14px; color: $($Script:BrandGrey); margin-top: 5px; }
         .section { background: white; border-radius: 8px; margin-bottom: 20px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); overflow: hidden; }
         .section-header { background: $($Script:BrandDarkGrey); color: white; padding: 15px 20px; font-size: 16px; font-weight: 600; }
-        .section-content { padding: 20px; }
+        .section-content { padding: 20px; overflow-x: auto; }
         table { width: 100%; border-collapse: collapse; font-size: 13px; }
         th { background: $($Script:BrandLightGrey); color: $($Script:BrandDarkGrey); text-align: left; padding: 12px; font-weight: 600; border-bottom: 2px solid #ddd; }
         td { padding: 10px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
@@ -694,7 +814,7 @@ function New-HTMLReport {
         .status-ok { color: #059669; }
         .status-warn { color: #d97706; }
         .status-error { color: #dc2626; }
-        .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+        .badge { display: inline-block; padding: 3px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; margin-left: 10px; }
         .badge-iis { background: #dbeafe; color: #1d4ed8; }
         .badge-rdp { background: #fce7f3; color: #be185d; }
         .badge-httpsys { background: #e0e7ff; color: #4338ca; }
@@ -783,7 +903,7 @@ function New-HTMLReport {
 
     # IIS Bindings Section
     [void]$html.AppendLine('<div class="section">')
-    [void]$html.AppendLine('<div class="section-header">IIS Website Bindings <span class="badge badge-iis">IIS</span></div>')
+    [void]$html.AppendLine('<div class="section-header">IIS Website Bindings<span class="badge badge-iis">IIS</span></div>')
     [void]$html.AppendLine('<div class="section-content">')
     
     if ($Script:IISBindings.Count -gt 0) {
@@ -811,7 +931,7 @@ function New-HTMLReport {
 
     # RDP Certificates Section
     [void]$html.AppendLine('<div class="section">')
-    [void]$html.AppendLine('<div class="section-header">Remote Desktop Certificate Assignments <span class="badge badge-rdp">RDP</span></div>')
+    [void]$html.AppendLine('<div class="section-header">Remote Desktop Certificate Assignments<span class="badge badge-rdp">RDP</span></div>')
     [void]$html.AppendLine('<div class="section-content">')
     
     if ($Script:RDPCertificates.Count -gt 0) {
@@ -836,7 +956,7 @@ function New-HTMLReport {
 
     # HTTP.SYS Bindings Section
     [void]$html.AppendLine('<div class="section">')
-    [void]$html.AppendLine('<div class="section-header">HTTP.SYS SSL Bindings <span class="badge badge-httpsys">HTTP.SYS</span></div>')
+    [void]$html.AppendLine('<div class="section-header">HTTP.SYS SSL Bindings<span class="badge badge-httpsys">HTTP.SYS</span></div>')
     [void]$html.AppendLine('<div class="section-content">')
     
     if ($Script:HTTPSysBindings.Count -gt 0) {
@@ -863,7 +983,7 @@ function New-HTMLReport {
     # Port Scan Results Section
     if ($Script:PortScanResults.Count -gt 0) {
         [void]$html.AppendLine('<div class="section">')
-        [void]$html.AppendLine('<div class="section-header">SSL Port Scan Results <span class="badge badge-port">Port Scan</span></div>')
+        [void]$html.AppendLine('<div class="section-header">SSL Port Scan Results<span class="badge badge-port">Port Scan</span></div>')
         [void]$html.AppendLine('<div class="section-content">')
         [void]$html.AppendLine('<table>')
         [void]$html.AppendLine('<thead><tr><th>Computer</th><th>Port</th><th>Subject</th><th>Thumbprint</th><th>Expires</th></tr></thead>')
@@ -955,7 +1075,7 @@ if ($targetComputers.Count -eq 0) {
 }
 
 # Phase 1: Test connectivity
-Write-StatusMessage "Testing connectivity to $($targetComputers.Count) computers..."
+Write-StatusMessage "Testing connectivity to $($targetComputers.Count) targets..."
 $reachableComputers = [System.Collections.ArrayList]::new()
 $unreachableCount = 0
 
@@ -963,7 +1083,7 @@ $counter = 0
 foreach ($computer in $targetComputers) {
     $counter++
     $pct = [math]::Round(($counter / $targetComputers.Count) * 100, 0)
-    Write-Progress -Activity "Testing Connectivity" -Status $computer -PercentComplete $pct
+    Write-Progress -Activity "Testing Connectivity" -Status "$computer ($counter of $($targetComputers.Count))" -PercentComplete $pct
     
     if (Test-ComputerReachable -ComputerName $computer) {
         [void]$reachableComputers.Add($computer)
@@ -978,7 +1098,7 @@ foreach ($computer in $targetComputers) {
 }
 Write-Progress -Activity "Testing Connectivity" -Completed
 
-Write-StatusMessage "$($reachableComputers.Count) computers reachable, $unreachableCount unreachable" -Type $(if ($reachableComputers.Count -gt 0) { 'Success' } else { 'Warning' })
+Write-StatusMessage "$($reachableComputers.Count) targets reachable, $unreachableCount unreachable" -Type $(if ($reachableComputers.Count -gt 0) { 'Success' } else { 'Warning' })
 
 if ($reachableComputers.Count -eq 0) {
     Write-StatusMessage "No reachable computers. Exiting." -Type Error
