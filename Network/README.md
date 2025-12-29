@@ -1,6 +1,6 @@
 # Network
 
-Network discovery, VLAN identification, connectivity testing, and documentation tools for MSP environments.
+Network discovery, VLAN identification, connectivity testing, SMTP validation, and documentation tools for MSP environments.
 
 ---
 
@@ -9,8 +9,86 @@ Network discovery, VLAN identification, connectivity testing, and documentation 
 | Script | Description |
 |--------|-------------|
 | `Get-NetworkDiscovery.ps1` | Comprehensive network discovery with auto-subnet detection, device classification, MAC vendor lookup, and port scanning |
-| `Get-VLANDiscovery.ps1` | **NEW** — Multi-method VLAN identification using packet capture, DHCP, AD Sites, ARP analysis, and subnet probing |
+| `Get-VLANDiscovery.ps1` | Multi-method VLAN identification using packet capture, DHCP, AD Sites, ARP analysis, and subnet probing |
 | `Test-NetworkConnectivity.ps1` | Advanced connectivity testing with ping, port checks, DNS resolution, and traceroute |
+| `Test-SMTPConfiguration.ps1` | **NEW** — SMTP relay validation for MFPs, scanners, and applications with M365/Google Workspace/Graph API support |
+
+---
+
+## Test-SMTPConfiguration.ps1
+
+Interactive SMTP testing tool designed for MSP technicians configuring multi-function printers, scanners, and line-of-business applications. Validates settings before deployment to avoid common pitfalls.
+
+### Supported Providers & Methods
+
+| Provider | Method | Server | Port | Auth | Use Case |
+|----------|--------|--------|------|------|----------|
+| **Microsoft 365** | SMTP AUTH | smtp.office365.com | 587 | User/Pass | Licensed mailbox, simple setup |
+| **Microsoft 365** | SMTP Relay | {tenant}.mail.protection.outlook.com | 25 | IP-based | No mailbox license, connector required |
+| **Microsoft 365** | Direct Send | {tenant}.mail.protection.outlook.com | 25 | None | Internal recipients only |
+| **Microsoft 365** | Graph API | graph.microsoft.com | 443 | OAuth | Modern auth, future-proof |
+| **Google Workspace** | SMTP AUTH | smtp.gmail.com | 587 | App Password | Standard, 2000/day limit |
+| **Google Workspace** | SMTP Relay | smtp-relay.gmail.com | 587 | IP or Auth | Admin configured, 10K/day limit |
+| **Google Workspace** | Restricted | aspmx.l.google.com | 25 | IP allowlist | Gmail/Workspace recipients only |
+| **Generic** | Standard | (user specified) | 25/587/465 | Optional | Any SMTP server |
+
+### Test Phases
+
+1. **Port Connectivity** — Validates outbound access to SMTP ports (25, 587, 465)
+2. **TLS/Security** — Tests STARTTLS upgrade and TLS version support
+3. **SMTP Capabilities** — Enumerates AUTH methods, verifies post-TLS capabilities
+4. **DNS Validation** — Confirms MX records point to expected endpoints
+5. **Email Delivery** — Sends test message to verify end-to-end functionality
+
+### Usage Examples
+
+```powershell
+# Interactive guided mode (recommended for technicians)
+.\Test-SMTPConfiguration.ps1 -Interactive
+
+# Microsoft 365 SMTP AUTH
+.\Test-SMTPConfiguration.ps1 -Provider Microsoft365 -Method SmtpAuth `
+    -FromAddress "scanner@contoso.com" -ToAddress "admin@contoso.com" `
+    -Credential (Get-Credential) -GenerateReport
+
+# Microsoft 365 Graph API (modern auth)
+.\Test-SMTPConfiguration.ps1 -Provider Microsoft365 -Method GraphApi `
+    -FromAddress "noreply@contoso.com" -ToAddress "admin@contoso.com" `
+    -TenantId "xxxx" -ClientId "xxxx" -ClientSecret "xxxx"
+
+# Google Workspace with app password
+.\Test-SMTPConfiguration.ps1 -Provider GoogleWorkspace -Method SmtpAuth `
+    -FromAddress "scanner@company.com" -ToAddress "admin@company.com" `
+    -AppPassword "xxxx xxxx xxxx xxxx"
+
+# Port connectivity test only
+.\Test-SMTPConfiguration.ps1 -Interactive
+# Then select option 4: "Port Connectivity Test Only"
+```
+
+### Common Pitfall Detection
+
+| Issue | Detection | Recommendation |
+|-------|-----------|----------------|
+| SMTP AUTH disabled | Auth capability check | Enable per-mailbox in M365 Admin or EAC |
+| Security defaults blocking | 5.7.57 error parsing | Disable security defaults or use CA exclusion |
+| Port 25 blocked | Connectivity timeout | Use port 587, or contact ISP |
+| App password required | Google 2FA detected | Generate at myaccount.google.com |
+| Graph API permission denied | ErrorAccessDenied | Grant Mail.Send + admin consent |
+| Sender address mismatch | 5.7.60 error | From must match authenticated user |
+
+### Important Dates
+
+- **M365 Basic Auth Deprecation**: March 2026 (full enforcement April 30, 2026)
+- **Google Less Secure Apps**: Deprecated May 2025 — app passwords required
+
+### Output
+
+Generates HTML report with:
+- Test results summary (pass/fail/warning counts)
+- Server configuration details
+- Detailed test results with recommendations
+- Ready-to-use MFP/device settings block
 
 ---
 
@@ -83,7 +161,10 @@ The tool produces a consolidated list of discovered VLANs/subnets with:
 
 ## Get-NetworkDiscovery.ps1
 
-**Key Features:**
+Comprehensive network discovery with device classification and MAC vendor identification.
+
+### Key Features
+
 - Auto-detects local subnets when no parameters provided
 - Parallel scanning (1-500 threads)
 - MAC vendor lookup via macvendors.com API
@@ -92,7 +173,8 @@ The tool produces a consolidated list of discovered VLANs/subnets with:
 - Smart IoT identification (WiZ, Espressif, Google Home, eero, etc.)
 - HTML reports with clickable service links
 
-**Usage Examples:**
+### Usage Examples
+
 ```powershell
 # Auto-detect and scan local network
 .\Get-NetworkDiscovery.ps1
@@ -114,14 +196,18 @@ The tool produces a consolidated list of discovered VLANs/subnets with:
 
 ## Test-NetworkConnectivity.ps1
 
-**Key Features:**
+Advanced connectivity testing with multiple diagnostic methods.
+
+### Key Features
+
 - ICMP ping with latency statistics
 - TCP port connectivity testing
 - DNS resolution and reverse lookup
 - Traceroute analysis
 - Continuous monitoring mode
 
-**Usage Examples:**
+### Usage Examples
+
 ```powershell
 # Basic ping test
 .\Test-NetworkConnectivity.ps1 -Target "8.8.8.8"
@@ -138,7 +224,29 @@ The tool produces a consolidated list of discovered VLANs/subnets with:
 
 ---
 
-## VLAN Discovery Decision Tree
+## Quick Reference
+
+### SMTP Method Selection
+
+```
+Which SMTP method should I use?
+    │
+    ├─► Need to send to external recipients?
+    │       │
+    │       ├─► Have a licensed M365 mailbox?
+    │       │       YES ──► SMTP AUTH (simplest)
+    │       │
+    │       ├─► Have static IP + can configure connector?
+    │       │       YES ──► SMTP Relay (no mailbox needed)
+    │       │
+    │       └─► Building an application?
+    │               YES ──► Graph API (modern, future-proof)
+    │
+    └─► Only sending to internal recipients?
+            ──► Direct Send (no auth required)
+```
+
+### VLAN Discovery Decision Tree
 
 ```
 Start Here
@@ -163,13 +271,13 @@ Start Here
 
 ## Requirements
 
-- PowerShell 5.1+
-- Network access to target subnets
-- ICMP allowed through firewalls (for ping-based discovery)
-- Internet access for MAC Vendor API (optional)
-- RSAT-DHCP for DHCP enumeration
-- ActiveDirectory module for AD Sites discovery
-- Administrator rights for pktmon packet capture
+| Script | Requirements |
+|--------|-------------|
+| All scripts | PowerShell 5.1+ |
+| Get-NetworkDiscovery | ICMP allowed, Internet for MAC API (optional) |
+| Get-VLANDiscovery | RSAT-DHCP, AD module, Admin for pktmon |
+| Test-NetworkConnectivity | ICMP/TCP access to targets |
+| Test-SMTPConfiguration | Outbound 25/587/465/443, valid credentials |
 
 ---
 
