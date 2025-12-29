@@ -1105,6 +1105,7 @@ function Test-ProductInstalled {
     <#
     .SYNOPSIS
         Verifies if the product was successfully installed on the remote system.
+        Uses registry query via remote registry for better compatibility than WinRM.
     #>
     param(
         [string]$ComputerName,
@@ -1113,41 +1114,82 @@ function Test-ProductInstalled {
         [PSCredential]$Credential
     )
     
-    try {
-        $scriptBlock = {
-            param($ProductCode, $ProductName)
-            
-            # Check by ProductCode in registry
-            $uninstallPaths = @(
-                "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
-                "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
-            )
-            
-            foreach ($path in $uninstallPaths) {
-                if (Test-Path $path) {
-                    $found = Get-ChildItem $path | Get-ItemProperty | Where-Object {
+    # Determine if this is the local computer
+    $localNames = @($env:COMPUTERNAME, 'localhost', '127.0.0.1', '.')
+    $isLocal = $localNames -contains $ComputerName -or $ComputerName -eq [System.Net.Dns]::GetHostName()
+    
+    $checkRegistry = {
+        param($ProductCode, $ProductName)
+        
+        $uninstallPaths = @(
+            "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+            "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+        )
+        
+        foreach ($path in $uninstallPaths) {
+            if (Test-Path $path) {
+                $found = Get-ChildItem $path -ErrorAction SilentlyContinue | 
+                    Get-ItemProperty -ErrorAction SilentlyContinue | 
+                    Where-Object {
                         $_.PSChildName -eq $ProductCode -or
                         $_.DisplayName -like "*$ProductName*"
                     }
-                    if ($found) { return $true }
+                if ($found) { return $true }
+            }
+        }
+        return $false
+    }
+    
+    try {
+        if ($isLocal) {
+            # Local check - run directly
+            $installed = & $checkRegistry $ProductCode $ProductName
+            return $installed
+        }
+        else {
+            # Remote check - try remote registry first (more reliable than WinRM)
+            # This uses the same access method as PSEXEC (ADMIN$ share implies registry access)
+            $regPaths = @(
+                "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
+                "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+            )
+            
+            foreach ($regPath in $regPaths) {
+                try {
+                    $reg = [Microsoft.Win32.RegistryKey]::OpenRemoteBaseKey('LocalMachine', $ComputerName)
+                    $uninstallKey = $reg.OpenSubKey($regPath)
+                    
+                    if ($uninstallKey) {
+                        foreach ($subKeyName in $uninstallKey.GetSubKeyNames()) {
+                            # Check ProductCode match
+                            if ($subKeyName -eq $ProductCode) {
+                                $reg.Close()
+                                return $true
+                            }
+                            
+                            # Check DisplayName match
+                            $subKey = $uninstallKey.OpenSubKey($subKeyName)
+                            if ($subKey) {
+                                $displayName = $subKey.GetValue('DisplayName')
+                                if ($displayName -and $displayName -like "*$ProductName*") {
+                                    $subKey.Close()
+                                    $uninstallKey.Close()
+                                    $reg.Close()
+                                    return $true
+                                }
+                                $subKey.Close()
+                            }
+                        }
+                        $uninstallKey.Close()
+                    }
+                    $reg.Close()
+                }
+                catch {
+                    # Remote registry access failed, continue to next path or return null
                 }
             }
             return $false
         }
-        
-        $params = @{
-            ComputerName = $ComputerName
-            ScriptBlock  = $scriptBlock
-            ArgumentList = @($ProductCode, $ProductName)
-            ErrorAction  = 'Stop'
-        }
-        
-        if ($Credential) {
-            $params['Credential'] = $Credential
-        }
-        
-        $installed = Invoke-Command @params
-        return $installed
     }
     catch {
         Write-Log "[$ComputerName] Validation check failed: $($_.Exception.Message)" -Level Warning
@@ -1718,15 +1760,15 @@ function Start-Deployment {
     $computers = @()
     
     if ($PSCmdlet.ParameterSetName -eq 'Manual') {
-        # Manual computer list
+        # Manual computer list - wrap in @() to ensure array even with single item
         Write-Log "Using manually specified computers: $($ComputerName.Count) system(s)" -Level Info
-        $computers = $ComputerName | ForEach-Object {
+        $computers = @($ComputerName | ForEach-Object {
             [PSCustomObject]@{
                 Name            = $_
                 DNSHostName     = $_
                 OperatingSystem = "Unknown"
             }
-        }
+        })
     }
     else {
         # AD Query
