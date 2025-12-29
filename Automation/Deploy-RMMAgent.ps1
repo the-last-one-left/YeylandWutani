@@ -1,28 +1,40 @@
 <#
 .SYNOPSIS
-    Deploys MSI packages to domain computers using PSEXEC.
+    Deploys MSI and EXE packages to domain computers using PSEXEC.
     
 .DESCRIPTION
     Yeyland Wutani - Building Better Systems
     
-    Enterprise MSI deployment tool that queries Active Directory for target
+    Enterprise installer deployment tool that queries Active Directory for target
     computers, validates connectivity and PSEXEC compatibility, then performs
-    silent MSI installation across accessible systems.
+    silent installation across accessible systems.
+    
+    Supports both MSI and EXE installers:
+    - MSI: Extracts ProductName, Version, ProductCode, and available properties
+    - EXE: Detects installer framework (NSIS, Inno Setup, InstallShield, etc.)
+           and determines appropriate silent switches automatically
     
     Auto-Detection:
-    - If no MSI is specified, scans current directory and prompts for selection
-    - Extracts MSI properties (ProductName, Version, ProductCode) for display
+    - Scans current directory for installer files and prompts for selection
     - Searches for PSExec.exe in current directory and common locations
-    - Prompts for paths if required files are not found
+    - For EXE files, detects framework and suggests silent switches
     
     Deployment Phases:
-    1. MSI Analysis    - Extract product info and available properties
-    2. AD Query        - Retrieve computer objects from specified OU or entire domain
-    3. Reachability    - Filter to online/responding systems via ping
-    4. Compatibility   - Validate PSEXEC prerequisites (ADMIN$, SMB, permissions)
-    5. Deployment      - Copy MSI and execute silent install via PSEXEC (parallel)
-    6. Validation      - Verify product installation on target systems
-    7. Reporting       - Generate HTML report and CSV export
+    1. Installer Analysis - Extract product info / detect framework
+    2. AD Query           - Retrieve computer objects from specified OU or domain
+    3. Reachability       - Filter to online/responding systems via ping
+    4. Compatibility      - Validate PSEXEC prerequisites (ADMIN$, SMB, permissions)
+    5. Deployment         - Copy installer and execute silent install via PSEXEC
+    6. Validation         - Verify product installation on target systems
+    7. Reporting          - Generate HTML report and CSV export
+    
+    Supported EXE Frameworks (auto-detected):
+    - NSIS (Nullsoft)      : /S
+    - Inno Setup           : /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+    - InstallShield        : /s /v"/qn /norestart" (Basic MSI) or requires .iss
+    - Wise InstallMaster   : /s
+    - WiX Burn             : /quiet /norestart
+    - InstallAware         : /s
     
     Prerequisites on target systems:
     - TCP Port 445 open (File and Printer Sharing)
@@ -30,16 +42,25 @@
     - Running account must have local admin rights
     - LanmanServer service running
     
-.PARAMETER MSIPath
-    Full path to the MSI installer file. If omitted, searches current directory
-    for .msi files and prompts for selection. Required for deployment (not TestOnly).
+.PARAMETER InstallerPath
+    Full path to the MSI or EXE installer file. If omitted, searches current 
+    directory for installer files and prompts for selection.
+    Alias: -MSIPath, -Path
     
 .PARAMETER TransformPath
-    Path to MST transform file(s) to apply during installation.
+    Path to MST transform file(s) to apply during MSI installation.
     
-.PARAMETER MSIProperties
-    Hashtable of MSI properties to pass to the installer.
-    Example: @{ INSTALLDIR = "C:\CustomPath"; ALLUSERS = "1" }
+.PARAMETER InstallerProperties
+    Hashtable of properties to pass to the installer.
+    For MSI: @{ INSTALLDIR = "C:\CustomPath"; ALLUSERS = "1" }
+    For EXE: Framework-specific, passed as additional arguments
+    Alias: -MSIProperties
+    
+.PARAMETER InstallerArguments
+    Override automatic silent switches with custom arguments.
+    For MSI: Replaces default "/qn /norestart"
+    For EXE: Replaces auto-detected framework switches
+    Alias: -MSIArguments, -EXEArguments
     
 .PARAMETER SearchBase
     Distinguished Name of OU to search. If omitted, searches entire domain.
@@ -57,11 +78,8 @@
 .PARAMETER ExcludePattern
     Regex pattern to exclude computers by name (e.g., "^SQL-|^DC-").
     
-.PARAMETER MSIArguments
-    Additional arguments to pass to msiexec. Default includes /qn /norestart.
-    
 .PARAMETER StagingPath
-    Remote path to stage MSI before install. Default: C:\Windows\Temp
+    Remote path to stage installer before execution. Default: C:\Windows\Temp
     
 .PARAMETER PSExecPath
     Path to PSExec.exe. If omitted, searches current directory, script directory,
@@ -80,7 +98,7 @@
     Directory for HTML report and CSV logs. Default: Current directory.
     
 .PARAMETER CollectLogs
-    Collect msiexec logs from remote systems after deployment.
+    Collect installation logs from remote systems after deployment.
     
 .PARAMETER SkipReachabilityCheck
     Skip the ping/reachability validation phase.
@@ -104,71 +122,73 @@
     Run readiness checks only without deploying. Generates a readiness report
     showing which systems are ready for deployment and which have issues.
     
-.PARAMETER ShowMSIProperties
-    Display all properties from the MSI database and exit (useful for discovery).
+.PARAMETER ShowInstallerInfo
+    Display installer information and exit:
+    - MSI: Shows all properties from the database
+    - EXE: Shows detected framework and suggested silent switches
+    Alias: -ShowMSIProperties
     
 .PARAMETER WhatIf
     Show what would be deployed without making changes.
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi"
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\RMMAgent.msi"
     
-    Deploy to all domain computers using default settings.
+    Deploy MSI to all domain computers using default settings.
+    
+.EXAMPLE
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Setup.exe"
+    
+    Deploy EXE to all domain computers. Auto-detects installer framework
+    and uses appropriate silent switches.
     
 .EXAMPLE
     .\Deploy-RMMAgent.ps1
     
-    Auto-detect: Searches current directory for MSI files and prompts for
-    selection. Also searches for PSExec.exe in current directory and common
-    locations.
+    Auto-detect: Searches current directory for installer files (.msi, .exe)
+    and prompts for selection.
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\Agent.msi" -ShowMSIProperties
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Setup.exe" -ShowInstallerInfo
     
-    Display all available MSI properties without deploying. Useful for
-    discovering what properties can be customized via -MSIProperties.
-    
-.EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -MSIProperties @{ SERVERURL="https://rmm.company.com"; APIKEY="abc123" }
-    
-    Deploy with custom MSI properties passed to the installer.
+    Analyze EXE file to detect framework and show recommended silent switches.
+    Does not deploy - useful for discovery before deployment.
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -TransformPath "C:\Installers\CustomSettings.mst"
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Agent.msi" -ShowInstallerInfo
     
-    Deploy with an MST transform file applied.
-    
-.EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -SearchBase "OU=Workstations,DC=contoso,DC=com" -ExcludeServers
-    
-    Deploy only to workstations in the specified OU.
+    Display all available MSI properties. Useful for discovering what 
+    properties can be customized via -InstallerProperties.
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -ComputerName "WKS01","WKS02","WKS03"
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Setup.exe" -InstallerArguments "/S /D=C:\CustomPath"
     
-    Deploy to specific computers by name.
-    
-.EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -ExcludePattern "^TEST-|^DEV-" -MaxConcurrent 20
-    
-    Deploy excluding test/dev machines with higher concurrency.
+    Deploy EXE with custom silent switches (overrides auto-detection).
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -TestOnly
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\RMMAgent.msi" -InstallerProperties @{ SERVERURL="https://rmm.company.com" }
     
-    Run readiness checks only - no deployment. Generates report showing which
-    systems are ready (reachable, port 445 open, ADMIN$ accessible) and which
-    have issues that need to be resolved before deployment.
+    Deploy MSI with custom properties passed to the installer.
     
 .EXAMPLE
-    .\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\Agent.msi" -RetryCount 2 -CollectLogs
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\RMMAgent.msi" -TransformPath "C:\Installers\CustomSettings.mst"
     
-    Deploy with automatic retry on failure and collect remote logs.
+    Deploy MSI with a transform file applied.
+    
+.EXAMPLE
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Setup.exe" -ComputerName "WKS01","WKS02" -Force
+    
+    Deploy EXE to specific computers without confirmation prompt.
+    
+.EXAMPLE
+    .\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Agent.msi" -TestOnly
+    
+    Run readiness checks only - no deployment.
     
 .NOTES
     Author:         Yeyland Wutani LLC
-    Version:        2.0.0
-    Requires:       PowerShell 5.1+, Active Directory module, PSExec.exe
+    Version:        2.1.0
+    Requires:       PowerShell 5.1+, Active Directory module (for AD query), PSExec.exe
     
 .LINK
     https://github.com/YeylandWutani
@@ -179,12 +199,13 @@
 [CmdletBinding(SupportsShouldProcess = $true, DefaultParameterSetName = 'ADQuery')]
 param(
     [Parameter(Position = 0)]
+    [Alias('MSIPath', 'Path')]
     [ValidateScript({ 
         if ($_ -and (Test-Path $_ -PathType Leaf)) { $true }
         elseif (-not $_) { $true }  # Allow empty when TestOnly
-        else { throw "MSI file not found: $_" }
+        else { throw "Installer file not found: $_" }
     })]
-    [string]$MSIPath,
+    [string]$InstallerPath,
     
     [Parameter()]
     [ValidateScript({ 
@@ -195,7 +216,8 @@ param(
     [string]$TransformPath,
     
     [Parameter()]
-    [hashtable]$MSIProperties,
+    [Alias('MSIProperties')]
+    [hashtable]$InstallerProperties,
     
     [Parameter(ParameterSetName = 'ADQuery')]
     [string]$SearchBase,
@@ -211,7 +233,8 @@ param(
     
     [string]$ExcludePattern,
     
-    [string]$MSIArguments = "/qn /norestart",
+    [Alias('MSIArguments', 'EXEArguments')]
+    [string]$InstallerArguments,
     
     [string]$StagingPath = "C:\Windows\Temp",
     
@@ -246,25 +269,29 @@ param(
     [Parameter(HelpMessage = "Run readiness checks only - no deployment")]
     [switch]$TestOnly,
     
-    [Parameter(HelpMessage = "Display MSI properties and exit")]
-    [switch]$ShowMSIProperties
+    [Parameter(HelpMessage = "Display installer info and exit")]
+    [Alias('ShowMSIProperties')]
+    [switch]$ShowInstallerInfo
 )
 
 #region Configuration
 $Script:Config = @{
-    Version          = "2.0.0"
-    Timestamp        = Get-Date -Format "yyyyMMdd_HHmmss"
-    MSIFileName      = $null
-    MSIProductName   = $null
-    MSIProductCode   = $null
-    MSIProductVersion = $null
-    MSIManufacturer  = $null
-    LogFile          = $null
-    HTMLReport       = $null
-    CSVExport        = $null
+    Version           = "2.1.0"
+    Timestamp         = Get-Date -Format "yyyyMMdd_HHmmss"
+    InstallerFileName = $null
+    InstallerType     = $null          # 'MSI' or 'EXE'
+    ProductName       = $null
+    ProductCode       = $null
+    ProductVersion    = $null
+    Manufacturer      = $null
+    EXEFramework      = $null          # NSIS, InnoSetup, InstallShield, etc.
+    SilentSwitches    = $null
+    LogFile           = $null
+    HTMLReport        = $null
+    CSVExport         = $null
     
     # Branding - Yeyland Wutani
-    Colors           = @{
+    Colors            = @{
         Primary    = "#FF6600"    # Orange
         Secondary  = "#6B7280"    # Grey
         Success    = "#10B981"    # Green
@@ -276,13 +303,89 @@ $Script:Config = @{
     }
     
     # Console colors (closest match to brand)
-    ConsoleColors    = @{
+    ConsoleColors     = @{
         Primary   = "DarkYellow"
         Secondary = "Gray"
         Success   = "Green"
         Warning   = "Yellow"
         Error     = "Red"
         Info      = "Cyan"
+    }
+    
+    # EXE Framework definitions
+    Frameworks        = @{
+        NSIS = @{
+            Name           = "NSIS (Nullsoft Scriptable Install System)"
+            Signatures     = @("NullsoftInst", "Nullsoft.NSIS", "NSIS Error")
+            SilentSwitches = "/S"
+            Notes          = "Switch is case-sensitive. /D=PATH sets install directory."
+            Reliability    = "High"
+        }
+        InnoSetup = @{
+            Name           = "Inno Setup"
+            Signatures     = @("Inno Setup", "InnoSetupVersion", "JRSoftware.InnoSetup")
+            SilentSwitches = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+            Notes          = "/DIR=PATH sets install dir. /LOG=file enables logging."
+            Reliability    = "High"
+        }
+        InstallShieldMSI = @{
+            Name           = "InstallShield (Basic MSI)"
+            Signatures     = @("InstallShield")
+            SecondaryCheck = "MSI"  # Must also contain MSI indicators
+            SilentSwitches = '/s /v"/qn /norestart"'
+            Notes          = "Wraps an MSI. The /v passes args to msiexec."
+            Reliability    = "Medium"
+        }
+        InstallShieldLegacy = @{
+            Name           = "InstallShield (Legacy/InstallScript)"
+            Signatures     = @("InstallShield")
+            ExcludeCheck   = "MSI"  # Must NOT contain MSI indicators
+            SilentSwitches = '/s /f1"response.iss"'
+            Notes          = "Requires pre-recorded response file. Create with: setup.exe /r"
+            Reliability    = "Low - Manual Setup Required"
+        }
+        Wise = @{
+            Name           = "Wise InstallMaster"
+            Signatures     = @("Wise Installation", "WiseMain", "Wise Solutions")
+            SilentSwitches = "/s"
+            Notes          = "Basic silent switch. May need additional parameters."
+            Reliability    = "Medium"
+        }
+        WiXBurn = @{
+            Name           = "WiX Burn Bootstrapper"
+            Signatures     = @("WixBurn", "WixBundleManifest", "wix.dll")
+            SilentSwitches = "/quiet /norestart"
+            Notes          = "/log logfile.txt enables logging. /passive shows progress."
+            Reliability    = "High"
+        }
+        InstallAware = @{
+            Name           = "InstallAware"
+            Signatures     = @("InstallAware", "INSTALLAWARE")
+            SilentSwitches = "/s"
+            Notes          = "May support TARGETDIR= for custom path."
+            Reliability    = "Medium"
+        }
+        AdvancedInstaller = @{
+            Name           = "Advanced Installer"
+            Signatures     = @("Advanced Installer", "Caphyon")
+            SilentSwitches = "/i /qn"
+            Notes          = "Usually wraps MSI. /exenoui for EXE UI suppression."
+            Reliability    = "Medium"
+        }
+        SFXRAR = @{
+            Name           = "Self-Extracting RAR/WinRAR"
+            Signatures     = @("WinRAR SFX", "WINRAR.SFX", "Rar!")
+            SilentSwitches = "/s"
+            Notes          = "Extracts files only. May contain another installer inside."
+            Reliability    = "Low - Extraction Only"
+        }
+        SFX7Zip = @{
+            Name           = "Self-Extracting 7-Zip"
+            Signatures     = @("7-Zip", "7z SFX", "7zS.sfx")
+            SilentSwitches = "-y"
+            Notes          = "Extracts files only. May contain another installer inside."
+            Reliability    = "Low - Extraction Only"
+        }
     }
 }
 
@@ -324,12 +427,12 @@ function Show-Banner {
     Write-Host $tagline.PadLeft(62) -ForegroundColor $Script:Config.ConsoleColors.Secondary
     Write-Host $border -ForegroundColor $Script:Config.ConsoleColors.Secondary
     Write-Host ""
-    Write-Host "  MSI Deployment Tool v$($Script:Config.Version)" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  Installer Deployment Tool v$($Script:Config.Version)" -ForegroundColor $Script:Config.ConsoleColors.Info
     if ($TestOnly) {
         Write-Host "  Mode: READINESS CHECK ONLY" -ForegroundColor $Script:Config.ConsoleColors.Warning
     }
-    elseif ($ShowMSIProperties) {
-        Write-Host "  Mode: MSI PROPERTY DISCOVERY" -ForegroundColor $Script:Config.ConsoleColors.Warning
+    elseif ($ShowInstallerInfo) {
+        Write-Host "  Mode: INSTALLER ANALYSIS" -ForegroundColor $Script:Config.ConsoleColors.Warning
     }
     Write-Host ""
 }
@@ -376,6 +479,234 @@ function Write-Phase {
     Write-Host " $Description" -ForegroundColor $Script:Config.ConsoleColors.Secondary
     Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Secondary
     Write-Host ""
+}
+#endregion
+
+#region Installer Type Detection
+function Get-InstallerType {
+    <#
+    .SYNOPSIS
+        Determines if the file is an MSI or EXE installer.
+    #>
+    param([string]$Path)
+    
+    $extension = [System.IO.Path]::GetExtension($Path).ToLower()
+    
+    switch ($extension) {
+        '.msi' { return 'MSI' }
+        '.exe' { return 'EXE' }
+        default { return 'Unknown' }
+    }
+}
+#endregion
+
+#region EXE Framework Detection
+function Get-EXEFramework {
+    <#
+    .SYNOPSIS
+        Detects the installer framework used to create an EXE file by scanning
+        for known signatures in the binary.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+    
+    $result = [PSCustomObject]@{
+        Framework        = "Unknown"
+        FrameworkName    = "Unknown Installer Framework"
+        SilentSwitches   = $null
+        Notes            = "Unable to detect framework. Try common switches: /s, /S, /silent, /quiet"
+        Reliability      = "Unknown"
+        Signatures       = @()
+        FileInfo         = $null
+    }
+    
+    try {
+        # Get file version info
+        $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        $result.FileInfo = $fileInfo
+        
+        # Read file content for signature scanning
+        # Read first 2MB and last 512KB for efficiency (signatures usually in headers/resources)
+        $fileSize = (Get-Item $Path).Length
+        $readSize = [Math]::Min($fileSize, 2MB)
+        $tailSize = [Math]::Min($fileSize, 512KB)
+        
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        
+        # Convert to string for pattern matching (using ASCII for signatures)
+        $contentHead = [System.Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min($bytes.Length, $readSize))
+        $contentTail = ""
+        if ($bytes.Length -gt $tailSize) {
+            $contentTail = [System.Text.Encoding]::ASCII.GetString($bytes, $bytes.Length - $tailSize, $tailSize)
+        }
+        $content = $contentHead + $contentTail
+        
+        # Also check file description and product name from version info
+        $versionStrings = @(
+            $fileInfo.FileDescription,
+            $fileInfo.ProductName,
+            $fileInfo.CompanyName,
+            $fileInfo.InternalName,
+            $fileInfo.OriginalFilename
+        ) -join " "
+        
+        $allContent = $content + " " + $versionStrings
+        
+        # Check for MSI indicators (for InstallShield detection)
+        $hasMSIIndicators = $allContent -match "Windows Installer|\.msi|MSI \(s\)|msiexec"
+        
+        # Scan for framework signatures
+        $detectedFramework = $null
+        $matchedSignatures = @()
+        
+        foreach ($fwKey in $Script:Config.Frameworks.Keys) {
+            $fw = $Script:Config.Frameworks[$fwKey]
+            
+            foreach ($sig in $fw.Signatures) {
+                if ($allContent -match [regex]::Escape($sig)) {
+                    $matchedSignatures += $sig
+                    
+                    # Handle InstallShield variants
+                    if ($fwKey -eq 'InstallShieldMSI' -and -not $hasMSIIndicators) {
+                        continue  # Skip MSI variant if no MSI indicators
+                    }
+                    if ($fwKey -eq 'InstallShieldLegacy' -and $hasMSIIndicators) {
+                        continue  # Skip legacy if MSI indicators present
+                    }
+                    
+                    $detectedFramework = $fwKey
+                    break
+                }
+            }
+            
+            if ($detectedFramework) { break }
+        }
+        
+        # Set result based on detection
+        if ($detectedFramework) {
+            $fw = $Script:Config.Frameworks[$detectedFramework]
+            $result.Framework = $detectedFramework
+            $result.FrameworkName = $fw.Name
+            $result.SilentSwitches = $fw.SilentSwitches
+            $result.Notes = $fw.Notes
+            $result.Reliability = $fw.Reliability
+            $result.Signatures = $matchedSignatures
+        }
+        else {
+            # Check version info for clues
+            if ($versionStrings -match "Setup|Install|Installer") {
+                $result.Notes = "Generic installer detected. Common silent switches to try: /s, /S, /silent, /quiet, /verysilent, -silent"
+            }
+        }
+    }
+    catch {
+        $result.Notes = "Error scanning file: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Show-EXEInfo {
+    <#
+    .SYNOPSIS
+        Displays detected framework and silent switch information for an EXE.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+    
+    $detection = Get-EXEFramework -Path $Path
+    $fileName = [System.IO.Path]::GetFileName($Path)
+    $fileSize = [math]::Round((Get-Item $Path).Length / 1MB, 2)
+    
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
+    Write-Host " EXE INSTALLER ANALYSIS" -ForegroundColor $Script:Config.ConsoleColors.Primary
+    Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
+    Write-Host ""
+    
+    # File Info
+    Write-Host "  FILE INFORMATION" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  ----------------" -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    Write-Host "  File Name    : $fileName" -ForegroundColor White
+    Write-Host "  File Size    : $fileSize MB" -ForegroundColor White
+    
+    if ($detection.FileInfo) {
+        $fi = $detection.FileInfo
+        if ($fi.ProductName) { Write-Host "  Product      : $($fi.ProductName)" -ForegroundColor White }
+        if ($fi.FileVersion) { Write-Host "  Version      : $($fi.FileVersion)" -ForegroundColor White }
+        if ($fi.CompanyName) { Write-Host "  Vendor       : $($fi.CompanyName)" -ForegroundColor White }
+        if ($fi.FileDescription) { Write-Host "  Description  : $($fi.FileDescription)" -ForegroundColor Gray }
+    }
+    Write-Host ""
+    
+    # Detection Result
+    Write-Host "  FRAMEWORK DETECTION" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  -------------------" -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    
+    $fwColor = if ($detection.Framework -eq "Unknown") { "Yellow" } else { "Green" }
+    Write-Host "  Detected     : $($detection.FrameworkName)" -ForegroundColor $fwColor
+    Write-Host "  Reliability  : $($detection.Reliability)" -ForegroundColor $(
+        switch ($detection.Reliability) {
+            "High" { "Green" }
+            "Medium" { "Yellow" }
+            default { "Red" }
+        }
+    )
+    
+    if ($detection.Signatures.Count -gt 0) {
+        Write-Host "  Signatures   : $($detection.Signatures -join ', ')" -ForegroundColor Gray
+    }
+    Write-Host ""
+    
+    # Silent Switches
+    Write-Host "  SILENT INSTALLATION" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  -------------------" -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    
+    if ($detection.SilentSwitches) {
+        Write-Host "  Switches     : " -ForegroundColor White -NoNewline
+        Write-Host "$($detection.SilentSwitches)" -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "  Switches     : Unknown - manual detection required" -ForegroundColor Yellow
+    }
+    
+    Write-Host "  Notes        : $($detection.Notes)" -ForegroundColor Gray
+    Write-Host ""
+    
+    # Example Command
+    Write-Host "  DEPLOYMENT COMMAND" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  ------------------" -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    
+    if ($detection.SilentSwitches) {
+        Write-Host "  $fileName $($detection.SilentSwitches)" -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "  Try: $fileName /s" -ForegroundColor Yellow
+        Write-Host "  Or:  $fileName /S" -ForegroundColor Yellow
+        Write-Host "  Or:  $fileName /silent" -ForegroundColor Yellow
+        Write-Host "  Or:  $fileName /quiet" -ForegroundColor Yellow
+    }
+    Write-Host ""
+    
+    # Common EXE switches reference
+    Write-Host "  COMMON EXE SILENT SWITCHES REFERENCE" -ForegroundColor $Script:Config.ConsoleColors.Info
+    Write-Host "  ------------------------------------" -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    Write-Host "  NSIS          : /S (case-sensitive)" -ForegroundColor Gray
+    Write-Host "  Inno Setup    : /VERYSILENT /SUPPRESSMSGBOXES /NORESTART" -ForegroundColor Gray
+    Write-Host "  InstallShield : /s /v`"/qn`"" -ForegroundColor Gray
+    Write-Host "  Wise          : /s" -ForegroundColor Gray
+    Write-Host "  WiX Burn      : /quiet /norestart" -ForegroundColor Gray
+    Write-Host "  Generic       : /s, /S, /silent, /quiet, -s, -silent" -ForegroundColor Gray
+    Write-Host ""
+    
+    Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Secondary
+    Write-Host ""
+    
+    return $detection
 }
 #endregion
 
@@ -681,58 +1012,87 @@ function Find-PSExec {
     return $null
 }
 
-function Find-LocalMSI {
+function Find-LocalInstaller {
     <#
     .SYNOPSIS
-        Searches current directory for MSI files and prompts user to select one.
+        Searches current directory for installer files and prompts user to select one.
     #>
     
     $currentDir = (Get-Location).Path
-    $msiFiles = Get-ChildItem -Path $currentDir -Filter "*.msi" -File -ErrorAction SilentlyContinue
+    # Note: -Include requires wildcard in path or -Recurse to work properly
+    $installerFiles = Get-ChildItem -Path "$currentDir\*" -Include "*.msi", "*.exe" -File -ErrorAction SilentlyContinue | 
+        Where-Object { $_.Name -notmatch '^(psexec|cmd|powershell|unins)' }
     
-    if (-not $msiFiles -or $msiFiles.Count -eq 0) {
+    if (-not $installerFiles -or $installerFiles.Count -eq 0) {
         return $null
     }
     
-    if ($msiFiles.Count -eq 1) {
-        # Single MSI found - show info and prompt to confirm
-        $msi = $msiFiles[0]
-        $msiInfo = Get-MSISummaryInfo -MSIPath $msi.FullName
+    if ($installerFiles.Count -eq 1) {
+        # Single installer found - show info and prompt to confirm
+        $installer = $installerFiles[0]
+        $installerType = Get-InstallerType -Path $installer.FullName
         
         Write-Host ""
-        Write-Host "  Found MSI in current directory:" -ForegroundColor Cyan
-        Write-Host "    File: $($msi.Name) ($([math]::Round($msi.Length / 1MB, 2)) MB)" -ForegroundColor White
-        if ($msiInfo.ProductName) {
-            Write-Host "    Product: $($msiInfo.ProductName) v$($msiInfo.ProductVersion)" -ForegroundColor White
-            Write-Host "    Vendor:  $($msiInfo.Manufacturer)" -ForegroundColor Gray
+        Write-Host "  Found installer in current directory:" -ForegroundColor Cyan
+        Write-Host "    File: $($installer.Name) ($([math]::Round($installer.Length / 1MB, 2)) MB)" -ForegroundColor White
+        Write-Host "    Type: $installerType" -ForegroundColor White
+        
+        if ($installerType -eq 'MSI') {
+            $msiInfo = Get-MSISummaryInfo -MSIPath $installer.FullName
+            if ($msiInfo.ProductName) {
+                Write-Host "    Product: $($msiInfo.ProductName) v$($msiInfo.ProductVersion)" -ForegroundColor White
+                Write-Host "    Vendor:  $($msiInfo.Manufacturer)" -ForegroundColor Gray
+            }
         }
+        elseif ($installerType -eq 'EXE') {
+            $exeInfo = Get-EXEFramework -Path $installer.FullName
+            Write-Host "    Framework: $($exeInfo.FrameworkName)" -ForegroundColor White
+            if ($exeInfo.FileInfo.ProductName) {
+                Write-Host "    Product: $($exeInfo.FileInfo.ProductName)" -ForegroundColor White
+            }
+        }
+        
         Write-Host ""
-        $confirm = Read-Host "  Use this MSI for deployment? (Y/N)"
+        $confirm = Read-Host "  Use this installer for deployment? (Y/N)"
         if ($confirm -match '^[Yy]') {
-            return $msi.FullName
+            return $installer.FullName
         }
         return $null
     }
     else {
-        # Multiple MSIs found - prompt to select
+        # Multiple installers found - prompt to select
         Write-Host ""
-        Write-Host "  Found $($msiFiles.Count) MSI files in current directory:" -ForegroundColor Cyan
+        Write-Host "  Found $($installerFiles.Count) installer files in current directory:" -ForegroundColor Cyan
         Write-Host ""
-        for ($i = 0; $i -lt $msiFiles.Count; $i++) {
-            $msi = $msiFiles[$i]
-            $msiInfo = Get-MSISummaryInfo -MSIPath $msi.FullName
-            $productDisplay = if ($msiInfo.ProductName) { " - $($msiInfo.ProductName)" } else { "" }
-            Write-Host "    [$($i + 1)] $($msi.Name)$productDisplay ($([math]::Round($msi.Length / 1MB, 2)) MB)" -ForegroundColor White
+        
+        for ($i = 0; $i -lt $installerFiles.Count; $i++) {
+            $installer = $installerFiles[$i]
+            $installerType = Get-InstallerType -Path $installer.FullName
+            $productDisplay = ""
+            
+            if ($installerType -eq 'MSI') {
+                $msiInfo = Get-MSISummaryInfo -MSIPath $installer.FullName
+                if ($msiInfo.ProductName) { $productDisplay = " - $($msiInfo.ProductName)" }
+            }
+            elseif ($installerType -eq 'EXE') {
+                $exeInfo = Get-EXEFramework -Path $installer.FullName
+                $productDisplay = " - [$($exeInfo.Framework)]"
+                if ($exeInfo.FileInfo.ProductName) {
+                    $productDisplay = " - $($exeInfo.FileInfo.ProductName) [$($exeInfo.Framework)]"
+                }
+            }
+            
+            Write-Host "    [$($i + 1)] [$installerType] $($installer.Name)$productDisplay ($([math]::Round($installer.Length / 1MB, 2)) MB)" -ForegroundColor White
         }
         Write-Host "    [0] None - cancel" -ForegroundColor Gray
         Write-Host ""
         
-        $selection = Read-Host "  Select MSI to deploy (0-$($msiFiles.Count))"
+        $selection = Read-Host "  Select installer to deploy (0-$($installerFiles.Count))"
         
         if ($selection -match '^\d+$') {
             $index = [int]$selection
-            if ($index -gt 0 -and $index -le $msiFiles.Count) {
-                return $msiFiles[$index - 1].FullName
+            if ($index -gt 0 -and $index -le $installerFiles.Count) {
+                return $installerFiles[$index - 1].FullName
             }
         }
         return $null
@@ -879,48 +1239,90 @@ function Test-PSExecCompatibility {
     return $result
 }
 
-function Build-MSIArguments {
+function Build-InstallCommand {
     <#
     .SYNOPSIS
-        Constructs the full msiexec argument string including properties and transforms.
+        Constructs the full installation command based on installer type.
     #>
     param(
-        [string]$MSIPath,
+        [string]$InstallerPath,
+        [string]$InstallerType,
         [string]$BaseArguments,
         [string]$TransformPath,
         [hashtable]$Properties,
-        [string]$LogPath
+        [string]$LogPath,
+        [string]$EXEFramework
     )
     
-    $args = @("/i `"$MSIPath`"")
+    $fileName = [System.IO.Path]::GetFileName($InstallerPath)
     
-    # Add transform if specified
-    if ($TransformPath) {
-        $args += "TRANSFORMS=`"$TransformPath`""
-    }
-    
-    # Add custom properties
-    if ($Properties -and $Properties.Count -gt 0) {
-        foreach ($key in $Properties.Keys) {
-            $args += "$key=`"$($Properties[$key])`""
+    if ($InstallerType -eq 'MSI') {
+        # MSI installation via msiexec
+        $args = @("/i `"$InstallerPath`"")
+        
+        # Add transform if specified
+        if ($TransformPath) {
+            $args += "TRANSFORMS=`"$TransformPath`""
+        }
+        
+        # Add custom properties
+        if ($Properties -and $Properties.Count -gt 0) {
+            foreach ($key in $Properties.Keys) {
+                $args += "$key=`"$($Properties[$key])`""
+            }
+        }
+        
+        # Add base arguments (default: /qn /norestart)
+        $effectiveArgs = if ($BaseArguments) { $BaseArguments } else { "/qn /norestart" }
+        $args += $effectiveArgs
+        
+        # Add logging
+        if ($LogPath) {
+            $args += "/l*v `"$LogPath`""
+        }
+        
+        return @{
+            Executable = "msiexec.exe"
+            Arguments  = $args -join ' '
+            FullCommand = "msiexec.exe $($args -join ' ')"
         }
     }
-    
-    # Add base arguments
-    $args += $BaseArguments
-    
-    # Add logging
-    if ($LogPath) {
-        $args += "/l*v `"$LogPath`""
+    else {
+        # EXE direct execution
+        $args = @()
+        
+        # Use provided arguments or auto-detected switches
+        if ($BaseArguments) {
+            $args += $BaseArguments
+        }
+        elseif ($Script:Config.SilentSwitches) {
+            $args += $Script:Config.SilentSwitches
+        }
+        
+        # Add custom properties (framework-specific handling)
+        if ($Properties -and $Properties.Count -gt 0) {
+            foreach ($key in $Properties.Keys) {
+                # Different frameworks use different property syntax
+                switch ($EXEFramework) {
+                    'NSIS' { $args += "/$key=$($Properties[$key])" }
+                    'InnoSetup' { $args += "/$key=`"$($Properties[$key])`"" }
+                    default { $args += "$key=$($Properties[$key])" }
+                }
+            }
+        }
+        
+        return @{
+            Executable = "`"$InstallerPath`""
+            Arguments  = $args -join ' '
+            FullCommand = "`"$InstallerPath`" $($args -join ' ')"
+        }
     }
-    
-    return $args -join ' '
 }
 
-function Copy-MSIToRemote {
+function Copy-InstallerToRemote {
     <#
     .SYNOPSIS
-        Copies MSI file (and transform if specified) to remote computer staging location.
+        Copies installer file (and transform if specified) to remote computer staging location.
     #>
     param(
         [string]$ComputerName,
@@ -938,9 +1340,9 @@ function Copy-MSIToRemote {
             New-Item -ItemType Directory -Path $remotePath -Force | Out-Null
         }
         
-        # Copy MSI
-        $msiDest = Join-Path $remotePath ([System.IO.Path]::GetFileName($SourcePath))
-        Copy-Item -Path $SourcePath -Destination $msiDest -Force -ErrorAction Stop
+        # Copy installer
+        $installerDest = Join-Path $remotePath ([System.IO.Path]::GetFileName($SourcePath))
+        Copy-Item -Path $SourcePath -Destination $installerDest -Force -ErrorAction Stop
         
         # Copy transform if specified
         $transformDest = $null
@@ -949,11 +1351,13 @@ function Copy-MSIToRemote {
             Copy-Item -Path $TransformPath -Destination $transformDest -Force -ErrorAction Stop
         }
         
-        # Verify MSI copy
-        if (Test-Path $msiDest) {
+        # Verify copy
+        if (Test-Path $installerDest) {
             return @{
-                MSIPath       = $msiDest
+                InstallerPath = $installerDest
+                LocalPath     = Join-Path $StagingPath ([System.IO.Path]::GetFileName($SourcePath))
                 TransformPath = $transformDest
+                LocalTransform = if ($TransformPath) { Join-Path $StagingPath ([System.IO.Path]::GetFileName($TransformPath)) } else { $null }
                 Success       = $true
             }
         }
@@ -970,13 +1374,12 @@ function Copy-MSIToRemote {
 function Invoke-PSExecInstall {
     <#
     .SYNOPSIS
-        Executes MSI installation via PSEXEC.
+        Executes installation via PSEXEC.
     #>
     param(
         [string]$PSExecPath,
         [string]$ComputerName,
-        [string]$MSIPath,
-        [string]$Arguments,
+        [string]$Command,
         [PSCredential]$Credential,
         [int]$TimeoutSeconds
     )
@@ -993,12 +1396,6 @@ function Invoke-PSExecInstall {
     $startTime = Get-Date
     
     # Build PSEXEC command
-    # -accepteula : Auto-accept EULA
-    # -nobanner   : Suppress startup banner
-    # -s          : Run as SYSTEM (important for msiexec)
-    # -e          : Don't load user profile (prevents msiexec issues)
-    # -n          : Connection timeout
-    
     $psexecArgs = @(
         "\\$ComputerName"
         "-accepteula"
@@ -1016,12 +1413,11 @@ function Invoke-PSExecInstall {
         )
     }
     
-    # Add msiexec command
-    $msiCommand = "msiexec.exe $Arguments"
-    $psexecArgs += $msiCommand
+    # Add command
+    $psexecArgs += $Command
     
     try {
-        Write-Log "[$ComputerName] Executing: msiexec.exe $Arguments" -Level Info
+        Write-Log "[$ComputerName] Executing: $Command" -Level Info
         
         # Start process with timeout
         $processInfo = New-Object System.Diagnostics.ProcessStartInfo
@@ -1053,10 +1449,7 @@ function Invoke-PSExecInstall {
             $result.ExitCode = $process.ExitCode
             $result.Output = $stdout.Result + "`n" + $stderr.Result
             
-            # PSEXEC returns msiexec exit code
-            # 0 = Success
-            # 3010 = Success, reboot required
-            # 1641 = Success, installer initiated reboot
+            # Interpret exit codes
             switch ($result.ExitCode) {
                 0 {
                     $result.Success = $true
@@ -1079,13 +1472,19 @@ function Invoke-PSExecInstall {
                     $result.ErrorMessage = "Another installation in progress (1618)"
                 }
                 1619 {
-                    $result.ErrorMessage = "MSI package could not be opened (1619)"
+                    $result.ErrorMessage = "Package could not be opened (1619)"
                 }
                 1638 {
                     $result.ErrorMessage = "Another version already installed (1638)"
                 }
                 default {
-                    $result.ErrorMessage = "Installation failed with exit code: $($result.ExitCode)"
+                    if ($result.ExitCode -eq 0 -or ($result.ExitCode -ge 0 -and $result.ExitCode -le 3)) {
+                        # Some EXE installers use 0-3 as success
+                        $result.Success = $true
+                    }
+                    else {
+                        $result.ErrorMessage = "Installation failed with exit code: $($result.ExitCode)"
+                    }
                 }
             }
         }
@@ -1148,7 +1547,6 @@ function Test-ProductInstalled {
         }
         else {
             # Remote check - try remote registry first (more reliable than WinRM)
-            # This uses the same access method as PSEXEC (ADMIN$ share implies registry access)
             $regPaths = @(
                 "SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall",
                 "SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
@@ -1200,7 +1598,7 @@ function Test-ProductInstalled {
 function Copy-RemoteLog {
     <#
     .SYNOPSIS
-        Copies the msiexec log from remote system back to local output folder.
+        Copies the installation log from remote system back to local output folder.
     #>
     param(
         [string]$ComputerName,
@@ -1211,7 +1609,7 @@ function Copy-RemoteLog {
     try {
         $remotePath = "\\$ComputerName\$($RemoteLogPath.Replace(':', '$'))"
         if (Test-Path $remotePath) {
-            $localLogPath = Join-Path $LocalOutputPath "msiexec_$ComputerName`_$($Script:Config.Timestamp).log"
+            $localLogPath = Join-Path $LocalOutputPath "install_$ComputerName`_$($Script:Config.Timestamp).log"
             Copy-Item -Path $remotePath -Destination $localLogPath -Force -ErrorAction Stop
             return $localLogPath
         }
@@ -1225,22 +1623,22 @@ function Copy-RemoteLog {
 function Remove-StagedFiles {
     <#
     .SYNOPSIS
-        Cleans up MSI and related files from remote staging location.
+        Cleans up installer and related files from remote staging location.
     #>
     param(
         [string]$ComputerName,
         [string]$StagingPath,
-        [string]$MSIFileName,
+        [string]$InstallerFileName,
         [string]$TransformFileName
     )
     
     try {
         $remotePath = "\\$ComputerName\$($StagingPath.Replace(':', '$'))"
         
-        # Remove MSI
-        $msiPath = Join-Path $remotePath $MSIFileName
-        if (Test-Path $msiPath) {
-            Remove-Item -Path $msiPath -Force -ErrorAction SilentlyContinue
+        # Remove installer
+        $installerPath = Join-Path $remotePath $InstallerFileName
+        if (Test-Path $installerPath) {
+            Remove-Item -Path $installerPath -Force -ErrorAction SilentlyContinue
         }
         
         # Remove Transform
@@ -1252,7 +1650,7 @@ function Remove-StagedFiles {
         }
         
         # Remove log
-        $logPattern = Join-Path $remotePath "msiexec_*.log"
+        $logPattern = Join-Path $remotePath "install_*.log"
         Get-ChildItem -Path $logPattern -ErrorAction SilentlyContinue | Remove-Item -Force -ErrorAction SilentlyContinue
     }
     catch {
@@ -1283,22 +1681,27 @@ function New-HTMLReport {
         $readinessRate = if ($Script:Stats.TotalComputers -gt 0) {
             [math]::Round(($readyCount / $Script:Stats.TotalComputers) * 100, 1)
         } else { 0 }
-        $reportTitle = "MSI Deployment Readiness Report"
-        $filePrefix = "MSI_Readiness"
+        $reportTitle = "Deployment Readiness Report"
+        $filePrefix = "Deployment_Readiness"
     }
     else {
         $successRate = if ($Script:Stats.TotalComputers -gt 0) {
             [math]::Round(($Script:Stats.SuccessfulDeployments / $Script:Stats.TotalComputers) * 100, 1)
         } else { 0 }
-        $reportTitle = "MSI Deployment Report"
-        $filePrefix = "MSI_Deployment"
+        $reportTitle = "Installer Deployment Report"
+        $filePrefix = "Deployment"
     }
     
     # Product info for header
-    $productInfo = if ($Script:Config.MSIProductName) {
-        "$($Script:Config.MSIProductName) v$($Script:Config.MSIProductVersion)"
+    $productInfo = if ($Script:Config.ProductName) {
+        "$($Script:Config.ProductName) v$($Script:Config.ProductVersion)"
     } else {
-        $Script:Config.MSIFileName
+        $Script:Config.InstallerFileName
+    }
+    
+    $installerTypeInfo = "[$($Script:Config.InstallerType)]"
+    if ($Script:Config.InstallerType -eq 'EXE' -and $Script:Config.EXEFramework) {
+        $installerTypeInfo += " $($Script:Config.EXEFramework)"
     }
     
     $html = @"
@@ -1318,8 +1721,6 @@ function New-HTMLReport {
             padding: 20px;
         }
         .container { max-width: 1400px; margin: 0 auto; }
-        
-        /* Header */
         .header {
             background: linear-gradient(135deg, $($c.Surface) 0%, $($c.Background) 100%);
             border-left: 4px solid $($c.Primary);
@@ -1327,132 +1728,34 @@ function New-HTMLReport {
             margin-bottom: 30px;
             border-radius: 8px;
         }
-        .header h1 {
-            color: $($c.Primary);
-            font-size: 28px;
-            margin-bottom: 5px;
-        }
-        .header .tagline {
-            color: $($c.Secondary);
-            font-size: 14px;
-            letter-spacing: 2px;
-        }
-        .header .meta {
-            margin-top: 15px;
-            color: $($c.Secondary);
-            font-size: 13px;
-        }
-        .header .product-info {
-            margin-top: 10px;
-            padding: 10px;
-            background: rgba(255,102,0,0.1);
-            border-radius: 4px;
-        }
-        
-        /* Stats Grid */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 30px;
-        }
-        .stat-card {
-            background: $($c.Surface);
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-        }
-        .stat-card .value {
-            font-size: 36px;
-            font-weight: bold;
-            margin-bottom: 5px;
-        }
-        .stat-card .label {
-            color: $($c.Secondary);
-            font-size: 13px;
-            text-transform: uppercase;
-        }
+        .header h1 { color: $($c.Primary); font-size: 28px; margin-bottom: 5px; }
+        .header .tagline { color: $($c.Secondary); font-size: 14px; letter-spacing: 2px; }
+        .header .meta { margin-top: 15px; color: $($c.Secondary); font-size: 13px; }
+        .header .product-info { margin-top: 10px; padding: 10px; background: rgba(255,102,0,0.1); border-radius: 4px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin-bottom: 30px; }
+        .stat-card { background: $($c.Surface); padding: 20px; border-radius: 8px; text-align: center; }
+        .stat-card .value { font-size: 36px; font-weight: bold; margin-bottom: 5px; }
+        .stat-card .label { color: $($c.Secondary); font-size: 13px; text-transform: uppercase; }
         .stat-card.success .value { color: $($c.Success); }
         .stat-card.warning .value { color: $($c.Warning); }
         .stat-card.error .value { color: $($c.Error); }
         .stat-card.info .value { color: $($c.Primary); }
-        
-        /* Progress Bar */
-        .progress-container {
-            background: $($c.Surface);
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-        }
-        .progress-bar {
-            background: $($c.Background);
-            height: 30px;
-            border-radius: 4px;
-            overflow: hidden;
-            margin-top: 10px;
-        }
-        .progress-fill {
-            height: 100%;
-            transition: width 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            color: white;
-            font-weight: bold;
-        }
+        .progress-container { background: $($c.Surface); padding: 20px; border-radius: 8px; margin-bottom: 30px; }
+        .progress-bar { background: $($c.Background); height: 30px; border-radius: 4px; overflow: hidden; margin-top: 10px; }
+        .progress-fill { height: 100%; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; }
         .progress-fill.success { background: $($c.Success); }
-        .progress-fill.error { background: $($c.Error); }
-        
-        /* Results Table */
-        .results-section {
-            background: $($c.Surface);
-            border-radius: 8px;
-            overflow: hidden;
-            margin-bottom: 30px;
-        }
-        .results-section h2 {
-            padding: 20px;
-            border-bottom: 1px solid $($c.Background);
-            color: $($c.Primary);
-        }
-        table {
-            width: 100%;
-            border-collapse: collapse;
-        }
-        th {
-            background: $($c.Background);
-            padding: 12px 15px;
-            text-align: left;
-            color: $($c.Secondary);
-            font-size: 12px;
-            text-transform: uppercase;
-        }
-        td {
-            padding: 12px 15px;
-            border-bottom: 1px solid $($c.Background);
-        }
+        .results-section { background: $($c.Surface); border-radius: 8px; overflow: hidden; margin-bottom: 30px; }
+        .results-section h2 { padding: 20px; border-bottom: 1px solid $($c.Background); color: $($c.Primary); }
+        table { width: 100%; border-collapse: collapse; }
+        th { background: $($c.Background); padding: 12px 15px; text-align: left; color: $($c.Secondary); font-size: 12px; text-transform: uppercase; }
+        td { padding: 12px 15px; border-bottom: 1px solid $($c.Background); }
         tr:hover { background: rgba(255,255,255,0.02); }
-        
-        /* Status Badges */
-        .badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 4px;
-            font-size: 12px;
-            font-weight: 600;
-        }
+        .badge { display: inline-block; padding: 4px 12px; border-radius: 4px; font-size: 12px; font-weight: 600; }
         .badge-success { background: rgba(16, 185, 129, 0.2); color: $($c.Success); }
         .badge-error { background: rgba(239, 68, 68, 0.2); color: $($c.Error); }
         .badge-warning { background: rgba(245, 158, 11, 0.2); color: $($c.Warning); }
         .badge-info { background: rgba(255, 102, 0, 0.2); color: $($c.Primary); }
-        
-        /* Footer */
-        .footer {
-            text-align: center;
-            padding: 20px;
-            color: $($c.Secondary);
-            font-size: 12px;
-        }
+        .footer { text-align: center; padding: 20px; color: $($c.Secondary); font-size: 12px; }
         .footer a { color: $($c.Primary); text-decoration: none; }
     </style>
 </head>
@@ -1463,7 +1766,7 @@ function New-HTMLReport {
             <div class="tagline">YEYLAND WUTANI - BUILDING BETTER SYSTEMS</div>
             <div class="product-info">
                 <strong>Product:</strong> $productInfo<br>
-                <strong>Package:</strong> $($Script:Config.MSIFileName)$(if ($Script:Config.MSIProductCode) { "<br><strong>Product Code:</strong> $($Script:Config.MSIProductCode)" })
+                <strong>Package:</strong> $($Script:Config.InstallerFileName) $installerTypeInfo$(if ($Script:Config.ProductCode) { "<br><strong>Product Code:</strong> $($Script:Config.ProductCode)" })$(if ($Script:Config.SilentSwitches) { "<br><strong>Silent Switches:</strong> $($Script:Config.SilentSwitches)" })
             </div>
             <div class="meta">
                 <strong>Generated:</strong> $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss")<br>
@@ -1474,132 +1777,60 @@ function New-HTMLReport {
         <div class="stats-grid">
 $(if ($TestOnly) {
 @"
-            <div class="stat-card info">
-                <div class="value">$($Script:Stats.TotalComputers)</div>
-                <div class="label">Total Targets</div>
-            </div>
-            <div class="stat-card info">
-                <div class="value">$($Script:Stats.ReachableComputers)</div>
-                <div class="label">Reachable</div>
-            </div>
-            <div class="stat-card success">
-                <div class="value">$readyCount</div>
-                <div class="label">Ready</div>
-            </div>
-            <div class="stat-card error">
-                <div class="value">$notReadyCount</div>
-                <div class="label">Not Ready</div>
-            </div>
+            <div class="stat-card info"><div class="value">$($Script:Stats.TotalComputers)</div><div class="label">Total Targets</div></div>
+            <div class="stat-card info"><div class="value">$($Script:Stats.ReachableComputers)</div><div class="label">Reachable</div></div>
+            <div class="stat-card success"><div class="value">$readyCount</div><div class="label">Ready</div></div>
+            <div class="stat-card error"><div class="value">$notReadyCount</div><div class="label">Not Ready</div></div>
 "@
 } else {
 @"
-            <div class="stat-card info">
-                <div class="value">$($Script:Stats.TotalComputers)</div>
-                <div class="label">Total Targets</div>
-            </div>
-            <div class="stat-card info">
-                <div class="value">$($Script:Stats.ReachableComputers)</div>
-                <div class="label">Reachable</div>
-            </div>
-            <div class="stat-card info">
-                <div class="value">$($Script:Stats.CompatibleComputers)</div>
-                <div class="label">Compatible</div>
-            </div>
-            <div class="stat-card success">
-                <div class="value">$($Script:Stats.SuccessfulDeployments)</div>
-                <div class="label">Successful</div>
-            </div>
-            <div class="stat-card error">
-                <div class="value">$($Script:Stats.FailedDeployments)</div>
-                <div class="label">Failed</div>
-            </div>
-            <div class="stat-card warning">
-                <div class="value">$($Script:Stats.SkippedComputers)</div>
-                <div class="label">Skipped</div>
-            </div>
+            <div class="stat-card info"><div class="value">$($Script:Stats.TotalComputers)</div><div class="label">Total Targets</div></div>
+            <div class="stat-card info"><div class="value">$($Script:Stats.ReachableComputers)</div><div class="label">Reachable</div></div>
+            <div class="stat-card info"><div class="value">$($Script:Stats.CompatibleComputers)</div><div class="label">Compatible</div></div>
+            <div class="stat-card success"><div class="value">$($Script:Stats.SuccessfulDeployments)</div><div class="label">Successful</div></div>
+            <div class="stat-card error"><div class="value">$($Script:Stats.FailedDeployments)</div><div class="label">Failed</div></div>
+            <div class="stat-card warning"><div class="value">$($Script:Stats.SkippedComputers)</div><div class="label">Skipped</div></div>
 "@
 })
         </div>
         
         <div class="progress-container">
 $(if ($TestOnly) {
-@"
-            <strong>Deployment Readiness: ${readinessRate}%</strong>
-            <div class="progress-bar">
-                <div class="progress-fill success" style="width: ${readinessRate}%">${readinessRate}%</div>
-            </div>
-"@
+            "<strong>Deployment Readiness: ${readinessRate}%</strong><div class='progress-bar'><div class='progress-fill success' style='width: ${readinessRate}%'>${readinessRate}%</div></div>"
 } else {
-@"
-            <strong>Deployment Success Rate: ${successRate}%</strong>
-            <div class="progress-bar">
-                <div class="progress-fill success" style="width: ${successRate}%">${successRate}%</div>
-            </div>
-"@
+            "<strong>Deployment Success Rate: ${successRate}%</strong><div class='progress-bar'><div class='progress-fill success' style='width: ${successRate}%'>${successRate}%</div></div>"
 })
         </div>
         
         <div class="results-section">
             <h2>$(if ($TestOnly) { 'Readiness Assessment Results' } else { 'Deployment Results' })</h2>
             <table>
-                <thead>
-                    <tr>
-                        <th>Computer</th>
-                        <th>Operating System</th>
-                        <th>Status</th>
-                        <th>Exit Code</th>
-                        <th>Validated</th>
-                        <th>Duration</th>
-                        <th>Details</th>
-                    </tr>
-                </thead>
+                <thead><tr><th>Computer</th><th>Operating System</th><th>Status</th><th>Exit Code</th><th>Validated</th><th>Duration</th><th>Details</th></tr></thead>
                 <tbody>
 "@
 
-    # Add result rows
     foreach ($result in $Script:Results) {
         $statusBadge = switch ($result.Status) {
-            'Success'      { '<span class="badge badge-success">Success</span>' }
-            'Ready'        { '<span class="badge badge-success">Ready</span>' }
-            'Unreachable'  { '<span class="badge badge-warning">Unreachable</span>' }
+            'Success' { '<span class="badge badge-success">Success</span>' }
+            'Ready' { '<span class="badge badge-success">Ready</span>' }
+            'Unreachable' { '<span class="badge badge-warning">Unreachable</span>' }
             'Incompatible' { '<span class="badge badge-warning">Incompatible</span>' }
-            'Failed'       { '<span class="badge badge-error">Failed</span>' }
-            'Skipped'      { '<span class="badge badge-info">Skipped</span>' }
-            default        { '<span class="badge badge-info">Unknown</span>' }
+            'Failed' { '<span class="badge badge-error">Failed</span>' }
+            'Skipped' { '<span class="badge badge-info">Skipped</span>' }
+            default { '<span class="badge badge-info">Unknown</span>' }
         }
+        $durationStr = if ($result.Duration) { "$([math]::Round($result.Duration.TotalSeconds, 1))s" } else { "-" }
+        $validatedStr = switch ($result.Validated) { $true { '<span class="badge badge-success">Yes</span>' }; $false { '<span class="badge badge-error">No</span>' }; default { '-' } }
         
-        $durationStr = if ($result.Duration) { 
-            "$([math]::Round($result.Duration.TotalSeconds, 1))s" 
-        } else { 
-            "-" 
-        }
-        
-        $validatedStr = switch ($result.Validated) {
-            $true  { '<span class="badge badge-success">Yes</span>' }
-            $false { '<span class="badge badge-error">No</span>' }
-            default { '-' }
-        }
-        
-        $html += @"
-                    <tr>
-                        <td><strong>$($result.ComputerName)</strong></td>
-                        <td>$($result.OperatingSystem)</td>
-                        <td>$statusBadge</td>
-                        <td>$($result.ExitCode)</td>
-                        <td>$validatedStr</td>
-                        <td>$durationStr</td>
-                        <td>$($result.Message)</td>
-                    </tr>
-"@
+        $html += "<tr><td><strong>$($result.ComputerName)</strong></td><td>$($result.OperatingSystem)</td><td>$statusBadge</td><td>$($result.ExitCode)</td><td>$validatedStr</td><td>$durationStr</td><td>$($result.Message)</td></tr>`n"
     }
 
     $html += @"
                 </tbody>
             </table>
         </div>
-        
         <div class="footer">
-            <p>Generated by <a href="https://github.com/YeylandWutani">Yeyland Wutani</a> MSI Deployment Tool v$($Script:Config.Version)</p>
+            <p>Generated by <a href="https://github.com/YeylandWutani">Yeyland Wutani</a> Installer Deployment Tool v$($Script:Config.Version)</p>
             <p>Building Better Systems</p>
         </div>
     </div>
@@ -1614,13 +1845,9 @@ $(if ($TestOnly) {
 }
 
 function Export-ResultsCSV {
-    <#
-    .SYNOPSIS
-        Exports deployment results to CSV.
-    #>
     param([string]$OutputPath)
     
-    $csvPath = Join-Path $OutputPath "MSI_Deployment_$($Script:Config.Timestamp).csv"
+    $csvPath = Join-Path $OutputPath "Deployment_$($Script:Config.Timestamp).csv"
     $Script:Results | Export-Csv -Path $csvPath -NoTypeInformation -Force
     
     return $csvPath
@@ -1632,73 +1859,118 @@ function Start-Deployment {
     Show-Banner
     
     #==========================================================================
-    # ShowMSIProperties Mode - Just display MSI info and exit
+    # ShowInstallerInfo Mode - Just display info and exit
     #==========================================================================
-    if ($ShowMSIProperties) {
-        if (-not $MSIPath) {
-            # Try auto-detect
-            $MSIPath = Find-LocalMSI
+    if ($ShowInstallerInfo) {
+        if (-not $InstallerPath) {
+            $InstallerPath = Find-LocalInstaller
         }
         
-        if (-not $MSIPath -or -not (Test-Path $MSIPath)) {
-            Write-Log "Please specify an MSI file with -MSIPath" -Level Error
+        if (-not $InstallerPath -or -not (Test-Path $InstallerPath)) {
+            Write-Log "Please specify an installer file with -InstallerPath" -Level Error
             return
         }
         
-        Show-MSIPropertyReport -MSIPath $MSIPath
+        $installerType = Get-InstallerType -Path $InstallerPath
+        
+        if ($installerType -eq 'MSI') {
+            Show-MSIPropertyReport -MSIPath $InstallerPath
+        }
+        elseif ($installerType -eq 'EXE') {
+            Show-EXEInfo -Path $InstallerPath
+        }
+        else {
+            Write-Log "Unknown installer type: $InstallerPath" -Level Error
+        }
         return
     }
     
-    # Validate MSIPath is provided when not in TestOnly mode
-    if (-not $TestOnly -and -not $MSIPath) {
-        # Try to auto-detect MSI in current directory
-        Write-Log "No MSI path specified - checking current directory..." -Level Info
-        $detectedMSI = Find-LocalMSI
-        
-        if ($detectedMSI) {
-            $script:MSIPath = $detectedMSI
-        }
-        else {
-            Write-Log "No MSI file found or selected" -Level Error
-            Write-Host ""
-            Write-Host "  Usage:" -ForegroundColor Yellow
-            Write-Host "    Readiness check:  .\Deploy-RMMAgent.ps1 -TestOnly" -ForegroundColor Gray
-            Write-Host "    MSI discovery:    .\Deploy-RMMAgent.ps1 -MSIPath 'Agent.msi' -ShowMSIProperties" -ForegroundColor Gray
-            Write-Host "    Full deployment:  .\Deploy-RMMAgent.ps1 -MSIPath 'C:\Path\To\Agent.msi'" -ForegroundColor Gray
-            Write-Host "    Auto-detect:      Place MSI in current directory and run without -MSIPath" -ForegroundColor Gray
-            Write-Host ""
-            return
+    # Resolve installer path
+    if (-not $InstallerPath) {
+        if (-not $TestOnly) {
+            Write-Log "No installer path specified - checking current directory..." -Level Info
+            $InstallerPath = Find-LocalInstaller
+            
+            if (-not $InstallerPath) {
+                Write-Log "No installer file found or selected" -Level Error
+                Write-Host ""
+                Write-Host "  Usage:" -ForegroundColor Yellow
+                Write-Host "    Readiness check:  .\Deploy-RMMAgent.ps1 -TestOnly" -ForegroundColor Gray
+                Write-Host "    Analyze MSI:      .\Deploy-RMMAgent.ps1 -InstallerPath 'App.msi' -ShowInstallerInfo" -ForegroundColor Gray
+                Write-Host "    Analyze EXE:      .\Deploy-RMMAgent.ps1 -InstallerPath 'Setup.exe' -ShowInstallerInfo" -ForegroundColor Gray
+                Write-Host "    Deploy:           .\Deploy-RMMAgent.ps1 -InstallerPath 'C:\Path\To\Installer'" -ForegroundColor Gray
+                Write-Host ""
+                return
+            }
         }
     }
     
-    # Use the resolved MSI path
-    $effectiveMSIPath = if ($script:MSIPath) { $script:MSIPath } else { $MSIPath }
+    # Set script-level path
+    $script:InstallerPath = $InstallerPath
     
-    # Extract MSI info for display and validation
-    if ($effectiveMSIPath -and (Test-Path $effectiveMSIPath)) {
-        $msiInfo = Get-MSISummaryInfo -MSIPath $effectiveMSIPath
-        $Script:Config.MSIFileName = [System.IO.Path]::GetFileName($effectiveMSIPath)
-        $Script:Config.MSIProductName = $msiInfo.ProductName
-        $Script:Config.MSIProductVersion = $msiInfo.ProductVersion
-        $Script:Config.MSIProductCode = $msiInfo.ProductCode
-        $Script:Config.MSIManufacturer = $msiInfo.Manufacturer
+    # Determine installer type and gather info
+    if ($InstallerPath -and (Test-Path $InstallerPath)) {
+        $Script:Config.InstallerType = Get-InstallerType -Path $InstallerPath
+        $Script:Config.InstallerFileName = [System.IO.Path]::GetFileName($InstallerPath)
+        
+        if ($Script:Config.InstallerType -eq 'MSI') {
+            $msiInfo = Get-MSISummaryInfo -MSIPath $InstallerPath
+            $Script:Config.ProductName = $msiInfo.ProductName
+            $Script:Config.ProductVersion = $msiInfo.ProductVersion
+            $Script:Config.ProductCode = $msiInfo.ProductCode
+            $Script:Config.Manufacturer = $msiInfo.Manufacturer
+            $Script:Config.SilentSwitches = if ($InstallerArguments) { $InstallerArguments } else { "/qn /norestart" }
+        }
+        elseif ($Script:Config.InstallerType -eq 'EXE') {
+            $exeInfo = Get-EXEFramework -Path $InstallerPath
+            $Script:Config.EXEFramework = $exeInfo.Framework
+            $Script:Config.ProductName = $exeInfo.FileInfo.ProductName
+            $Script:Config.ProductVersion = $exeInfo.FileInfo.FileVersion
+            $Script:Config.Manufacturer = $exeInfo.FileInfo.CompanyName
+            $Script:Config.SilentSwitches = if ($InstallerArguments) { $InstallerArguments } else { $exeInfo.SilentSwitches }
+            
+            # Warn if unknown framework
+            if ($exeInfo.Framework -eq "Unknown" -and -not $InstallerArguments) {
+                Write-Log "Unknown EXE framework detected" -Level Warning
+                Write-Host ""
+                Write-Host "  Unable to auto-detect installer framework." -ForegroundColor Yellow
+                Write-Host "  Run with -ShowInstallerInfo for analysis, or provide -InstallerArguments manually." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Host "  Common silent switches to try:" -ForegroundColor Cyan
+                Write-Host "    /s, /S, /silent, /quiet, /verysilent" -ForegroundColor Gray
+                Write-Host ""
+                
+                $customArgs = Read-Host "  Enter silent switches (or press Enter to cancel)"
+                if ($customArgs) {
+                    $Script:Config.SilentSwitches = $customArgs
+                }
+                else {
+                    Write-Log "Deployment cancelled - no silent switches provided" -Level Warning
+                    return
+                }
+            }
+        }
     }
     else {
-        $Script:Config.MSIFileName = "(Readiness Check Only)"
+        $Script:Config.InstallerFileName = "(Readiness Check Only)"
     }
     
     # Initialize output files
-    $Script:Config.LogFile = Join-Path $OutputPath "MSI_Deployment_$($Script:Config.Timestamp).log"
+    $Script:Config.LogFile = Join-Path $OutputPath "Deployment_$($Script:Config.Timestamp).log"
     
     if ($TestOnly) {
-        Write-Log "Starting MSI Deployment Readiness Check" -Level Info
+        Write-Log "Starting Deployment Readiness Check" -Level Info
     }
     else {
-        Write-Log "Starting MSI Deployment" -Level Info
-        Write-Log "Package: $($Script:Config.MSIFileName)" -Level Info
-        if ($Script:Config.MSIProductName) {
-            Write-Log "Product: $($Script:Config.MSIProductName) v$($Script:Config.MSIProductVersion)" -Level Info
+        Write-Log "Starting Installer Deployment" -Level Info
+        Write-Log "Package: $($Script:Config.InstallerFileName) [$($Script:Config.InstallerType)]" -Level Info
+        if ($Script:Config.ProductName) {
+            Write-Log "Product: $($Script:Config.ProductName) v$($Script:Config.ProductVersion)" -Level Info
         }
+        if ($Script:Config.InstallerType -eq 'EXE') {
+            Write-Log "Framework: $($Script:Config.EXEFramework)" -Level Info
+        }
+        Write-Log "Silent Switches: $($Script:Config.SilentSwitches)" -Level Info
     }
     
     #==========================================================================
@@ -1709,7 +1981,6 @@ function Start-Deployment {
     $psexec = $null
     
     if (-not $TestOnly) {
-        # Find PSExec (only needed for actual deployment)
         $psexec = Find-PSExec
         if (-not $psexec) {
             Write-Host ""
@@ -1732,24 +2003,11 @@ function Start-Deployment {
             }
         }
         
-        # Display MSI info
-        $msiFileInfo = Get-Item $effectiveMSIPath
-        Write-Log "MSI File: $($msiFileInfo.Name) ($([math]::Round($msiFileInfo.Length / 1MB, 2)) MB)" -Level Info
-        
-        # Show custom properties if specified
-        if ($MSIProperties -and $MSIProperties.Count -gt 0) {
-            Write-Log "Custom MSI Properties:" -Level Info
-            foreach ($key in $MSIProperties.Keys) {
-                Write-Log "  $key = $($MSIProperties[$key])" -Level Info
-            }
-        }
-        
-        if ($TransformPath) {
-            Write-Log "Transform: $([System.IO.Path]::GetFileName($TransformPath))" -Level Info
-        }
+        $installerFileInfo = Get-Item $InstallerPath
+        Write-Log "Installer: $($installerFileInfo.Name) ($([math]::Round($installerFileInfo.Length / 1MB, 2)) MB)" -Level Info
     }
     else {
-        Write-Log "TestOnly mode - skipping PSExec and MSI validation" -Level Info
+        Write-Log "TestOnly mode - skipping PSExec and installer validation" -Level Info
     }
     
     #==========================================================================
@@ -1760,7 +2018,6 @@ function Start-Deployment {
     $computers = @()
     
     if ($PSCmdlet.ParameterSetName -eq 'Manual') {
-        # Manual computer list - wrap in @() to ensure array even with single item
         Write-Log "Using manually specified computers: $($ComputerName.Count) system(s)" -Level Info
         $computers = @($ComputerName | ForEach-Object {
             [PSCustomObject]@{
@@ -1771,19 +2028,17 @@ function Start-Deployment {
         })
     }
     else {
-        # AD Query
         $adComputers = Get-ADComputersFromQuery -SearchBase $SearchBase -ADFilter $Filter -ExcludeServers:$ExcludeServers
         if (-not $adComputers) {
             Write-Log "No computers found or AD query failed" -Level Error
             return
         }
-        $computers = $adComputers
+        $computers = @($adComputers)
     }
     
-    # Apply exclusion pattern
     if ($ExcludePattern) {
         $preCount = $computers.Count
-        $computers = $computers | Where-Object { $_.Name -notmatch $ExcludePattern }
+        $computers = @($computers | Where-Object { $_.Name -notmatch $ExcludePattern })
         $excluded = $preCount - $computers.Count
         if ($excluded -gt 0) {
             Write-Log "Excluded $excluded computer(s) matching pattern: $ExcludePattern" -Level Info
@@ -1814,7 +2069,7 @@ function Start-Deployment {
         $reachCheckProgress = 0
         foreach ($computer in $computers) {
             $reachCheckProgress++
-            $percentComplete = [math]::Round(($reachCheckProgress / $computers.Count) * 100)
+            $percentComplete = if ($computers.Count -gt 0) { [math]::Round(($reachCheckProgress / $computers.Count) * 100) } else { 0 }
             Write-Progress -Activity "Testing Reachability" -Status "$($computer.Name)" -PercentComplete $percentComplete
             
             $hostname = if ($computer.DNSHostName) { $computer.DNSHostName } else { $computer.Name }
@@ -1861,7 +2116,7 @@ function Start-Deployment {
         $compatCheckProgress = 0
         foreach ($computer in $reachableComputers) {
             $compatCheckProgress++
-            $percentComplete = [math]::Round(($compatCheckProgress / $reachableComputers.Count) * 100)
+            $percentComplete = if ($reachableComputers.Count -gt 0) { [math]::Round(($compatCheckProgress / $reachableComputers.Count) * 100) } else { 0 }
             Write-Progress -Activity "Testing PSEXEC Compatibility" -Status "$($computer.Name)" -PercentComplete $percentComplete
             
             $hostname = if ($computer.DNSHostName) { $computer.DNSHostName } else { $computer.Name }
@@ -1901,7 +2156,6 @@ function Start-Deployment {
     if ($TestOnly) {
         Write-Phase "READINESS REPORT" "Generating readiness assessment (TestOnly mode)..."
         
-        # Add compatible computers to results as "Ready"
         foreach ($computer in $compatibleComputers) {
             $Script:Results.Add([PSCustomObject]@{
                 ComputerName    = $computer.Name
@@ -1914,12 +2168,10 @@ function Start-Deployment {
             })
         }
         
-        # Update stats for TestOnly mode
         $Script:Stats.SuccessfulDeployments = 0
         $Script:Stats.FailedDeployments = 0
         $Script:Stats.SkippedComputers = $compatibleComputers.Count
         
-        # Generate reports
         $htmlReport = New-HTMLReport -OutputPath $OutputPath -TestOnly
         $csvExport = Export-ResultsCSV -OutputPath $OutputPath
         
@@ -1927,7 +2179,6 @@ function Start-Deployment {
         Write-Log "CSV Export:  $csvExport" -Level Success
         Write-Log "Log File:    $($Script:Config.LogFile)" -Level Success
         
-        # Summary
         Write-Host ""
         Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
         Write-Host " READINESS ASSESSMENT COMPLETE (TestOnly Mode)" -ForegroundColor $Script:Config.ConsoleColors.Primary
@@ -1936,32 +2187,20 @@ function Start-Deployment {
         Write-Host "  Total Targets    : $($Script:Stats.TotalComputers)" -ForegroundColor White
         Write-Host "  Reachable        : $($Script:Stats.ReachableComputers)" -ForegroundColor $(if ($Script:Stats.ReachableComputers -eq $Script:Stats.TotalComputers) { 'Green' } else { 'Yellow' })
         Write-Host "  Compatible       : $($Script:Stats.CompatibleComputers)" -ForegroundColor $(if ($Script:Stats.CompatibleComputers -eq $Script:Stats.ReachableComputers) { 'Green' } else { 'Yellow' })
-        Write-Host ""
         Write-Host "  Ready for Deploy : $($compatibleComputers.Count)" -ForegroundColor Green
         Write-Host "  Not Ready        : $($Script:Stats.TotalComputers - $compatibleComputers.Count)" -ForegroundColor $(if (($Script:Stats.TotalComputers - $compatibleComputers.Count) -gt 0) { 'Red' } else { 'Gray' })
         Write-Host ""
         
-        $readinessPercent = if ($Script:Stats.TotalComputers -gt 0) {
-            [math]::Round(($compatibleComputers.Count / $Script:Stats.TotalComputers) * 100, 1)
-        } else { 0 }
+        $readinessPercent = if ($Script:Stats.TotalComputers -gt 0) { [math]::Round(($compatibleComputers.Count / $Script:Stats.TotalComputers) * 100, 1) } else { 0 }
         Write-Host "  Readiness Rate   : ${readinessPercent}%" -ForegroundColor $(if ($readinessPercent -ge 90) { 'Green' } elseif ($readinessPercent -ge 70) { 'Yellow' } else { 'Red' })
         Write-Host ""
         
         $duration = (Get-Date) - $Script:Stats.StartTime
         Write-Host "  Duration: $([math]::Round($duration.TotalMinutes, 1)) minutes" -ForegroundColor $Script:Config.ConsoleColors.Secondary
-        Write-Host ""
         Write-Host "  No changes were made. Run without -TestOnly to deploy." -ForegroundColor Cyan
         Write-Host ""
         
-        return @{
-            HTMLReport = $htmlReport
-            CSVExport  = $csvExport
-            LogFile    = $Script:Config.LogFile
-            Stats      = $Script:Stats
-            Results    = $Script:Results
-            ReadyCount = $compatibleComputers.Count
-            NotReadyCount = $Script:Stats.TotalComputers - $compatibleComputers.Count
-        }
+        return @{ HTMLReport = $htmlReport; CSVExport = $csvExport; LogFile = $Script:Config.LogFile; Stats = $Script:Stats; Results = $Script:Results }
     }
     
     #==========================================================================
@@ -1973,16 +2212,15 @@ function Start-Deployment {
         Write-Host " DEPLOYMENT SUMMARY" -ForegroundColor $Script:Config.ConsoleColors.Primary
         Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
         Write-Host ""
-        Write-Host "  Product        : $($Script:Config.MSIProductName)" -ForegroundColor White
-        Write-Host "  Version        : $($Script:Config.MSIProductVersion)" -ForegroundColor White
-        Write-Host "  Package        : $($Script:Config.MSIFileName)" -ForegroundColor White
+        Write-Host "  Product        : $($Script:Config.ProductName)" -ForegroundColor White
+        Write-Host "  Version        : $($Script:Config.ProductVersion)" -ForegroundColor White
+        Write-Host "  Package        : $($Script:Config.InstallerFileName)" -ForegroundColor White
+        Write-Host "  Type           : $($Script:Config.InstallerType)$(if ($Script:Config.EXEFramework) { " ($($Script:Config.EXEFramework))" })" -ForegroundColor White
+        Write-Host "  Silent Args    : $($Script:Config.SilentSwitches)" -ForegroundColor Cyan
         Write-Host "  Target Systems : $($compatibleComputers.Count)" -ForegroundColor White
-        Write-Host "  MSI Arguments  : $MSIArguments" -ForegroundColor White
         Write-Host "  Max Concurrent : $MaxConcurrent" -ForegroundColor White
         Write-Host "  Timeout        : $TimeoutSeconds seconds" -ForegroundColor White
-        if ($RetryCount -gt 0) {
-            Write-Host "  Retry Count    : $RetryCount" -ForegroundColor White
-        }
+        if ($RetryCount -gt 0) { Write-Host "  Retry Count    : $RetryCount" -ForegroundColor White }
         Write-Host ""
         
         $confirm = Read-Host "Proceed with deployment? (Y/N)"
@@ -1995,7 +2233,7 @@ function Start-Deployment {
     #==========================================================================
     # Phase 4: Deployment
     #==========================================================================
-    Write-Phase "DEPLOYMENT" "Installing MSI on compatible systems..."
+    Write-Phase "DEPLOYMENT" "Installing on compatible systems..."
     
     if ($WhatIfPreference) {
         Write-Log "WhatIf mode - showing what would be deployed:" -Level Info
@@ -2015,13 +2253,13 @@ function Start-Deployment {
     }
     else {
         $deployProgress = 0
-        $msiFileName = [System.IO.Path]::GetFileName($effectiveMSIPath)
+        $installerFileName = [System.IO.Path]::GetFileName($InstallerPath)
         $transformFileName = if ($TransformPath) { [System.IO.Path]::GetFileName($TransformPath) } else { $null }
         
         foreach ($computer in $compatibleComputers) {
             $deployProgress++
-            $percentComplete = [math]::Round(($deployProgress / $compatibleComputers.Count) * 100)
-            Write-Progress -Activity "Deploying MSI" -Status "$($computer.Name) ($deployProgress of $($compatibleComputers.Count))" -PercentComplete $percentComplete
+            $percentComplete = if ($compatibleComputers.Count -gt 0) { [math]::Round(($deployProgress / $compatibleComputers.Count) * 100) } else { 0 }
+            Write-Progress -Activity "Deploying Installer" -Status "$($computer.Name) ($deployProgress of $($compatibleComputers.Count))" -PercentComplete $percentComplete
             
             $hostname = if ($computer.DNSHostName) { $computer.DNSHostName } else { $computer.Name }
             $attemptCount = 0
@@ -2036,47 +2274,35 @@ function Start-Deployment {
                 }
                 $attemptCount++
                 
-                # Step 1: Copy MSI (and transform)
+                # Copy installer
                 Write-Log "[$($computer.Name)] Copying files to staging location..." -Level Info
-                $copyResult = Copy-MSIToRemote -ComputerName $hostname -SourcePath $effectiveMSIPath -TransformPath $TransformPath -StagingPath $StagingPath -Credential $Credential
+                $copyResult = Copy-InstallerToRemote -ComputerName $hostname -SourcePath $InstallerPath -TransformPath $TransformPath -StagingPath $StagingPath -Credential $Credential
                 
                 if (-not $copyResult.Success) {
-                    $installResult = [PSCustomObject]@{
-                        Success      = $false
-                        ErrorMessage = "Failed to copy MSI to remote system"
-                        ExitCode     = $null
-                        Duration     = $null
-                    }
+                    $installResult = [PSCustomObject]@{ Success = $false; ErrorMessage = "Failed to copy installer to remote system"; ExitCode = $null; Duration = $null }
                     continue
                 }
                 
-                # Step 2: Build arguments and execute installation
-                $localMSIPath = Join-Path $StagingPath $msiFileName
-                $localTransformPath = if ($TransformPath) { Join-Path $StagingPath $transformFileName } else { $null }
-                $logPath = Join-Path $StagingPath "msiexec_$($computer.Name).log"
+                # Build and execute install command
+                $logPath = Join-Path $StagingPath "install_$($computer.Name).log"
+                $cmdInfo = Build-InstallCommand -InstallerPath $copyResult.LocalPath -InstallerType $Script:Config.InstallerType -BaseArguments $Script:Config.SilentSwitches -TransformPath $copyResult.LocalTransform -Properties $InstallerProperties -LogPath $logPath -EXEFramework $Script:Config.EXEFramework
                 
-                $fullArgs = Build-MSIArguments -MSIPath $localMSIPath -BaseArguments $MSIArguments -TransformPath $localTransformPath -Properties $MSIProperties -LogPath $logPath
-                
-                $installResult = Invoke-PSExecInstall -PSExecPath $psexec -ComputerName $hostname -MSIPath $localMSIPath -Arguments $fullArgs -Credential $Credential -TimeoutSeconds $TimeoutSeconds
+                $installResult = Invoke-PSExecInstall -PSExecPath $psexec -ComputerName $hostname -Command $cmdInfo.FullCommand -Credential $Credential -TimeoutSeconds $TimeoutSeconds
                 
                 $success = $installResult.Success
             }
             
-            # Step 3: Collect logs if requested
-            $collectedLog = $null
+            # Collect logs if requested
             if ($CollectLogs -and -not $success) {
-                $remoteLogPath = Join-Path $StagingPath "msiexec_$($computer.Name).log"
-                $collectedLog = Copy-RemoteLog -ComputerName $hostname -RemoteLogPath $remoteLogPath -LocalOutputPath $OutputPath
-                if ($collectedLog) {
-                    Write-Log "[$($computer.Name)] Log collected: $([System.IO.Path]::GetFileName($collectedLog))" -Level Info
-                }
+                $remoteLogPath = Join-Path $StagingPath "install_$($computer.Name).log"
+                Copy-RemoteLog -ComputerName $hostname -RemoteLogPath $remoteLogPath -LocalOutputPath $OutputPath | Out-Null
             }
             
-            # Step 4: Validate installation
+            # Validate installation
             $validated = $null
-            if ($installResult.Success -and -not $SkipValidation -and $Script:Config.MSIProductCode) {
+            if ($installResult.Success -and -not $SkipValidation -and ($Script:Config.ProductCode -or $Script:Config.ProductName)) {
                 Write-Log "[$($computer.Name)] Validating installation..." -Level Info
-                $validated = Test-ProductInstalled -ComputerName $hostname -ProductCode $Script:Config.MSIProductCode -ProductName $Script:Config.MSIProductName -Credential $Credential
+                $validated = Test-ProductInstalled -ComputerName $hostname -ProductCode $Script:Config.ProductCode -ProductName $Script:Config.ProductName -Credential $Credential
                 if ($validated) {
                     Write-Log "[$($computer.Name)] Product verified in registry" -Level Success
                     $Script:Stats.ValidatedInstalls++
@@ -2086,16 +2312,12 @@ function Start-Deployment {
                 }
             }
             
-            # Step 5: Cleanup
-            Remove-StagedFiles -ComputerName $hostname -StagingPath $StagingPath -MSIFileName $msiFileName -TransformFileName $transformFileName
+            # Cleanup
+            Remove-StagedFiles -ComputerName $hostname -StagingPath $StagingPath -InstallerFileName $installerFileName -TransformFileName $transformFileName
             
             # Record result
             $status = if ($installResult.Success) { "Success" } else { "Failed" }
-            $message = if ($installResult.Success) { 
-                if ($installResult.Output) { $installResult.Output } else { "Installation completed successfully" }
-            } else { 
-                $installResult.ErrorMessage 
-            }
+            $message = if ($installResult.Success) { if ($installResult.Output) { $installResult.Output } else { "Installation completed successfully" } } else { $installResult.ErrorMessage }
             
             $Script:Results.Add([PSCustomObject]@{
                 ComputerName    = $computer.Name
@@ -2116,7 +2338,7 @@ function Start-Deployment {
                 $Script:Stats.FailedDeployments++
             }
         }
-        Write-Progress -Activity "Deploying MSI" -Completed
+        Write-Progress -Activity "Deploying Installer" -Completed
     }
     
     #==========================================================================
@@ -2124,7 +2346,6 @@ function Start-Deployment {
     #==========================================================================
     Write-Phase "REPORTING" "Generating deployment report..."
     
-    # Generate reports
     $htmlReport = New-HTMLReport -OutputPath $OutputPath
     $csvExport = Export-ResultsCSV -OutputPath $OutputPath
     
@@ -2132,15 +2353,13 @@ function Start-Deployment {
     Write-Log "CSV Export:  $csvExport" -Level Success
     Write-Log "Log File:    $($Script:Config.LogFile)" -Level Success
     
-    #==========================================================================
-    # Summary
-    #==========================================================================
     Write-Host ""
     Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
     Write-Host " DEPLOYMENT COMPLETE" -ForegroundColor $Script:Config.ConsoleColors.Primary
     Write-Host ("=" * 70) -ForegroundColor $Script:Config.ConsoleColors.Primary
     Write-Host ""
-    Write-Host "  Product          : $($Script:Config.MSIProductName) v$($Script:Config.MSIProductVersion)" -ForegroundColor White
+    Write-Host "  Product          : $($Script:Config.ProductName) v$($Script:Config.ProductVersion)" -ForegroundColor White
+    Write-Host "  Installer Type   : $($Script:Config.InstallerType)$(if ($Script:Config.EXEFramework -and $Script:Config.EXEFramework -ne 'Unknown') { " ($($Script:Config.EXEFramework))" })" -ForegroundColor White
     Write-Host "  Total Targets    : $($Script:Stats.TotalComputers)" -ForegroundColor White
     Write-Host "  Reachable        : $($Script:Stats.ReachableComputers)" -ForegroundColor Cyan
     Write-Host "  Compatible       : $($Script:Stats.CompatibleComputers)" -ForegroundColor Cyan
@@ -2150,27 +2369,17 @@ function Start-Deployment {
     if (-not $SkipValidation) {
         Write-Host "  Validated        : $($Script:Stats.ValidatedInstalls)" -ForegroundColor $(if ($Script:Stats.ValidatedInstalls -eq $Script:Stats.SuccessfulDeployments) { 'Green' } else { 'Yellow' })
     }
-    if ($RetryCount -gt 0) {
-        Write-Host "  Retry Attempts   : $($Script:Stats.RetryAttempts)" -ForegroundColor Gray
-    }
+    if ($RetryCount -gt 0) { Write-Host "  Retry Attempts   : $($Script:Stats.RetryAttempts)" -ForegroundColor Gray }
     Write-Host ""
     
     $duration = (Get-Date) - $Script:Stats.StartTime
     Write-Host "  Duration: $([math]::Round($duration.TotalMinutes, 1)) minutes" -ForegroundColor $Script:Config.ConsoleColors.Secondary
     Write-Host ""
     
-    return @{
-        HTMLReport = $htmlReport
-        CSVExport  = $csvExport
-        LogFile    = $Script:Config.LogFile
-        Stats      = $Script:Stats
-        Results    = $Script:Results
-    }
+    return @{ HTMLReport = $htmlReport; CSVExport = $csvExport; LogFile = $Script:Config.LogFile; Stats = $Script:Stats; Results = $Script:Results }
 }
 
 # Execute
 $deploymentResult = Start-Deployment
-
-# Return result object for pipeline use
 $deploymentResult
 #endregion
