@@ -1046,9 +1046,9 @@ function Start-SmtpTests {
     Write-Host ""
     
     # Test 1: Port Connectivity
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host " PHASE 1: Port Connectivity Tests" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     
     if ($Config.Method -ne 'GraphApi') {
         $portResult = Test-PortConnectivity -Server $Config.Server -Port $Config.Port
@@ -1175,9 +1175,9 @@ function Start-SmtpTests {
     
     # Test 2: TLS Support
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host " PHASE 2: TLS/Security Tests" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     
     if ($Config.Method -ne 'GraphApi') {
         # Port 587 uses STARTTLS (upgrade), Port 465 uses implicit TLS
@@ -1211,9 +1211,9 @@ function Start-SmtpTests {
     
     # Test 3: SMTP Capabilities
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host " PHASE 3: SMTP Capability Tests" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     
     if ($Config.Method -notin @('GraphApi', 'DirectSend', 'Restricted')) {
         $smtpCaps = Test-SmtpAuthentication -Server $Config.Server -Port $Config.Port -Credential $Config.Credential -UseTls $Config.UseTls
@@ -1253,9 +1253,9 @@ function Start-SmtpTests {
     
     # Test 4: DNS/MX Validation
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host " PHASE 4: DNS Validation" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     
     if ($Config.Domain) {
         $mx = Get-MxRecord -Domain $Config.Domain
@@ -1280,9 +1280,9 @@ function Start-SmtpTests {
     
     # Test 5: Send Test Email
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host " PHASE 5: Email Delivery Test" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     
     $sendChoice = Show-Menu -Title "Send a test email?" -Options @("Yes", "No (skip)")
     
@@ -1350,9 +1350,9 @@ function Show-TestSummary {
     param([hashtable]$Config)
     
     Write-Host "`n"
-    Write-Host "=" * 60 -ForegroundColor DarkYellow
+    Write-Host ("=" * 60) -ForegroundColor DarkYellow
     Write-Host " TEST SUMMARY" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor DarkYellow
+    Write-Host ("=" * 60) -ForegroundColor DarkYellow
     
     $passed = ($script:TestResults | Where-Object { $_.Status -eq 'Pass' }).Count
     $failed = ($script:TestResults | Where-Object { $_.Status -eq 'Fail' }).Count
@@ -1383,9 +1383,9 @@ function Show-TestSummary {
     
     # MFP Configuration Summary
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor DarkYellow
+    Write-Host ("=" * 60) -ForegroundColor DarkYellow
     Write-Host " MFP/DEVICE CONFIGURATION" -ForegroundColor DarkYellow
-    Write-Host "=" * 60 -ForegroundColor DarkYellow
+    Write-Host ("=" * 60) -ForegroundColor DarkYellow
     
     if ($failed -eq 0) {
         Write-Host ""
@@ -1418,7 +1418,7 @@ function Show-TestSummary {
     }
     
     Write-Host ""
-    Write-Host "=" * 60 -ForegroundColor Gray
+    Write-Host ("=" * 60) -ForegroundColor Gray
     Write-Host ""
 }
 
