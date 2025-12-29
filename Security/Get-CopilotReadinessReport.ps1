@@ -1864,7 +1864,7 @@ function New-HTMLReport {
             </div>
             
             <div class="alert-box alert-info">
-                <h4 style="color: #1E40AF; margin-bottom: 8px;">ℹ️ Understanding OneDrive Provisioning</h4>
+                <h4 style="color: #1E40AF; margin-bottom: 8px;"><span style="display: inline-block; width: 20px; height: 20px; background: #3B82F6; color: white; border-radius: 50%; text-align: center; font-weight: bold; font-size: 14px; line-height: 20px; margin-right: 8px;">i</span>Understanding OneDrive Provisioning</h4>
                 <p style="margin: 0; color: #374151; font-size: 0.95em;">
                     <strong>What it means:</strong> OneDrive must be provisioned for each user before Copilot can access their personal files.<br><br>
                     <strong>Current status:</strong> <span style="color: #10B981; font-weight: 600;">$($Findings.UserReadiness.OneDriveProvisionedCount) users</span> have OneDrive provisioned. 
@@ -1920,7 +1920,7 @@ function New-HTMLReport {
             <p><strong>CRITICAL FOR COPILOT:</strong> When users create sharing links with "Anyone" or "People in your organization" scope, that content becomes accessible to Copilot for all applicable users - even if they weren't explicitly shared on the file.</p>
             
             <div class="alert-box alert-info">
-                <h4 style="color: #1E40AF; margin-bottom: 8px;">ℹ️ Why Sharing Links Matter for Copilot</h4>
+                <h4 style="color: #1E40AF; margin-bottom: 8px;"><span style="display: inline-block; width: 20px; height: 20px; background: #3B82F6; color: white; border-radius: 50%; text-align: center; font-weight: bold; font-size: 14px; line-height: 20px; margin-right: 8px;">i</span>Why Sharing Links Matter for Copilot</h4>
                 <p style="margin: 0; color: #374151; font-size: 0.95em;">
                     <strong>Organization-wide links ("People in your organization"):</strong> ANY user in your tenant can access this content, and Copilot will surface it in their responses.<br><br>
                     <strong>Anonymous links ("Anyone with the link"):</strong> While external users can't use your Copilot, the content is broadly accessible and may contain sensitive information.<br><br>
@@ -1953,7 +1953,7 @@ function New-HTMLReport {
             $html += @"
             
             <div class="alert-box alert-critical">
-                <h4 style="color: #991B1B; margin-bottom: 10px;">⚠ CRITICAL: Anonymous Sharing Links Detected</h4>
+                <h4 style="color: #991B1B; margin-bottom: 10px;"><span style="display: inline-block; background: #EF4444; color: white; width: 22px; height: 22px; border-radius: 3px; text-align: center; font-weight: bold; font-size: 16px; line-height: 22px; margin-right: 8px;">!</span>CRITICAL: Anonymous Sharing Links Detected</h4>
                 <p style="color: #7F1D1D; margin-bottom: 10px;">These items have "Anyone with the link" sharing enabled. The content is accessible to anyone who obtains the link.</p>
                 <table style="background: white; border-radius: 8px;">
                     <thead>
@@ -1997,7 +1997,7 @@ function New-HTMLReport {
             $html += @"
             
             <div class="alert-box alert-warning">
-                <h4 style="color: #92400E; margin-bottom: 10px;">⚠ HIGH RISK: Organization-Wide Sharing Links</h4>
+                <h4 style="color: #92400E; margin-bottom: 10px;"><span style="display: inline-block; background: #F59E0B; color: white; width: 22px; height: 22px; border-radius: 3px; text-align: center; font-weight: bold; font-size: 16px; line-height: 22px; margin-right: 8px;">!</span>HIGH RISK: Organization-Wide Sharing Links</h4>
                 <p style="color: #78350F; margin-bottom: 10px;">These items have "People in your organization" sharing links. <strong>Copilot will surface this content to ANY user</strong> in your organization, regardless of whether they were explicitly shared on the item.</p>
                 <table style="background: white; border-radius: 8px;">
                     <thead>
@@ -2139,7 +2139,7 @@ function New-HTMLReport {
         $html += @"
             
             <div class="alert-box alert-critical">
-                <h4 style="color: #991B1B; margin-bottom: 10px;">⚠ CRITICAL: Sites Accessible to Everyone</h4>
+                <h4 style="color: #991B1B; margin-bottom: 10px;"><span style="display: inline-block; background: #EF4444; color: white; width: 22px; height: 22px; border-radius: 3px; text-align: center; font-weight: bold; font-size: 16px; line-height: 22px; margin-right: 8px;">!</span>CRITICAL: Sites Accessible to Everyone</h4>
                 <p style="color: #7F1D1D; margin-bottom: 10px;">These sites have permissions that allow ALL users in your organization to access content.</p>
                 <table style="background: white; border-radius: 8px;">
                     <thead>
@@ -2169,7 +2169,7 @@ function New-HTMLReport {
         $html += @"
             
             <div class="alert-box alert-warning">
-                <h4 style="color: #92400E; margin-bottom: 10px;">⚠ Potentially Sensitive Content Detected</h4>
+                <h4 style="color: #92400E; margin-bottom: 10px;"><span style="display: inline-block; background: #F59E0B; color: white; width: 22px; height: 22px; border-radius: 3px; text-align: center; font-weight: bold; font-size: 16px; line-height: 22px; margin-right: 8px;">!</span>Potentially Sensitive Content Detected</h4>
                 <p style="color: #78350F; margin-bottom: 10px;">Files containing keywords like "SSN", "Social Security", "Credit Card", "Password", or "Confidential" were found.</p>
                 <table style="background: white; border-radius: 8px;">
                     <thead>
