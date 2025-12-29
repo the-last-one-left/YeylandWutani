@@ -8,10 +8,88 @@ Security assessment, threat detection, compliance tools, and certificate managem
 
 | Script | Description |
 |--------|-------------|
+| `Get-CopilotReadinessReport.ps1` | Microsoft 365 Copilot readiness assessment: licensing, data governance, oversharing risks, sensitive content detection, sharing link analysis |
 | `Find-WildcardCertificateUsage.ps1` | Discover everywhere a wildcard (or any) SSL certificate is used across Windows servers |
 | `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules, admin logs |
 | `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links, storage analysis |
 | `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs, high-risk ACLs |
+
+---
+
+## Get-CopilotReadinessReport.ps1 (v1.0)
+
+**Purpose:** Comprehensive pre-deployment assessment for Microsoft 365 Copilot. Identifies licensing gaps, data governance issues, and oversharing risks that could expose sensitive content through Copilot.
+
+**Why This Matters:** Copilot surfaces content based on user permissions. Sites with "Everyone" access, organization-wide sharing links, or sensitive files become accessible to ALL Copilot users—even if they weren't explicitly shared.
+
+**Assessment Areas:**
+
+| Area | What's Analyzed |
+|------|-----------------|
+| **Licensing** | Eligible base licenses (E3/E5/Business Premium), Copilot assignments, available licenses |
+| **Data Governance** | Sensitivity labels configuration, labeled M365 Groups percentage |
+| **Security Posture** | Conditional Access policies, guest user count, MFA indicators |
+| **User Readiness** | Active users (30-day), OneDrive provisioning status, Teams/Outlook/OneDrive usage |
+| **Sharing Links** | Anonymous links, organization-wide links with file counts and locations |
+| **SharePoint Sites** | "Everyone" access detection, permission complexity, oversharing risk scoring |
+| **Sensitive Content** | Files containing PII keywords (SSN, credit card, password, confidential) |
+| **Teams** | Team count, guest member detection |
+
+**Usage:**
+```powershell
+# Standard assessment (prompts for authentication)
+.\Get-CopilotReadinessReport.ps1
+
+# Reuse existing Graph session
+.\Get-CopilotReadinessReport.ps1 -SkipNewConnection
+
+# Custom client name for report branding
+.\Get-CopilotReadinessReport.ps1 -ClientName "Contoso Corporation"
+
+# Export CSV data alongside HTML report
+.\Get-CopilotReadinessReport.ps1 -ExportCSV -OutputPath "C:\Reports"
+
+# Adjust activity threshold
+.\Get-CopilotReadinessReport.ps1 -DaysInactive 60 -TopCandidates 100
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-OutputPath` | Report output directory | Current directory |
+| `-ClientName` | Override organization name in report | Auto-detected from tenant |
+| `-SkipNewConnection` | Reuse existing Graph session | Forces new auth |
+| `-ExportCSV` | Generate CSV exports with HTML | HTML only |
+| `-TopCandidates` | Number of top Copilot candidates to identify | 50 |
+| `-DaysInactive` | Inactivity threshold for flagging users | 30 |
+
+**Report Highlights:**
+
+- **Readiness Score**: 0-100% weighted across licensing, governance, security, and user readiness
+- **Critical Alerts**: Red warning boxes for "Everyone" access sites, anonymous sharing links
+- **Sensitive Content Detection**: Scans document libraries for PII keyword matches
+- **Sharing Link Analysis**: Identifies anonymous and org-wide links with file counts
+- **Risk-Scored Sites**: HIGH/MEDIUM/LOW classification with direct links to review permissions
+- **OneDrive Provisioning**: Clear explanation of what it means and who needs it
+
+**Required Graph Permissions:**
+- User.Read.All, Directory.Read.All, Reports.Read.All
+- Policy.Read.All, Sites.Read.All, Group.Read.All
+- Organization.Read.All
+
+**Required Modules:**
+- Microsoft.Graph.Authentication
+- Microsoft.Graph.Users
+- Microsoft.Graph.Identity.DirectoryManagement
+- Microsoft.Graph.Reports
+- Microsoft.Graph.Groups
+
+**Output Files:**
+- `CopilotReadiness_{ClientName}_{Timestamp}.html` - Full visual report
+- `CopilotReadiness_Licenses.csv` - License summary (with -ExportCSV)
+- `CopilotReadiness_EligibleUsers.csv` - Eligible users list (with -ExportCSV)
+- `CopilotReadiness_SensitivityLabels.csv` - Labels configured (with -ExportCSV)
 
 ---
 
@@ -169,7 +247,7 @@ These tools are for authorized security testing only. Users must obtain proper a
 ## Requirements
 
 - PowerShell 5.1+
-- Microsoft Graph PowerShell modules (for M365/SPO tools)
+- Microsoft Graph PowerShell modules (for M365/SPO/Copilot tools)
 - Exchange Online Management module (for M365 tool)
 - SharePoint Online Management Shell (for SPO tool)
 - Active Directory PowerShell module (for certificate discovery)
