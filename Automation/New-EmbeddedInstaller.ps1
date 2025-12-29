@@ -13,6 +13,14 @@
     - Cleans up after installation
     - Returns proper exit codes for RMM status tracking
     
+    EXE Framework Auto-Detection:
+    - NSIS (Nullsoft)      : /S (case-sensitive)
+    - Inno Setup           : /VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-
+    - InstallShield        : /s /v"/qn /norestart"
+    - Wise InstallMaster   : /s
+    - WiX Burn             : /quiet /norestart
+    - InstallAware         : /s
+    
     Ideal for RMM deployments where you can push scripts but not files directly.
 
 .PARAMETER InstallerPath
@@ -23,8 +31,8 @@
     Defaults to "Deploy-[InstallerName].ps1" in current directory.
 
 .PARAMETER Arguments
-    Silent install arguments. If not specified, attempts to detect common patterns
-    or uses defaults (/qn for MSI, /S for common EXE installers).
+    Silent install arguments. If not specified, attempts to detect framework
+    for EXE files or uses /qn /norestart for MSI files.
 
 .PARAMETER Description
     Optional description to include in the generated script header.
@@ -42,15 +50,28 @@
     Compress the binary before Base64 encoding to reduce script size.
     Requires .NET 4.5+ on target systems for decompression.
 
+.PARAMETER ShowInstallerInfo
+    Analyze the installer and display detected framework info without generating script.
+
 .EXAMPLE
     .\New-EmbeddedInstaller.ps1 -InstallerPath ".\Agent.msi"
     
     Creates Deploy-Agent.ps1 with embedded MSI and default /qn arguments.
 
 .EXAMPLE
+    .\New-EmbeddedInstaller.ps1 -InstallerPath ".\WG-MVPN-SSL_12_11_5.exe"
+    
+    Auto-detects NSIS framework and uses /S switch.
+
+.EXAMPLE
+    .\New-EmbeddedInstaller.ps1 -InstallerPath ".\Setup.exe" -ShowInstallerInfo
+    
+    Analyzes the EXE and shows detected framework and silent switches.
+
+.EXAMPLE
     .\New-EmbeddedInstaller.ps1 -InstallerPath ".\Setup.exe" -Arguments "/S /NORESTART" -OutputPath ".\Deploy-App.ps1"
     
-    Creates Deploy-App.ps1 with custom silent arguments.
+    Creates Deploy-App.ps1 with custom silent arguments (overrides detection).
 
 .EXAMPLE
     .\New-EmbeddedInstaller.ps1 -InstallerPath ".\BigApp.msi" -Compress -Description "Deploys BigApp v2.1"
@@ -59,7 +80,7 @@
 
 .NOTES
     Author:     Yeyland Wutani LLC
-    Version:    1.0.0
+    Version:    1.1.0
     Purpose:    RMM deployment automation
     
     Size Considerations:
@@ -74,7 +95,6 @@
     - Syncro: ~1MB
     
     For large installers exceeding RMM limits, consider:
-
     - External hosting with download
     - Chunked deployment scripts
     - Network share deployment (Deploy-RMMAgent.ps1)
@@ -118,8 +138,88 @@ param(
     [switch]$KeepInstaller,
 
     [Parameter()]
-    [switch]$Compress
+    [switch]$Compress,
+
+    [Parameter()]
+    [switch]$ShowInstallerInfo
 )
+
+#region Configuration
+$Script:Frameworks = @{
+    NSIS = @{
+        Name           = "NSIS (Nullsoft Scriptable Install System)"
+        Signatures     = @("NullsoftInst", "Nullsoft.NSIS", "NSIS Error")
+        SilentSwitches = "/S"
+        Notes          = "Switch is case-sensitive. /D=PATH sets install directory."
+        Reliability    = "High"
+    }
+    InnoSetup = @{
+        Name           = "Inno Setup"
+        Signatures     = @("Inno Setup", "InnoSetupVersion", "JRSoftware.InnoSetup")
+        SilentSwitches = "/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-"
+        Notes          = "/DIR=PATH sets install dir. /LOG=file enables logging."
+        Reliability    = "High"
+    }
+    InstallShieldMSI = @{
+        Name           = "InstallShield (Basic MSI)"
+        Signatures     = @("InstallShield")
+        SecondaryCheck = "MSI"
+        SilentSwitches = '/s /v"/qn /norestart"'
+        Notes          = "Wraps an MSI. The /v passes args to msiexec."
+        Reliability    = "Medium"
+    }
+    InstallShieldLegacy = @{
+        Name           = "InstallShield (Legacy/InstallScript)"
+        Signatures     = @("InstallShield")
+        ExcludeCheck   = "MSI"
+        SilentSwitches = '/s /f1"response.iss"'
+        Notes          = "Requires pre-recorded response file. Create with: setup.exe /r"
+        Reliability    = "Low - Manual Setup Required"
+    }
+    Wise = @{
+        Name           = "Wise InstallMaster"
+        Signatures     = @("Wise Installation", "WiseMain", "Wise Solutions")
+        SilentSwitches = "/s"
+        Notes          = "Basic silent switch. May need additional parameters."
+        Reliability    = "Medium"
+    }
+    WiXBurn = @{
+        Name           = "WiX Burn Bootstrapper"
+        Signatures     = @("WixBurn", "WixBundleManifest", "wix.dll")
+        SilentSwitches = "/quiet /norestart"
+        Notes          = "/log logfile.txt enables logging. /passive shows progress."
+        Reliability    = "High"
+    }
+    InstallAware = @{
+        Name           = "InstallAware"
+        Signatures     = @("InstallAware", "INSTALLAWARE")
+        SilentSwitches = "/s"
+        Notes          = "May support TARGETDIR= for custom path."
+        Reliability    = "Medium"
+    }
+    AdvancedInstaller = @{
+        Name           = "Advanced Installer"
+        Signatures     = @("Advanced Installer", "Caphyon")
+        SilentSwitches = "/i /qn"
+        Notes          = "Usually wraps MSI. /exenoui for EXE UI suppression."
+        Reliability    = "Medium"
+    }
+    SFXRAR = @{
+        Name           = "Self-Extracting RAR/WinRAR"
+        Signatures     = @("WinRAR SFX", "WINRAR.SFX", "Rar!")
+        SilentSwitches = "/s"
+        Notes          = "Extracts files only. May contain another installer inside."
+        Reliability    = "Low - Extraction Only"
+    }
+    SFX7Zip = @{
+        Name           = "Self-Extracting 7-Zip"
+        Signatures     = @("7-Zip", "7z SFX", "7zS.sfx")
+        SilentSwitches = "-y"
+        Notes          = "Extracts files only. May contain another installer inside."
+        Reliability    = "Low - Extraction Only"
+    }
+}
+#endregion
 
 #region Banner
 function Show-YWBanner {
@@ -139,6 +239,228 @@ function Show-YWBanner {
 }
 #endregion
 
+#region EXE Framework Detection
+function Get-EXEFramework {
+    <#
+    .SYNOPSIS
+        Detects the installer framework used to create an EXE file by scanning
+        for known signatures in the binary.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+    
+    $result = [PSCustomObject]@{
+        Framework        = "Unknown"
+        FrameworkName    = "Unknown Installer Framework"
+        SilentSwitches   = $null
+        Notes            = "Unable to detect framework. Try common switches: /s, /S, /silent, /quiet"
+        Reliability      = "Unknown"
+        Signatures       = @()
+        FileInfo         = $null
+    }
+    
+    try {
+        # Get file version info
+        $fileInfo = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($Path)
+        $result.FileInfo = $fileInfo
+        
+        # Read file content for signature scanning
+        # Read first 2MB and last 512KB for efficiency (signatures usually in headers/resources)
+        $fileSize = (Get-Item $Path).Length
+        $readSize = [Math]::Min($fileSize, 2MB)
+        $tailSize = [Math]::Min($fileSize, 512KB)
+        
+        $bytes = [System.IO.File]::ReadAllBytes($Path)
+        
+        # Convert to string for pattern matching (using ASCII for signatures)
+        $contentHead = [System.Text.Encoding]::ASCII.GetString($bytes, 0, [Math]::Min($bytes.Length, $readSize))
+        $contentTail = ""
+        if ($bytes.Length -gt $tailSize) {
+            $contentTail = [System.Text.Encoding]::ASCII.GetString($bytes, $bytes.Length - $tailSize, $tailSize)
+        }
+        $content = $contentHead + $contentTail
+        
+        # Also check file description and product name from version info
+        $versionStrings = @(
+            $fileInfo.FileDescription,
+            $fileInfo.ProductName,
+            $fileInfo.CompanyName,
+            $fileInfo.InternalName,
+            $fileInfo.OriginalFilename
+        ) -join " "
+        
+        $allContent = $content + " " + $versionStrings
+        
+        # Check for MSI indicators (for InstallShield detection)
+        $hasMSIIndicators = $allContent -match "Windows Installer|\.msi|MSI \(s\)|msiexec"
+        
+        # Scan for framework signatures
+        $detectedFramework = $null
+        $matchedSignatures = @()
+        
+        foreach ($fwKey in $Script:Frameworks.Keys) {
+            $fw = $Script:Frameworks[$fwKey]
+            
+            foreach ($sig in $fw.Signatures) {
+                if ($allContent -match [regex]::Escape($sig)) {
+                    $matchedSignatures += $sig
+                    
+                    # Handle InstallShield variants
+                    if ($fwKey -eq 'InstallShieldMSI' -and -not $hasMSIIndicators) {
+                        continue  # Skip MSI variant if no MSI indicators
+                    }
+                    if ($fwKey -eq 'InstallShieldLegacy' -and $hasMSIIndicators) {
+                        continue  # Skip legacy if MSI indicators present
+                    }
+                    
+                    $detectedFramework = $fwKey
+                    break
+                }
+            }
+            
+            if ($detectedFramework) { break }
+        }
+        
+        # Set result based on detection
+        if ($detectedFramework) {
+            $fw = $Script:Frameworks[$detectedFramework]
+            $result.Framework = $detectedFramework
+            $result.FrameworkName = $fw.Name
+            $result.SilentSwitches = $fw.SilentSwitches
+            $result.Notes = $fw.Notes
+            $result.Reliability = $fw.Reliability
+            $result.Signatures = $matchedSignatures
+        }
+        else {
+            # Check version info for clues
+            if ($versionStrings -match "Setup|Install|Installer") {
+                $result.Notes = "Generic installer detected. Common silent switches to try: /s, /S, /silent, /quiet, /verysilent, -silent"
+            }
+        }
+    }
+    catch {
+        $result.Notes = "Error scanning file: $($_.Exception.Message)"
+    }
+    
+    return $result
+}
+
+function Show-InstallerInfo {
+    <#
+    .SYNOPSIS
+        Displays detected framework and silent switch information.
+    #>
+    param(
+        [Parameter(Mandatory)]
+        [string]$Path
+    )
+    
+    $installerItem = Get-Item $Path
+    $installerExt = $installerItem.Extension.ToLower()
+    $fileSize = [math]::Round($installerItem.Length / 1MB, 2)
+    
+    Write-Host ""
+    Write-Host ("=" * 70) -ForegroundColor DarkYellow
+    Write-Host " INSTALLER ANALYSIS" -ForegroundColor DarkYellow
+    Write-Host ("=" * 70) -ForegroundColor DarkYellow
+    Write-Host ""
+    
+    # File Info
+    Write-Host "  FILE INFORMATION" -ForegroundColor Cyan
+    Write-Host "  ----------------" -ForegroundColor Gray
+    Write-Host "  File Name    : $($installerItem.Name)" -ForegroundColor White
+    Write-Host "  File Size    : $fileSize MB" -ForegroundColor White
+    Write-Host "  Type         : $($installerExt.ToUpper().TrimStart('.'))" -ForegroundColor White
+    
+    if ($installerExt -eq '.msi') {
+        # MSI - show standard info
+        Write-Host ""
+        Write-Host "  MSI SILENT SWITCHES (Standard)" -ForegroundColor Cyan
+        Write-Host "  ------------------------------" -ForegroundColor Gray
+        Write-Host "  Default      : /qn /norestart" -ForegroundColor Green
+        Write-Host "  With Log     : /qn /norestart /l*v install.log" -ForegroundColor White
+        Write-Host "  Basic UI     : /qb /norestart" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  Reliability  : High (MSI standard)" -ForegroundColor Green
+        
+        return @{
+            Framework      = "MSI"
+            FrameworkName  = "Windows Installer (MSI)"
+            SilentSwitches = "/qn /norestart"
+            Reliability    = "High"
+        }
+    }
+    else {
+        # EXE - detect framework
+        $detection = Get-EXEFramework -Path $Path
+        
+        if ($detection.FileInfo) {
+            $fi = $detection.FileInfo
+            if ($fi.ProductName) { Write-Host "  Product      : $($fi.ProductName)" -ForegroundColor White }
+            if ($fi.FileVersion) { Write-Host "  Version      : $($fi.FileVersion)" -ForegroundColor White }
+            if ($fi.CompanyName) { Write-Host "  Vendor       : $($fi.CompanyName)" -ForegroundColor White }
+            if ($fi.FileDescription) { Write-Host "  Description  : $($fi.FileDescription)" -ForegroundColor Gray }
+        }
+        Write-Host ""
+        
+        # Detection Result
+        Write-Host "  FRAMEWORK DETECTION" -ForegroundColor Cyan
+        Write-Host "  -------------------" -ForegroundColor Gray
+        
+        $fwColor = if ($detection.Framework -eq "Unknown") { "Yellow" } else { "Green" }
+        Write-Host "  Detected     : $($detection.FrameworkName)" -ForegroundColor $fwColor
+        Write-Host "  Reliability  : $($detection.Reliability)" -ForegroundColor $(
+            switch ($detection.Reliability) {
+                "High" { "Green" }
+                "Medium" { "Yellow" }
+                default { "Red" }
+            }
+        )
+        
+        if ($detection.Signatures.Count -gt 0) {
+            Write-Host "  Signatures   : $($detection.Signatures -join ', ')" -ForegroundColor Gray
+        }
+        Write-Host ""
+        
+        # Silent Switches
+        Write-Host "  SILENT INSTALLATION" -ForegroundColor Cyan
+        Write-Host "  -------------------" -ForegroundColor Gray
+        
+        if ($detection.SilentSwitches) {
+            Write-Host "  Switches     : " -ForegroundColor White -NoNewline
+            Write-Host "$($detection.SilentSwitches)" -ForegroundColor Green
+        }
+        else {
+            Write-Host "  Switches     : Unknown - manual detection required" -ForegroundColor Yellow
+        }
+        
+        Write-Host "  Notes        : $($detection.Notes)" -ForegroundColor Gray
+        Write-Host ""
+        
+        # Example command
+        Write-Host "  DEPLOYMENT COMMAND" -ForegroundColor Cyan
+        Write-Host "  ------------------" -ForegroundColor Gray
+        
+        if ($detection.SilentSwitches) {
+            Write-Host "  $($installerItem.Name) $($detection.SilentSwitches)" -ForegroundColor Cyan
+        }
+        else {
+            Write-Host "  Try: $($installerItem.Name) /s" -ForegroundColor Yellow
+            Write-Host "  Or:  $($installerItem.Name) /S" -ForegroundColor Yellow
+            Write-Host "  Or:  $($installerItem.Name) /silent" -ForegroundColor Yellow
+        }
+        
+        Write-Host ""
+        Write-Host ("=" * 70) -ForegroundColor Gray
+        Write-Host ""
+        
+        return $detection
+    }
+}
+#endregion
+
 #region Main Logic
 Show-YWBanner
 
@@ -149,6 +471,12 @@ $installerName = $installerItem.BaseName
 $installerExt = $installerItem.Extension.ToLower()
 $originalSize = $installerItem.Length
 
+# ShowInstallerInfo mode - analyze and exit
+if ($ShowInstallerInfo) {
+    Show-InstallerInfo -Path $InstallerPath
+    return
+}
+
 Write-Host "[*] Processing: $($installerItem.Name)" -ForegroundColor Cyan
 Write-Host "    Size: $([math]::Round($originalSize / 1MB, 2)) MB" -ForegroundColor Gray
 
@@ -157,17 +485,57 @@ if (-not $OutputPath) {
     $OutputPath = Join-Path (Get-Location) "Deploy-$installerName.ps1"
 }
 
-# Detect silent arguments if not provided
+# Detect/set silent arguments
+$detectedFramework = $null
+$frameworkName = $null
+
 if (-not $Arguments) {
     if ($installerExt -eq '.msi') {
         $Arguments = '/qn /norestart'
-        Write-Host "[*] Using default MSI arguments: $Arguments" -ForegroundColor Yellow
+        $frameworkName = "MSI (Windows Installer)"
+        Write-Host "[*] Installer type: MSI" -ForegroundColor Cyan
+        Write-Host "[*] Using default MSI arguments: $Arguments" -ForegroundColor Green
     }
     else {
-        # Common silent switches for EXE installers
-        $Arguments = '/S'
-        Write-Host "[*] Using default EXE arguments: $Arguments (adjust if needed)" -ForegroundColor Yellow
+        # EXE - detect framework
+        Write-Host "[*] Detecting EXE installer framework..." -ForegroundColor Cyan
+        $detection = Get-EXEFramework -Path $InstallerPath
+        $detectedFramework = $detection.Framework
+        $frameworkName = $detection.FrameworkName
+        
+        if ($detection.SilentSwitches) {
+            $Arguments = $detection.SilentSwitches
+            Write-Host "[+] Detected: $frameworkName" -ForegroundColor Green
+            Write-Host "[*] Using silent switches: $Arguments" -ForegroundColor Green
+            
+            if ($detection.Reliability -ne "High") {
+                Write-Host "[!] Detection reliability: $($detection.Reliability)" -ForegroundColor Yellow
+                Write-Host "    $($detection.Notes)" -ForegroundColor Gray
+            }
+        }
+        else {
+            Write-Host "[!] Unknown framework - unable to auto-detect silent switches" -ForegroundColor Yellow
+            Write-Host "    Run with -ShowInstallerInfo for analysis" -ForegroundColor Gray
+            Write-Host ""
+            Write-Host "    Common silent switches to try:" -ForegroundColor Cyan
+            Write-Host "      /s, /S, /silent, /quiet, /verysilent" -ForegroundColor Gray
+            Write-Host ""
+            
+            $customArgs = Read-Host "    Enter silent switches (or press Enter to cancel)"
+            if ($customArgs) {
+                $Arguments = $customArgs
+                $frameworkName = "Custom (user-specified)"
+            }
+            else {
+                Write-Host "[!] Cancelled - no silent switches provided" -ForegroundColor Red
+                return
+            }
+        }
     }
+}
+else {
+    Write-Host "[*] Using provided arguments: $Arguments" -ForegroundColor Cyan
+    $frameworkName = "Custom (user-specified)"
 }
 
 # Read and encode the installer
@@ -331,8 +699,9 @@ $descriptionBlock
 
 .NOTES
     Generated:    $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
-    Generator:    Yeyland Wutani - New-EmbeddedInstaller.ps1
+    Generator:    Yeyland Wutani - New-EmbeddedInstaller.ps1 v1.1.0
     Source:       $($installerItem.Name)
+    Framework:    $frameworkName
     Original:     $([math]::Round($originalSize / 1MB, 2)) MB
     Encoded:      $([math]::Round($encodedSize / 1MB, 2)) MB
     Compressed:   $isCompressed
@@ -355,6 +724,7 @@ try {
     Write-Host ("=" * 60) -ForegroundColor DarkYellow
     Write-Host ""
     Write-Host "[*] Target: $($installerItem.Name)" -ForegroundColor Cyan
+    Write-Host "[*] Framework: $frameworkName" -ForegroundColor Gray
     Write-Host "[*] Started: `$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')" -ForegroundColor Gray
 $preScriptBlock
 $decompressionBlock
@@ -423,10 +793,14 @@ try {
     Write-Host " DEPLOYMENT SUMMARY" -ForegroundColor DarkYellow
     Write-Host ("=" * 60) -ForegroundColor DarkYellow
     Write-Host "  Source Installer:  $($installerItem.Name)" -ForegroundColor Gray
+    Write-Host "  Installer Type:    $($installerExt.ToUpper().TrimStart('.'))" -ForegroundColor Gray
+    if ($frameworkName) {
+        Write-Host "  Framework:         $frameworkName" -ForegroundColor Gray
+    }
     Write-Host "  Original Size:     $([math]::Round($originalSize / 1MB, 2)) MB" -ForegroundColor Gray
     Write-Host "  Script Size:       $([math]::Round($outputItem.Length / 1MB, 2)) MB" -ForegroundColor Gray
     Write-Host "  Compression:       $(if ($isCompressed) { 'Yes' } else { 'No' })" -ForegroundColor Gray
-    Write-Host "  Install Arguments: $Arguments" -ForegroundColor Gray
+    Write-Host "  Install Arguments: $Arguments" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "  To deploy: Copy the script content to your RMM and execute" -ForegroundColor Cyan
     Write-Host ("=" * 60) -ForegroundColor DarkYellow
