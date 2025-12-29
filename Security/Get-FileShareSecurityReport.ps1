@@ -207,6 +207,38 @@ function Add-Error {
 #endregion
 
 #region Utility Functions
+function Show-YWBanner {
+    <#
+    .SYNOPSIS
+        Displays the Yeyland Wutani ASCII banner with brand colors.
+    .DESCRIPTION
+        Renders the company logo and tagline using console-safe ASCII art.
+        Colors: DarkYellow (orange), Gray (grey)
+    .EXAMPLE
+        Show-YWBanner
+    #>
+    
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = "=" * 81
+    
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) {
+        Write-Host $line -ForegroundColor DarkYellow
+    }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+}
+
 function Convert-BytesToReadable {
     param([long]$Bytes)
     if ($null -eq $Bytes -or $Bytes -eq 0) { return "0 Bytes" }
@@ -1191,7 +1223,7 @@ function toggleSection(header) {
 #region Main Execution
 function Invoke-FileShareSecurityReport {
     $stopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-    
+    Show-YWBanner
     Write-Host ""
     Write-Host "======================================================================" -ForegroundColor DarkYellow
     Write-Host "       File Share Security Report Tool v1.1                          " -ForegroundColor DarkYellow
@@ -1288,6 +1320,7 @@ function Invoke-FileShareSecurityReport {
     $stopwatch.Stop()
     
     # Summary
+    Show-YWBanner
     Write-Host ""
     Write-Host "======================================================================" -ForegroundColor Green
     Write-Host "                    Report Generation Complete                        " -ForegroundColor Green
