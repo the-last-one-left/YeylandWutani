@@ -9,7 +9,7 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 
 | Script | Description |
 |--------|-------------|
-| `Deploy-RMMAgent.ps1` | Enterprise MSI deployment via PSEXEC. Queries AD for targets, validates reachability and PSEXEC compatibility (port 445, ADMIN$ share), then deploys MSI silently. Supports readiness-only mode, auto-detection of local MSI/PSExec files, and generates HTML reports. |
+| `Deploy-RMMAgent.ps1` | Enterprise installer deployment via PSEXEC. Supports both MSI and EXE packages with automatic framework detection. Queries AD for targets, validates PSEXEC compatibility, deploys silently, validates installation, and generates HTML reports. |
 
 ### Migration Preparation
 
@@ -39,40 +39,111 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 
 ---
 
-## Usage Examples
+## Installer Deployment (Deploy-RMMAgent.ps1)
 
-### RMM Agent Deployment
+Enterprise-grade installer deployment supporting both MSI and EXE packages with automatic silent switch detection.
+
+### Supported Installer Types
+
+| Type | Detection | Silent Switches | Reliability |
+|------|-----------|-----------------|-------------|
+| **MSI** | File extension | `/qn /norestart` | High |
+| **NSIS** | NullsoftInst signature | `/S` (case-sensitive) | High |
+| **Inno Setup** | Inno Setup signature | `/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /SP-` | High |
+| **InstallShield (MSI)** | InstallShield + MSI indicators | `/s /v"/qn /norestart"` | Medium |
+| **InstallShield (Legacy)** | InstallShield only | Requires recorded `.iss` file | Low |
+| **Wise InstallMaster** | Wise signature | `/s` | Medium |
+| **WiX Burn** | WixBurn signature | `/quiet /norestart` | High |
+| **InstallAware** | InstallAware signature | `/s` | Medium |
+| **Advanced Installer** | Caphyon signature | `/i /qn` | Medium |
+
+### Usage Examples
 
 ```powershell
-# Readiness check only - no MSI required, no changes made
+# Analyze installer before deployment (shows framework and switches)
+.\Deploy-RMMAgent.ps1 -InstallerPath "Setup.exe" -ShowInstallerInfo
+.\Deploy-RMMAgent.ps1 -InstallerPath "Agent.msi" -ShowInstallerInfo
+
+# Auto-detect installer in current directory
+.\Deploy-RMMAgent.ps1 -ComputerName "WKS01"
+
+# Deploy EXE with auto-detected silent switches
+.\Deploy-RMMAgent.ps1 -InstallerPath "C:\Installers\Setup.exe" -ComputerName "WKS01","WKS02"
+
+# Deploy EXE with custom switches (override auto-detection)
+.\Deploy-RMMAgent.ps1 -InstallerPath "Setup.exe" -InstallerArguments "/S /D=C:\CustomPath"
+
+# Deploy MSI with custom properties
+.\Deploy-RMMAgent.ps1 -InstallerPath "Agent.msi" -InstallerProperties @{
+    SERVERURL = "https://rmm.company.com"
+    APIKEY = "abc123"
+}
+
+# Deploy MSI with transform file
+.\Deploy-RMMAgent.ps1 -InstallerPath "Agent.msi" -TransformPath "Settings.mst"
+
+# Readiness check only (no deployment)
 .\Deploy-RMMAgent.ps1 -TestOnly
 
-# Readiness check for specific OU
-.\Deploy-RMMAgent.ps1 -TestOnly -SearchBase "OU=Workstations,DC=contoso,DC=com"
+# Deploy to AD OU, exclude servers
+.\Deploy-RMMAgent.ps1 -InstallerPath "Agent.msi" -SearchBase "OU=Workstations,DC=contoso,DC=com" -ExcludeServers
 
-# Auto-detect MSI and PSExec in current directory
-.\Deploy-RMMAgent.ps1
-
-# Deploy with explicit MSI path
-.\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi"
-
-# Deploy to workstations only, exclude servers
-.\Deploy-RMMAgent.ps1 -MSIPath "C:\Installers\RMMAgent.msi" -ExcludeServers
-
-# Deploy with custom MSI arguments
-.\Deploy-RMMAgent.ps1 -MSIPath "C:\RMM.msi" -MSIArguments "/qn /norestart SERVERURL=https://rmm.example.com"
-
-# Exclude specific machines by pattern
-.\Deploy-RMMAgent.ps1 -MSIPath "C:\RMM.msi" -ExcludePattern "^DC-|^SQL-|^TEST-"
-
-# Deploy to specific computers only
-.\Deploy-RMMAgent.ps1 -MSIPath "C:\RMM.msi" -ComputerName "WKS01","WKS02","WKS03"
-
-# Filter by OS
-.\Deploy-RMMAgent.ps1 -TestOnly -Filter "OperatingSystem -like '*Windows 10*'"
+# Deploy with retry on failure
+.\Deploy-RMMAgent.ps1 -InstallerPath "Setup.exe" -RetryCount 2 -CollectLogs
 ```
 
-### SharePoint Migration
+### Key Parameters
+
+| Parameter | Aliases | Description |
+|-----------|---------|-------------|
+| `-InstallerPath` | `-MSIPath`, `-Path` | Path to MSI or EXE installer |
+| `-InstallerArguments` | `-MSIArguments`, `-EXEArguments` | Override auto-detected silent switches |
+| `-InstallerProperties` | `-MSIProperties` | Hashtable of properties to pass to installer |
+| `-ShowInstallerInfo` | `-ShowMSIProperties` | Analyze installer and exit (no deployment) |
+| `-TransformPath` | | MST transform file for MSI deployment |
+| `-ComputerName` | | Specific target computer(s) |
+| `-SearchBase` | | AD OU distinguished name to search |
+| `-TestOnly` | | Run readiness checks only |
+| `-RetryCount` | | Retry failed deployments (0-5) |
+| `-CollectLogs` | | Pull install logs from failed systems |
+| `-SkipValidation` | | Skip post-install registry verification |
+
+### Deployment Phases
+
+| Phase | Description |
+|-------|-------------|
+| **Installer Analysis** | Extract MSI properties or detect EXE framework |
+| **Target Discovery** | Query AD or use manual computer list |
+| **Reachability** | Filter to online systems via ICMP ping |
+| **Compatibility** | Validate PSEXEC requirements (Port 445, ADMIN$) |
+| **Deployment** | Copy installer, execute via PSEXEC, cleanup |
+| **Validation** | Verify product in registry post-install |
+| **Reporting** | Generate HTML report and CSV export |
+
+### PSEXEC Compatibility Requirements
+
+| Requirement | Check Method | Resolution |
+|-------------|--------------|------------|
+| Port 445 open | TCP connection test | Enable File and Printer Sharing |
+| ADMIN$ accessible | UNC path test | Verify admin shares enabled |
+| Admin rights | Implicit via share access | Use domain admin or local admin credentials |
+| SMB enabled | Port 445 response | Start LanmanServer service |
+
+---
+
+## SharePoint Migration Readiness
+
+The `Get-SPOMigrationReadiness.ps1` script checks for:
+
+| Issue Category | SharePoint Limit | Impact |
+|----------------|------------------|--------|
+| **Path Length** | 400 chars (URL), 218 chars (sync) | Files won't upload or sync |
+| **Invalid Characters** | " * : < > ? / \ \| | Upload failures |
+| **Restricted Names** | CON, PRN, AUX, NUL, COM0-9, LPT0-9 | Upload blocked |
+| **Legacy Office** | .doc, .xls, .ppt | No co-authoring, no web editing |
+| **Blocked Files** | .exe, .bat, .ps1, etc. | Upload blocked by policy |
+| **File Size** | 250 GB max | Upload failure |
+| **Folder Items** | 5,000 (view threshold) | Performance issues |
 
 ```powershell
 # SharePoint migration readiness assessment
@@ -82,7 +153,9 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 .\Get-SPOMigrationReadiness.ps1 -Path "\\Server\Data" -IncludePermissions -TargetSiteUrl "https://contoso.sharepoint.com/sites/Projects"
 ```
 
-### Ransomware Cleanup
+---
+
+## Ransomware Cleanup
 
 ```powershell
 # Ransomware cleanup - report first (no changes)
@@ -92,7 +165,9 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 .\Remove-RansomwareArtifacts.ps1 -Path "D:\Data" -Action DeleteNotes -CreateBackup
 ```
 
-### File Management
+---
+
+## File Management
 
 ```powershell
 # Find and remove empty folders
@@ -108,46 +183,6 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 
 ---
 
-## RMM Deployment Phases
-
-The `Deploy-RMMAgent.ps1` script executes in phases:
-
-| Phase | Description |
-|-------|-------------|
-| **Prerequisites** | Locates PSExec.exe and validates MSI file |
-| **Target Discovery** | Queries AD or uses manual computer list |
-| **Reachability** | Filters to online systems via ICMP ping |
-| **Compatibility** | Validates PSEXEC requirements on each target |
-| **Deployment** | Copies MSI, executes via PSEXEC, cleans up |
-| **Reporting** | Generates HTML report and CSV export |
-
-### PSEXEC Compatibility Requirements
-
-| Requirement | Check Method | Resolution |
-|-------------|--------------|------------|
-| Port 445 open | TCP connection test | Enable File and Printer Sharing |
-| ADMIN$ accessible | UNC path test | Verify admin shares enabled |
-| Admin rights | Implicit via share access | Use domain admin or local admin credentials |
-| SMB enabled | Port 445 response | Start LanmanServer service |
-
----
-
-## SharePoint Migration Readiness Checks
-
-The `Get-SPOMigrationReadiness.ps1` script checks for:
-
-| Issue Category | SharePoint Limit | Impact |
-|----------------|------------------|--------|
-| **Path Length** | 400 chars (URL), 218 chars (sync) | Files won't upload or sync |
-| **Invalid Characters** | " * : < > ? / \ \| | Upload failures |
-| **Restricted Names** | CON, PRN, AUX, NUL, COM0-9, LPT0-9 | Upload blocked |
-| **Legacy Office** | .doc, .xls, .ppt | No co-authoring, no web editing |
-| **Blocked Files** | .exe, .bat, .ps1, etc. | Upload blocked by policy |
-| **File Size** | 250 GB max | Upload failure |
-| **Folder Items** | 5,000 (view threshold) | Performance issues |
-
----
-
 ## Common Parameters
 
 | Parameter | Description |
@@ -155,8 +190,8 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 | `-Path` | Target directory |
 | `-Action` | Operation mode (Report, Delete, Move, etc.) |
 | `-WhatIf` | Preview changes without execution |
-| `-TestOnly` | Run checks without deployment (Deploy-RMMAgent) |
-| `-Interactive` | Prompt for confirmations |
+| `-TestOnly` | Run checks without deployment |
+| `-Force` | Skip confirmation prompts |
 | `-ExportPath` / `-OutputPath` | Output file location |
 
 ---
@@ -165,7 +200,7 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 
 | Script | Requirements |
 |--------|--------------|
-| `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module, PSExec.exe, Admin rights on targets |
+| `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module (for AD query), PSExec.exe, Admin rights on targets |
 | `Get-SPOMigrationReadiness.ps1` | PowerShell 5.1+, Read access to source paths |
 | `Convert-Legacy*.ps1` | PowerShell 5.1+, Microsoft Office installed |
 | `Find-DuplicateFiles.ps1` | PowerShell 5.1+, NTFS (for hardlinks) |
