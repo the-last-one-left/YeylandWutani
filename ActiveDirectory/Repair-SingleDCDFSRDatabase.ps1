@@ -400,8 +400,23 @@ function Wait-ForSYSVOLShare {
 
 # Main script execution
 try {
-    Write-Host "`n=== Single DC DFSR Database Recovery ===" -ForegroundColor DarkYellow
-    Write-Host "Yeyland Wutani - Building Better Systems" -ForegroundColor Gray
+    # Show YW Banner
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = "=" * 81
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) { Write-Host $line -ForegroundColor DarkYellow }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "        Single DC DFSR Database Recovery" -ForegroundColor Gray
     Write-Host "Started: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')`n" -ForegroundColor Gray
     
     # Auto-detect Volume GUID if not provided
