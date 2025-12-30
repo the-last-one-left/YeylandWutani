@@ -47,7 +47,7 @@
 .NOTES
     Name:        Find-PersistenceThreats.ps1
     Author:      Yeyland Wutani LLC
-    Version:     1.1.1
+    Version:     1.1.2
     License:     MIT
     Requires:    PowerShell 5.1+, Administrator privileges recommended
 
@@ -92,7 +92,7 @@ param(
 # CONFIGURATION
 # ============================================================================
 
-$script:Version = "1.1.1"
+$script:Version = "1.1.2"
 
 # Threat scoring weights
 $script:ThreatWeights = @{
@@ -346,11 +346,24 @@ function Get-ThreatScore {
     }
     
     # Extract executable path for file-based checks
+    # Must handle: "C:\path\file.exe" args, C:\path\file.exe args, %envvar% paths, rundll32 patterns
     $executablePath = $null
-    if ($value -match '^"?([A-Za-z]:\\[^"]+\.(exe|dll))') {
+    if ($value -match '^"([^"]+\.(exe|dll))"') {
+        # Quoted path: "C:\Program Files\app.exe" or "%ProgramFiles%\app.exe"
         $executablePath = $matches[1]
-    } elseif ($value -match '^([A-Za-z]:\\[^\s]+\.(exe|dll))') {
+    }
+    elseif ($value -match '^([A-Za-z]:\\[^\s,]+\.(exe|dll))') {
+        # Unquoted path with drive letter: C:\Windows\System32\rundll32.exe
         $executablePath = $matches[1]
+    }
+    elseif ($value -match '^(%[^%]+%[^\s,]+\.(exe|dll))') {
+        # Unquoted path with env var: %windir%\system32\cmd.exe
+        $executablePath = $matches[1]
+    }
+    
+    # Expand environment variables in the path
+    if ($executablePath -and $executablePath -match '%') {
+        $executablePath = [Environment]::ExpandEnvironmentVariables($executablePath)
     }
     
     # Check file location - only flag if EXECUTABLE is in suspicious location
