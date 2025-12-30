@@ -193,7 +193,7 @@ try {
         Write-Host "`nTop Stale Computer OS Types:" -ForegroundColor Gray
         foreach ($os in $osByCount) {
             $osName = if ($os.Name) { $os.Name } else { 'Unknown' }
-            Write-Host "  $osName: $($os.Count)" -ForegroundColor Gray
+            Write-Host "  ${osName}: $($os.Count)" -ForegroundColor Gray
         }
     }
     
