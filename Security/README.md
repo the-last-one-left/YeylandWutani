@@ -8,15 +8,118 @@ Security assessment, threat detection, compliance tools, and certificate managem
 
 | Script | Description |
 |--------|-------------|
-| `Get-CopilotReadinessReport.ps1` | Microsoft 365 Copilot readiness assessment: licensing, data governance, oversharing risks, sensitive content detection, sharing link analysis |
+| `Find-RMMArtifacts.ps1` | Detect remnants of RMM tools and remote access software when onboarding new clients |
+| `Get-CopilotReadinessReport.ps1` | Microsoft 365 Copilot readiness assessment: licensing, data governance, oversharing risks, sensitive content detection |
 | `Find-WildcardCertificateUsage.ps1` | Discover everywhere a wildcard (or any) SSL certificate is used across Windows servers |
-| `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules, admin logs |
-| `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links, storage analysis |
-| `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs, high-risk ACLs |
+| `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules |
+| `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links |
+| `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs |
 
 ---
 
-## Get-CopilotReadinessReport.ps1 (v1.0)
+## Find-RMMArtifacts.ps1 (v1.0)
+
+**Purpose:** Essential tool when taking over a new client. Detects remnants of Remote Monitoring and Management (RMM) tools and remote access software that weren't properly removed by the previous MSP.
+
+**Why This Matters:** Leftover RMM artifacts create security vulnerabilities, service conflicts, unnecessary network traffic, and potential unauthorized remote access. This tool scans for artifacts from 30+ RMM and remote access products.
+
+**Detected RMM Platforms:**
+
+| Product | Vendor | Detection Methods |
+|---------|--------|-------------------|
+| NinjaRMM (NinjaOne) | NinjaOne | Services, Processes, Files, Registry |
+| Datto RMM | Datto (Kaseya) | Services, Processes, Files, Registry |
+| ConnectWise Automate (LabTech) | ConnectWise | Services, Processes, Files, Registry |
+| ConnectWise RMM (Continuum) | ConnectWise | Services, Processes, Files, Registry |
+| Atera | Atera Networks | Services, Processes, Files, Registry |
+| Kaseya VSA | Kaseya | Services, Processes, Files, Registry |
+| Syncro | Syncro MSP | Services, Processes, Files, Registry |
+| N-able N-central | N-able | Services, Processes, Files, Registry |
+| N-able N-sight | N-able | Services, Processes, Files, Registry |
+| Action1 | Action1 Corp | Services, Processes, Files, Registry |
+| ManageEngine Desktop Central | Zoho | Services, Processes, Files, Registry |
+| Pulseway | Pulseway | Services, Processes, Files, Registry |
+| Level | Level.io | Services, Processes, Files, Registry |
+| Microsoft Intune | Microsoft | Services, Processes, Files, Registry |
+
+**Detected Remote Access Tools:**
+
+| Product | Vendor |
+|---------|--------|
+| ConnectWise Control (ScreenConnect) | ConnectWise |
+| TeamViewer | TeamViewer GmbH |
+| AnyDesk | AnyDesk Software |
+| LogMeIn | GoTo |
+| GoToAssist / GoTo Resolve | GoTo |
+| Splashtop | Splashtop Inc. |
+| BeyondTrust (Bomgar) | BeyondTrust |
+| Chrome Remote Desktop | Google |
+| VNC variants (Tight/Ultra/Real) | Various |
+| Zoho Assist | Zoho Corp |
+| RustDesk | RustDesk |
+| SimpleHelp | SimpleHelp |
+| DWService | DWService |
+| RemotePC | iDrive |
+| Supremo | Nanosystems |
+
+**Detection Methods:**
+- **Windows Services**: Running and stopped services from all detected products
+- **Running Processes**: Active processes indicating live RMM connections
+- **File System**: Installation directories in Program Files, ProgramData, AppData
+- **Registry Keys**: HKLM/HKCU entries including uninstall keys
+- **Installed Software**: Registry-based software enumeration
+- **Scheduled Tasks**: Persistence mechanisms via task scheduler
+
+**Usage:**
+```powershell
+# Basic local scan (all RMM and remote access tools)
+.\Find-RMMArtifacts.ps1
+
+# Scan multiple computers
+.\Find-RMMArtifacts.ps1 -ComputerName "PC01","PC02","PC03"
+
+# Exclude your current RMM from results
+.\Find-RMMArtifacts.ps1 -ExcludeProducts "NinjaRMMAgent"
+
+# RMM tools only (skip remote access detection)
+.\Find-RMMArtifacts.ps1 -IncludeRemoteAccess:$false
+
+# Export CSV alongside HTML report
+.\Find-RMMArtifacts.ps1 -ExportCSV -OutputPath "C:\Reports"
+
+# Pipeline from Active Directory
+Get-ADComputer -Filter "Name -like 'WS-*'" | 
+    Select-Object -ExpandProperty Name | 
+    .\Find-RMMArtifacts.ps1 -OutputPath "C:\ClientOnboarding"
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-ComputerName` | Target computer(s) to scan | Local computer |
+| `-OutputPath` | Report output directory | Current directory |
+| `-ExportCSV` | Generate CSV exports with HTML | HTML only |
+| `-IncludeRemoteAccess` | Include remote access tools in scan | $true |
+| `-ExcludeProducts` | Array of product names to exclude | None |
+| `-DeepScan` | Enable thorough file system scanning | $false |
+
+**Report Features:**
+- **Risk Level Assessment**: Clean / Low / Medium / High / Critical based on artifact count
+- **Product Cards**: Expandable details for each detected product
+- **Artifact Breakdown**: Services, processes, files, registry, tasks per product
+- **Service Status**: Running vs. stopped state for each detected service
+- **Console Summary**: Quick overview with color-coded findings
+
+**Requirements:**
+- PowerShell 5.1+
+- Admin rights (for service/registry access)
+- WinRM enabled (for remote computer scanning)
+- No external dependencies
+
+---
+
+## Get-CopilotReadinessReport.ps1 (v1.2)
 
 **Purpose:** Comprehensive pre-deployment assessment for Microsoft 365 Copilot. Identifies licensing gaps, data governance issues, and oversharing risks that could expose sensitive content through Copilot.
 
@@ -64,15 +167,6 @@ Security assessment, threat detection, compliance tools, and certificate managem
 | `-TopCandidates` | Number of top Copilot candidates to identify | 50 |
 | `-DaysInactive` | Inactivity threshold for flagging users | 30 |
 
-**Report Highlights:**
-
-- **Readiness Score**: 0-100% weighted across licensing, governance, security, and user readiness
-- **Critical Alerts**: Red warning boxes for "Everyone" access sites, anonymous sharing links
-- **Sensitive Content Detection**: Scans document libraries for PII keyword matches
-- **Sharing Link Analysis**: Identifies anonymous and org-wide links with file counts
-- **Risk-Scored Sites**: HIGH/MEDIUM/LOW classification with direct links to review permissions
-- **OneDrive Provisioning**: Clear explanation of what it means and who needs it
-
 **Required Graph Permissions:**
 - User.Read.All, Directory.Read.All, Reports.Read.All
 - Policy.Read.All, Sites.Read.All, Group.Read.All
@@ -84,12 +178,6 @@ Security assessment, threat detection, compliance tools, and certificate managem
 - Microsoft.Graph.Identity.DirectoryManagement
 - Microsoft.Graph.Reports
 - Microsoft.Graph.Groups
-
-**Output Files:**
-- `CopilotReadiness_{ClientName}_{Timestamp}.html` - Full visual report
-- `CopilotReadiness_Licenses.csv` - License summary (with -ExportCSV)
-- `CopilotReadiness_EligibleUsers.csv` - Eligible users list (with -ExportCSV)
-- `CopilotReadiness_SensitivityLabels.csv` - Labels configured (with -ExportCSV)
 
 ---
 
@@ -103,11 +191,6 @@ Security assessment, threat detection, compliance tools, and certificate managem
 - **RDP Configuration**: Checks Remote Desktop certificate assignments via WMI
 - **HTTP.SYS Bindings**: Examines SSL bindings registered with HTTP.SYS
 - **SSL Port Probing**: Directly connects to common SSL ports to identify certificates in use
-
-**Search Options:**
-- Thumbprint (most reliable - same wildcard cert has identical thumbprints everywhere)
-- Subject pattern (e.g., `*.contoso.com`)
-- Friendly name
 
 **Usage:**
 ```powershell
@@ -123,29 +206,11 @@ Security assessment, threat detection, compliance tools, and certificate managem
 # Search specific servers (from list)
 .\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -ComputerName (Get-Content servers.txt)
 
-# Limit to specific OU in AD
-.\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*.domain.com" -OUSearchBase "OU=Servers,DC=domain,DC=com"
-
 # Port-only scan (when remoting unavailable)
 .\Find-WildcardCertificateUsage.ps1 -SubjectPattern "*wildcard*" -SkipRemoting -ScanPorts 443,8443,3389
-
-# Custom ports and timeout
-.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -ScanPorts 443,8443,636,5986 -TimeoutSeconds 10
-
-# Include workstations (not just servers)
-.\Find-WildcardCertificateUsage.ps1 -Thumbprint "A1B2..." -IncludeClients
 ```
 
-**Output:**
-- HTML report with Yeyland Wutani branding
-- CSV exports for certificate instances, IIS bindings, RDP services, port scan results
-- Expiration warnings (yellow <30 days, red if expired)
-
-**Requirements:**
-- PowerShell 5.1+
-- PowerShell Remoting enabled on target servers (for full discovery)
-- Active Directory PowerShell module (for automatic server discovery)
-- Admin rights for certificate store access
+**Requirements:** PowerShell 5.1+, PowerShell Remoting, AD module
 
 ---
 
@@ -194,9 +259,6 @@ Security assessment, threat detection, compliance tools, and certificate managem
 
 # Include OneDrive sites
 .\Get-SPOSecurityReport.ps1 -TenantName "contoso" -IncludeOneDrive
-
-# Filter specific sites
-.\Get-SPOSecurityReport.ps1 -TenantName "contoso" -SiteUrlFilter "*project*"
 ```
 
 **Required Modules:** Microsoft.Graph.*, Microsoft.Online.SharePoint.PowerShell
@@ -211,8 +273,6 @@ Security assessment, threat detection, compliance tools, and certificate managem
 - Broken inheritance detection with complexity scoring
 - Orphaned SID identification (deleted accounts in ACLs)
 - High-risk permission flagging (Everyone, Authenticated Users, Domain Users)
-- Folder size distribution visualization
-- Supports local paths and UNC paths
 
 **Usage:**
 ```powershell
@@ -222,19 +282,14 @@ Security assessment, threat detection, compliance tools, and certificate managem
 # Remote share with deep scan
 .\Get-FileShareSecurityReport.ps1 -Path "\\FileServer\Data" -MaxDepth 8 -OutputPath "C:\Reports"
 
-# Multiple paths, fast scan (skip size calculation)
+# Multiple paths, fast scan
 .\Get-FileShareSecurityReport.ps1 -Path @("D:\Finance", "D:\HR") -SkipSizeCalculation
-
-# Include inherited permissions in report
-.\Get-FileShareSecurityReport.ps1 -Path "\\DC01\SYSVOL" -IncludeInherited
 ```
 
 **Risk Levels:**
 - **Critical**: Everyone/Auth Users with FullControl or Modify
 - **High**: Broad groups (BUILTIN\Users) with write access
 - **Medium**: Interactive/Network users with elevated permissions
-
-**Requirements:** PowerShell 5.1+, Admin rights for full ACL access
 
 ---
 
