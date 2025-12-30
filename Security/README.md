@@ -1,6 +1,6 @@
 # Security
 
-Security assessment, threat detection, compliance tools, and certificate management for Microsoft 365, Windows file systems, and enterprise infrastructure.
+Security assessment, threat detection, compliance tools, certificate management, and access recovery for Microsoft 365, Windows file systems, SQL Server, and enterprise infrastructure.
 
 ---
 
@@ -14,6 +14,146 @@ Security assessment, threat detection, compliance tools, and certificate managem
 | `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules |
 | `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links |
 | `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs |
+| `New-SQLTempAdmin.ps1` | SQL Server access recovery: create temporary sysadmin account when locked out of an instance |
+
+---
+
+## New-SQLTempAdmin.ps1 (v1.0)
+
+**Purpose:** Emergency access recovery tool for SQL Server instances. Creates a temporary sysadmin login when all administrative access has been lost due to forgotten SA passwords, deleted logins, or domain migration issues.
+
+**Why This Matters:** Getting locked out of SQL Server happens more often than DBAs want to admit—domain migrations, departed employees, forgotten credentials. Reinstalling SQL Server and reattaching databases is time-consuming and risky. This tool leverages SQL Server's single-user mode backdoor to restore access in minutes.
+
+**Common Lockout Scenarios:**
+- SA password forgotten and no Windows logins have sysadmin rights
+- All sysadmin logins accidentally deleted or disabled
+- Server moved to new domain without trusted relationship
+- Previous MSP departed without documenting credentials
+
+**How It Works:**
+
+| Step | Action |
+|------|--------|
+| 1 | Validates prerequisites (admin rights, SQLCMD, service exists) |
+| 2 | Stops SQL Server service (disconnects all users) |
+| 3 | Starts SQL Server in single-user mode (`-m` flag) |
+| 4 | Creates new SQL login via SQLCMD with Windows Authentication |
+| 5 | Adds login to sysadmin role |
+| 6 | Restarts SQL Server in normal multi-user mode |
+| 7 | Verifies new login can connect |
+
+**Usage:**
+```powershell
+# Default instance - creates 'TempSA' with password 'password'
+.\New-SQLTempAdmin.ps1
+
+# Named instance with custom credentials
+.\New-SQLTempAdmin.ps1 -InstanceName "SQLEXPRESS" -LoginName "RecoveryAdmin" -Password "Str0ngP@ss!"
+
+# SQL Server 2019 named instance
+.\New-SQLTempAdmin.ps1 -InstanceName "SQL2019" -LoginName "EmergencyAccess" -Password "C0mpl3x!Pass"
+
+# Skip confirmation prompts (scripted use)
+.\New-SQLTempAdmin.ps1 -Force
+
+# Preview what would happen without making changes
+.\New-SQLTempAdmin.ps1 -WhatIf
+
+# Longer timeout for large instances
+.\New-SQLTempAdmin.ps1 -ServiceTimeout 120
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-InstanceName` | SQL Server instance name (MSSQLSERVER for default, or named instance) | MSSQLSERVER |
+| `-LoginName` | Name for the new SQL Server login | TempSA |
+| `-Password` | Password for the new login | password |
+| `-ServiceTimeout` | Seconds to wait for service operations (30-300) | 60 |
+| `-Force` | Skip confirmation prompts | $false |
+| `-WhatIf` | Preview actions without executing | N/A |
+
+**Instance Name Examples:**
+
+| Installation Type | Instance Name Parameter |
+|-------------------|------------------------|
+| Default instance | `-InstanceName "MSSQLSERVER"` (or omit) |
+| SQL Express | `-InstanceName "SQLEXPRESS"` |
+| Named instance | `-InstanceName "SQL2019"` |
+
+**Safety Features:**
+- Requires explicit Administrator privileges
+- Confirmation prompt before service interruption (unless `-Force`)
+- WhatIf support for previewing actions
+- Automatic service recovery if creation fails mid-process
+- Temporary SQL file cleanup after execution
+
+**Output:**
+```
+=================================================================================
+  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ 
+  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|
+   \ V /| _| \ V /| |__ / _ \ | .` | |) |  \ \/\/ /| |_| | | |/ _ \| .` || | 
+    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|
+
+                        B U I L D I N G   B E T T E R   S Y S T E M S
+=================================================================================
+
+SQL Server Temporary Admin Account Recovery
+=============================================
+
+[*] Configuration:
+   Instance:     MSSQLSERVER
+   Service:      MSSQLSERVER
+   Server:       localhost
+   New Login:    TempSA
+   Password:     ********
+
+[>] Checking prerequisites...
+[+] Running with Administrator privileges.
+[+] SQLCMD utility found.
+[+] SQL Server service 'MSSQLSERVER' found. Status: Running
+
+[>] Stopping SQL Server service 'MSSQLSERVER'...
+[+] Service stopped successfully.
+[>] Starting SQL Server in single-user mode...
+[+] SQL Server started in single-user mode.
+[>] Creating SQL login 'TempSA'...
+[+] Login 'TempSA' created and added to sysadmin role.
+[>] Stopping SQL Server service 'MSSQLSERVER'...
+[+] Service stopped successfully.
+[>] Starting SQL Server in normal mode...
+[+] SQL Server started successfully.
+[>] Verifying login...
+[+] Login verification successful.
+
+============================================================
+[+] Recovery complete!
+
+   Connection Details:
+   Server:    localhost
+   Login:     TempSA
+   Password:  password
+
+   Connect via SSMS with SQL Server Authentication
+
+[!] Remember to change the password and remove this account when done.
+============================================================
+```
+
+**Requirements:**
+- Windows local Administrator privileges
+- SQLCMD utility (included with SQL Server installations)
+- SQL Server service must exist on the local machine
+- Must be run directly on the SQL Server host
+
+**Post-Recovery Best Practices:**
+1. Connect with the new account via SSMS
+2. Re-enable or reset the SA account password
+3. Create proper sysadmin logins for authorized users
+4. Delete the temporary recovery account
+5. Document new credentials in password manager
 
 ---
 
@@ -295,7 +435,7 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 
 ## Security Notice
 
-These tools are for authorized security testing only. Users must obtain proper authorization before running on production systems.
+These tools are for authorized security testing and recovery only. Users must obtain proper authorization before running on production systems. SQL Server recovery tools should only be used on systems you are authorized to administer.
 
 ---
 
@@ -306,7 +446,8 @@ These tools are for authorized security testing only. Users must obtain proper a
 - Exchange Online Management module (for M365 tool)
 - SharePoint Online Management Shell (for SPO tool)
 - Active Directory PowerShell module (for certificate discovery)
-- Admin rights for file system and certificate scanning
+- SQLCMD utility (for SQL Server recovery)
+- Admin rights for file system, certificate, and SQL Server operations
 - Appropriate admin roles for cloud tools (Security Reader, SharePoint Admin, etc.)
 
 ---
