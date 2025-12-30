@@ -137,11 +137,22 @@ function Write-Log {
 }
 
 function Show-Banner {
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = "=" * 81
     Write-Host ""
-    Write-Host "  ======================================================" -ForegroundColor DarkYellow
-    Write-Host "        DNS Zone Health Discovery v$($script:Version)" -ForegroundColor DarkYellow
-    Write-Host "        $($script:CompanyName) - $($script:Tagline)" -ForegroundColor DarkYellow
-    Write-Host "  ======================================================" -ForegroundColor DarkYellow
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) { Write-Host $line -ForegroundColor DarkYellow }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "        DNS Zone Health Discovery v$($script:Version)" -ForegroundColor Gray
     Write-Host ""
 }
 
