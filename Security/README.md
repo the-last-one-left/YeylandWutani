@@ -8,6 +8,7 @@ Security assessment, threat detection, compliance tools, certificate management,
 
 | Script | Description |
 |--------|-------------|
+| `Find-PersistenceThreats.ps1` | Comprehensive Windows persistence mechanism analyzer with threat scoring - scans 22 categories beyond Autoruns |
 | `Find-RMMArtifacts.ps1` | Detect remnants of RMM tools and remote access software when onboarding new clients |
 | `Get-CopilotReadinessReport.ps1` | Microsoft 365 Copilot readiness assessment: licensing, data governance, oversharing risks, sensitive content detection |
 | `Find-WildcardCertificateUsage.ps1` | Discover everywhere a wildcard (or any) SSL certificate is used across Windows servers |
@@ -15,6 +16,183 @@ Security assessment, threat detection, compliance tools, certificate management,
 | `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links |
 | `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs |
 | `New-SQLTempAdmin.ps1` | SQL Server access recovery: create temporary sysadmin account when locked out of an instance |
+
+---
+
+## Find-PersistenceThreats.ps1 (v1.1.1)
+
+**Purpose:** Comprehensive Windows persistence mechanism analyzer designed for incident response, security assessments, and routine hygiene checks. Scans 22 persistence categories with intelligent threat scoring—detecting techniques that Autoruns and similar tools often miss.
+
+**Why This Matters:** Attackers establish persistence through dozens of Windows mechanisms beyond the obvious startup folders and Run keys. WMI event subscriptions, COM hijacking, IFEO debuggers, and accessibility feature attacks are commonly missed by traditional tools. This scanner finds them all and prioritizes findings by actual threat level.
+
+**Persistence Categories Scanned (22 Total):**
+
+| Category | Detection Focus |
+|----------|-----------------|
+| Registry Run Keys | 12+ locations including WOW64, Policies, Active Setup, RunServices |
+| Startup Folders | User and Common startup with .lnk resolution |
+| Scheduled Tasks | Encoded PowerShell detection with automatic Base64 decoding |
+| WMI Event Subscriptions | CommandLine and ActiveScript consumers (stealthy persistence) |
+| Services | Unusual paths, script executors, auto-start stopped services |
+| IFEO Debugger | Image File Execution Options hijacks |
+| IFEO GlobalFlag | Silent Process Exit monitors (hidden from Autoruns) |
+| Winlogon | Shell, Userinit, Taskman modifications |
+| BITS Jobs | Background transfers with NotifyCmdLine persistence |
+| AppInit/AppCert DLLs | DLL injection mechanisms |
+| Accessibility Hijacks | sethc, utilman, osk, magnify, narrator attacks |
+| COM Object Hijacking | HKCU CLSID overrides (InprocServer32/LocalServer32) |
+| PowerShell Profiles | All 6 profile locations |
+| Browser Extensions | Chrome, Edge, Firefox with manifest parsing |
+| Security Providers | SSPs and Authentication Packages |
+| Print Monitors | Custom print monitor DLLs |
+| Netsh Helpers | Non-System32 helper DLLs |
+| Time Providers | Custom W32Time provider DLLs |
+| Boot Execute | BootExecute and SetupExecute entries |
+| Office Add-ins | Word, Excel, PowerPoint, Outlook across versions, VSTO |
+
+**Threat Scoring System:**
+
+| Score | Level | Meaning |
+|-------|-------|---------|
+| 70+ | Critical | Requires immediate investigation |
+| 50-69 | High | Strong indicators of malicious persistence |
+| 30-49 | Medium | Suspicious, warrants review |
+| 10-29 | Low | Minor anomalies |
+| 0-9 | Info | Informational, likely benign |
+
+**Scoring Factors:**
+
+| Indicator | Points | Description |
+|-----------|--------|-------------|
+| WMI Persistence | +40 | Often missed by traditional tools |
+| Accessibility Hijack | +45 | Sticky keys attack pattern |
+| IFEO Debugger | +35 | Process hijacking technique |
+| Encoded Command | +35 | Base64/obfuscated PowerShell |
+| File Not Found | +30 | Referenced executable missing |
+| BITS Job | +30 | Background transfer persistence |
+| COM Hijack | +30 | HKCU overriding HKLM |
+| Temp Directory | +25 | Executable in temp location |
+| Unsigned Binary | +20 | No valid digital signature |
+| AppData Location | +10 | User-writable location |
+| Recently Created | +10 | Created within 7 days |
+
+**Usage:**
+```powershell
+# Basic scan - all categories, threat scoring
+.\Find-PersistenceThreats.ps1
+
+# High-threat items only with HTML report
+.\Find-PersistenceThreats.ps1 -ThreatThreshold 50 -ExportHTML
+
+# Full export (HTML + CSV + JSON)
+.\Find-PersistenceThreats.ps1 -ExportHTML -ExportCSV -ExportJSON
+
+# Create baseline for future comparison
+.\Find-PersistenceThreats.ps1 -BaselineMode
+
+# Compare against saved baseline
+.\Find-PersistenceThreats.ps1 -CompareBaseline ".\baseline_SERVER01_20241229.json"
+
+# Include Microsoft-signed entries (normally filtered)
+.\Find-PersistenceThreats.ps1 -IncludeMicrosoft
+
+# Scan remote computer
+.\Find-PersistenceThreats.ps1 -ComputerName "SERVER01"
+
+# Preview without making changes
+.\Find-PersistenceThreats.ps1 -WhatIf
+```
+
+**Parameters:**
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-ComputerName` | Target computer(s) to scan | Local machine |
+| `-ThreatThreshold` | Minimum score to display (0-100) | 0 (show all) |
+| `-ExportHTML` | Generate branded HTML report | $false |
+| `-ExportCSV` | Generate CSV export | $false |
+| `-ExportJSON` | Generate JSON export | $false |
+| `-BaselineMode` | Save results as baseline | $false |
+| `-CompareBaseline` | Path to baseline file for comparison | None |
+| `-IncludeMicrosoft` | Include Microsoft-signed entries | $false |
+| `-WhatIf` | Preview mode | N/A |
+
+**Intelligent Whitelisting:**
+
+The scanner automatically filters known-good software to reduce noise:
+- Microsoft products (Teams, Edge, OneDrive, Office, PowerToys)
+- Google Chrome and updater components
+- Python launcher and shell extensions
+- Enterprise software (Zoom, Webex, Cisco, Slack, Adobe)
+- Security tools (Cylance, CrowdStrike, SentinelOne, Palo Alto)
+- Default Windows WMI filters and Netsh helpers
+
+**Output Example:**
+```
+================================================================================
+  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___
+  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|
+   \ V /| _| \ V /| |__ / _ \ |  ` | |) |  \ \/\/ /| |_| | | |/ _ \|  ` || |
+    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|
+
+                 B U I L D I N G   B E T T E R   S Y S T E M S
+================================================================================
+
+[*] Persistence Threat Analyzer v1.1.1
+[*] Scanning 22 persistence categories with threat scoring
+
+================================================================================
+[*] Scanning: WORKSTATION01
+[>] [1/19] Checking Registry Run Keys...
+[>] [2/19] Checking Startup Folders...
+...
+[>] [19/19] Checking Office Add-ins...
+[*] Filtered 12 known Microsoft entries
+
+[+] SCAN COMPLETE FOR WORKSTATION01
+  Total entries:  180
+  Critical:       0
+  High:           0
+  Medium:         1
+  Low:            0
+  Info:           179
+
+[!] HIGH-THREAT ENTRIES:
+  [MEDIUM] Registry Run Key: {89B4C1CD-B018-4511-B0A1-5476DBF70820}
+    Value: C:\Windows\System32\Rundll32.exe C:\Windows\System32\mscories.dll,Install
+
+[+] HTML report: C:\Reports\PersistenceThreats_WORKSTATION01_20241230_122949.html
+
+================================================================================
+[+] Scan complete.
+```
+
+**HTML Report Features:**
+- Dark theme with Yeyland Wutani branding
+- Summary cards showing Critical/High/Medium/Low/Info counts
+- Entries grouped by category, sorted by threat score
+- Expandable threat indicators for each finding
+- Responsive design for easy viewing
+
+**Advantages Over Autoruns:**
+
+| Feature | Autoruns | Find-PersistenceThreats |
+|---------|----------|-------------------------|
+| WMI Event Subscriptions | Requires WMI tab | Explicitly checked |
+| IFEO GlobalFlag/Silent Exit | Not detected | Full detection |
+| Encoded PowerShell | Shows raw | Decodes Base64 |
+| Threat Scoring | None | Intelligent prioritization |
+| Browser Extensions | Not included | Chrome, Edge, Firefox |
+| PowerShell Profiles | Not included | All 6 locations |
+| BITS Jobs | Not included | NotifyCmdLine detection |
+| Office Add-ins | Not included | All versions + VSTO |
+| Baseline Comparison | Manual | Built-in |
+| Client Reports | Screenshot | Branded HTML |
+
+**Requirements:**
+- PowerShell 5.1+
+- Administrator privileges (recommended for full access)
+- No external modules required
 
 ---
 
