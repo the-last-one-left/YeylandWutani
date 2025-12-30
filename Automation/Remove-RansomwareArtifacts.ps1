@@ -581,14 +581,31 @@ function Remove-Items {
     return $removedCount
 }
 
+#region Banner
+function Show-YWBanner {
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = "=" * 81
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) { Write-Host $line -ForegroundColor DarkYellow }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+}
+#endregion Banner
+
 # Main execution
 try {
-    Write-Host "`n╔════════════════════════════════════════════════════════════╗" -ForegroundColor DarkGray
-    Write-Host "║   " -ForegroundColor DarkGray -NoNewline
-    Write-Host "Yeyland Wutani" -ForegroundColor DarkYellow -NoNewline
-    Write-Host " - Ransomware Artifact Cleanup        ║" -ForegroundColor DarkGray
-    Write-Host "║   Building Better Systems                              ║" -ForegroundColor DarkGray
-    Write-Host "╚════════════════════════════════════════════════════════════╝`n" -ForegroundColor DarkGray
+    Show-YWBanner
+    Write-Host "  Ransomware Artifact Cleanup" -ForegroundColor Cyan
+    Write-Host ""
     
     Write-Log "=== Ransomware Cleanup Started ==="
     Write-Log "Scan Path: $Path"
