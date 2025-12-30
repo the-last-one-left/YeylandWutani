@@ -1,5 +1,5 @@
 # Automation
-PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, and file management automation.
+PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, profile management, and file management automation.
 
 ---
 
@@ -10,6 +10,12 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 | Script | Description |
 |--------|-------------|
 | `Deploy-RMMAgent.ps1` | Enterprise installer deployment via PSEXEC. Supports both MSI and EXE packages with automatic framework detection. Queries AD for targets, validates PSEXEC compatibility, deploys silently, validates installation, and generates HTML reports. |
+
+### Profile Management
+
+| Script | Description |
+|--------|-------------|
+| `Reset-UserProfile.ps1` | Recreates corrupted Windows user profiles without data loss. Renames the existing profile folder and clears registry entries, triggering a fresh profile on next login. Supports local and remote computers. |
 
 ### Migration Preparation
 
@@ -36,6 +42,105 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 |--------|-------------|
 | `Convert-LegacyExcel.ps1` | Batch converts .xls files to .xlsx format |
 | `Convert-LegacyWord.ps1` | Batch converts .doc files to .docx format |
+
+---
+
+## User Profile Reset (Reset-UserProfile.ps1)
+
+Automates the process of recreating corrupted Windows user profiles while preserving all user data.
+
+### Common Scenarios
+
+| Issue | Symptoms |
+|-------|----------|
+| **Temporary Profile** | User logs in to TEMP profile, "We can't sign into your account" message |
+| **Profile Corruption** | Missing desktop icons, taskbar reset, application settings lost |
+| **Failed Windows Update** | Profile damaged after interrupted update or upgrade |
+| **NTUSER.DAT Errors** | Registry hive corruption preventing normal login |
+| **Slow Login** | Profile takes excessive time to load due to corruption |
+
+### How It Works
+
+| Step | Action | Result |
+|------|--------|--------|
+| 1 | Verify user logged off | Checks `Win32_UserProfile.Loaded` property |
+| 2 | Gather profile info | Collects SID, path, size, last use time |
+| 3 | Rename profile folder | `Username` → `Username.old.YYYYMMDD-HHMMSS` |
+| 4 | Remove registry entry | Clears `HKLM:\...\ProfileList\{SID}` |
+| 5 | User logs in | Windows generates fresh profile automatically |
+
+### Usage Examples
+
+```powershell
+# Reset profile on local computer
+.\Reset-UserProfile.ps1 -Username "jsmith"
+
+# Reset profile on remote computer
+.\Reset-UserProfile.ps1 -Username "jsmith" -ComputerName "WORKSTATION01"
+
+# Preview changes without executing (WhatIf mode)
+.\Reset-UserProfile.ps1 -Username "jsmith" -WhatIf
+
+# Skip confirmation prompt (for scripted use)
+.\Reset-UserProfile.ps1 -Username "jsmith" -Force
+
+# Custom backup suffix
+.\Reset-UserProfile.ps1 -Username "jsmith" -BackupSuffix "backup.corrupted"
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-Username` | Target username (must match C:\Users folder name) | Required |
+| `-ComputerName` | Target computer (local or remote) | Local computer |
+| `-UsersPath` | Base path for user profiles | `C:\Users` |
+| `-BackupSuffix` | Custom suffix for renamed folder | `old.YYYYMMDD-HHMMSS` |
+| `-Force` | Bypass confirmation prompt | False |
+| `-WhatIf` | Preview mode, no changes made | False |
+
+### Profile Information Display
+
+The script displays detailed profile information before proceeding:
+
+```
+  Profile Information
+  -------------------
+  Username        : jsmith
+  Computer        : WORKSTATION01
+  Profile Path    : C:\Users\jsmith
+  Folder Exists   : Yes
+  SID             : S-1-5-21-1234567890-1234567890-1234567890-1001
+  Profile Loaded  : No
+  Last Used       : 12/28/2025 2:30:15 PM
+  Registry Entry  : Exists
+  Folder Size     : 4.23 GB
+```
+
+### Post-Reset Data Migration
+
+After the user logs in and generates a fresh profile, migrate data from the `.old` folder:
+
+| Folder | Contains | Migration Priority |
+|--------|----------|-------------------|
+| `Desktop` | Desktop files and shortcuts | High |
+| `Documents` | User documents | High |
+| `Downloads` | Downloaded files | Medium |
+| `Pictures` | Photos and images | Medium |
+| `Videos` | Video files | Medium |
+| `Favorites` | Browser bookmarks (IE/Edge Legacy) | Low |
+| `AppData\Local` | Application caches, local settings | As needed |
+| `AppData\Roaming` | Application settings, profiles | As needed |
+
+### Safety Features
+
+| Feature | Description |
+|---------|-------------|
+| **No Data Loss** | Old profile folder renamed, never deleted |
+| **Load Check** | Refuses to run if user is logged in |
+| **Confirmation** | Requires typing "RESET" to proceed (unless `-Force`) |
+| **WhatIf Support** | Preview all actions before execution |
+| **Remote Support** | Works via registry remoting and UNC paths |
 
 ---
 
@@ -201,6 +306,7 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 | Script | Requirements |
 |--------|--------------|
 | `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module (for AD query), PSExec.exe, Admin rights on targets |
+| `Reset-UserProfile.ps1` | PowerShell 5.1+, Local Administrator rights, User must be logged off |
 | `Get-SPOMigrationReadiness.ps1` | PowerShell 5.1+, Read access to source paths |
 | `Convert-Legacy*.ps1` | PowerShell 5.1+, Microsoft Office installed |
 | `Find-DuplicateFiles.ps1` | PowerShell 5.1+, NTFS (for hardlinks) |
