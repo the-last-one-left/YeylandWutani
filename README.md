@@ -82,7 +82,7 @@ MIT License. See [LICENSE](LICENSE) for terms. Commercial support available.
 ## Contact
 
 **Yeyland Wutani LLC**  
-Email: [Yeyland.Wutani@tcpip.network](mailto:Yeyland.Wutani@tcpip.network)
+Email: [Support@YeylandWutani.com](mailto:Support@YeylandWutani.com)
 
 ---
 
