@@ -157,7 +157,30 @@ begin {
     $ScriptVersion = "1.0"
     $ScriptName = "Test-NetworkConnectivity"
     
+    #region Banner
+    function Show-YWBanner {
+        $logo = @(
+            "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+            "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+            "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+            "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+        )
+        $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+        $border  = "=" * 81
+        Write-Host ""
+        Write-Host $border -ForegroundColor Gray
+        foreach ($line in $logo) { Write-Host $line -ForegroundColor DarkYellow }
+        Write-Host ""
+        Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+        Write-Host $border -ForegroundColor Gray
+        Write-Host ""
+    }
+    #endregion Banner
+    
     if (-not $Quiet) {
+        Show-YWBanner
+        Write-Host "  Network Connectivity Tester" -ForegroundColor Cyan
+        Write-Host ""
         Write-Verbose "[$ScriptName v$ScriptVersion] - Yeyland Wutani LLC - Building Better Systems"
     }
     
