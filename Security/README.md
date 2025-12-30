@@ -19,7 +19,7 @@ Security assessment, threat detection, compliance tools, certificate management,
 
 ---
 
-## Find-PersistenceThreats.ps1 (v1.1.1)
+## Find-PersistenceThreats.ps1 (v1.1.2)
 
 **Purpose:** Comprehensive Windows persistence mechanism analyzer designed for incident response, security assessments, and routine hygiene checks. Scans 22 persistence categories with intelligent threat scoring—detecting techniques that Autoruns and similar tools often miss.
 
@@ -138,7 +138,7 @@ The scanner automatically filters known-good software to reduce noise:
                  B U I L D I N G   B E T T E R   S Y S T E M S
 ================================================================================
 
-[*] Persistence Threat Analyzer v1.1.1
+[*] Persistence Threat Analyzer v1.1.2
 [*] Scanning 22 persistence categories with threat scoring
 
 ================================================================================
