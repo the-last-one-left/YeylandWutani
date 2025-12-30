@@ -1052,11 +1052,28 @@ function New-HTMLReport {
 # Add System.Web for HTML encoding
 Add-Type -AssemblyName System.Web
 
-Write-Host ""
-Write-Host "============================================================" -ForegroundColor $Script:ConsoleAccent
-Write-Host "  Wildcard Certificate Usage Discovery Tool v$Script:Version" -ForegroundColor $Script:ConsoleHighlight
-Write-Host "  Yeyland Wutani LLC - Building Better Systems" -ForegroundColor $Script:ConsoleMuted
-Write-Host "============================================================" -ForegroundColor $Script:ConsoleAccent
+#region Banner
+function Show-YWBanner {
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = "=" * 81
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) { Write-Host $line -ForegroundColor DarkYellow }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+}
+#endregion Banner
+
+Show-YWBanner
+Write-Host "  Wildcard Certificate Usage Discovery" -ForegroundColor Cyan
 Write-Host ""
 
 # Determine search criteria display
