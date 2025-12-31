@@ -1,6 +1,6 @@
 # Network
 
-Network discovery, VLAN identification, connectivity testing, SMTP validation, and documentation tools for MSP environments.
+Network discovery, IP conflict detection, VLAN identification, connectivity testing, SMTP validation, and documentation tools for MSP environments.
 
 ---
 
@@ -8,10 +8,171 @@ Network discovery, VLAN identification, connectivity testing, SMTP validation, a
 
 | Script | Description |
 |--------|-------------|
+| `Find-DuplicateIPAddresses.ps1` | **NEW** — IP conflict detection from DHCP server: finds duplicate IPs, static devices in DHCP ranges, MAC mismatches, stale leases |
 | `Get-NetworkDiscovery.ps1` | Comprehensive network discovery with auto-subnet detection, device classification, MAC vendor lookup, and port scanning |
 | `Get-VLANDiscovery.ps1` | Multi-method VLAN identification using packet capture, DHCP, AD Sites, ARP analysis, and subnet probing |
 | `Test-NetworkConnectivity.ps1` | Advanced connectivity testing with ping, port checks, DNS resolution, and traceroute |
-| `Test-SMTPConfiguration.ps1` | **NEW** — SMTP relay validation for MFPs, scanners, and applications with M365/Google Workspace/Graph API support |
+| `Test-SMTPConfiguration.ps1` | SMTP relay validation for MFPs, scanners, and applications with M365/Google Workspace/Graph API support |
+
+---
+
+## Find-DuplicateIPAddresses.ps1
+
+Comprehensive IP conflict detection tool designed for MSP environments. Runs from a Windows DHCP server and combines DHCP lease data with active network scanning to identify IP address conflicts, unauthorized static IPs, and potential issues.
+
+### Detection Categories
+
+| Category | Severity | Description |
+|----------|----------|-------------|
+| **Duplicate IP** | Critical | Same IP responding with multiple different MAC addresses |
+| **Static in DHCP Range** | High | Device using static IP within DHCP scope (not leased or excluded) |
+| **MAC Mismatch** | Medium | DHCP lease shows different MAC than what's responding on network |
+| **Bad Address** | Medium | IP marked as declined/bad by DHCP server |
+| **Stale Lease** | Low | DHCP has active lease but device not responding |
+| **Reservation/Excluded** | Info | Properly configured static assignment |
+
+### How It Works
+
+1. **Query DHCP Server** — Retrieves all leases, reservations, exclusions, and bad addresses
+2. **Network Scan** — Async ping sweep of each scope's IP range using runspace pools
+3. **ARP Capture** — Reads ARP cache to identify responding devices and their MACs
+4. **Compare & Analyze** — Cross-references DHCP records against network reality
+5. **Report Conflicts** — Flags discrepancies with severity levels
+
+### Use Cases
+
+| Scenario | What It Finds |
+|----------|---------------|
+| **Client Onboarding** | Undocumented static devices, previous MSP remnants |
+| **IP Conflict Troubleshooting** | Which device has the duplicate MAC, source of conflicts |
+| **DHCP Hygiene Audit** | Missing exclusions, stale leases, bad addresses |
+| **Network Documentation** | Complete inventory comparison DHCP vs reality |
+| **Compliance Verification** | Static devices that should be excluded or converted to DHCP |
+
+### Usage Examples
+
+```powershell
+# Scan all DHCP scopes on local server
+.\Find-DuplicateIPAddresses.ps1
+
+# Scan remote DHCP server
+.\Find-DuplicateIPAddresses.ps1 -DHCPServer "DC01.contoso.local"
+
+# Scan specific scope with HTML report
+.\Find-DuplicateIPAddresses.ps1 -ScopeId "192.168.1.0" -ExportPath "C:\Reports\IPConflicts.html"
+
+# Scan multiple scopes
+.\Find-DuplicateIPAddresses.ps1 -ScopeId "192.168.1.0","192.168.2.0","10.0.0.0"
+
+# DHCP-only analysis (no network scanning)
+.\Find-DuplicateIPAddresses.ps1 -ScanNetwork:$false
+
+# Full inventory comparison (all devices, not just conflicts)
+.\Find-DuplicateIPAddresses.ps1 -ShowAllDevices -ExportPath "C:\Reports\FullInventory.csv"
+
+# Fast scan with reduced timeouts
+.\Find-DuplicateIPAddresses.ps1 -ScanTimeout 500 -ThrottleLimit 200
+```
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-DHCPServer` | localhost | DHCP server to query (local or remote) |
+| `-ScopeId` | All active | Specific scope(s) to analyze |
+| `-IncludeReservations` | True | Include DHCP reservations in analysis |
+| `-ScanNetwork` | True | Perform active ARP-based network scan |
+| `-ScanTimeout` | 1000ms | Timeout for ping/ARP operations |
+| `-ThrottleLimit` | 100 | Max parallel scanning threads |
+| `-ResolveHostnames` | True | DNS + NetBIOS hostname resolution |
+| `-ExportPath` | Console | Export to CSV, JSON, or HTML |
+| `-ShowAllDevices` | False | Include all devices (not just conflicts) |
+| `-Quiet` | False | Suppress progress output |
+
+### Sample Console Output
+
+```
+=================================================================================
+  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___
+  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|
+   \ V /| _| \ V /| |__ / _ \ | .` | |) |  \ \/\/ /| |_| | | |/ _ \| .` || |
+    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|
+
+                        B U I L D I N G   B E T T E R   S Y S T E M S
+=================================================================================
+
+  IP Conflict Detection Tool v1.0
+
+Connected to DHCP server: localhost
+Found 2 DHCP scope(s) to analyze:
+  - 192.168.1.0 (Office Network): 192.168.1.10 - 192.168.1.250
+  - 192.168.2.0 (Guest WiFi): 192.168.2.50 - 192.168.2.200
+
+Analyzing scope: 192.168.1.0 (Office Network)
+------------------------------------------------------------
+  Retrieving DHCP leases...
+    Found 87 active leases
+    Found 2 bad/declined addresses
+  Retrieving DHCP reservations...
+    Found 12 reservations
+  Retrieving exclusion ranges...
+    Found 15 excluded IPs
+  Performing network scan...
+    Scanning 241 IPs in range...
+    Found 94 responding devices
+    Captured 92 devices with MAC addresses
+  Resolving hostnames...
+    Resolved 78 hostnames
+  Analyzing for conflicts...
+
+  Scope Summary for 192.168.1.0:
+    Critical: 1
+    High:     5
+    Medium:   2
+    Low:      3
+
+======================================================================
+ IP Conflict Detection Summary
+======================================================================
+DHCP Server:      localhost
+Scopes Analyzed:  2
+Total IPs Found:  156
+Scan Duration:    12.4 seconds
+
+Conflict Summary:
+  Critical (Duplicate IPs):    1
+  High (Static in Range):      5
+  Medium (MAC Mismatch/Bad):   2
+  Low (Stale Leases):          3
+======================================================================
+
+Detected Conflicts:
+----------------------------------------------------------------------------------------------------
+IP Address       Scope        Hostname             Conflict Type      Severity   Notes
+----------------------------------------------------------------------------------------------------
+192.168.1.45     192.168.1.0  PRINTER-COPY01       Duplicate IP       Critical   Multiple MACs: AA-BB...
+192.168.1.100    192.168.1.0  N/A                  Static in DHCP...  High       Device using static...
+192.168.1.101    192.168.1.0  OLD-SERVER           Static in DHCP...  High       Device using static...
+...
+```
+
+### Requirements
+
+- PowerShell 5.1+
+- DhcpServer PowerShell module (included with DHCP Server role or RSAT)
+- Administrator rights (for ARP cache operations)
+- Network access to DHCP server and scope subnets
+
+### Accuracy Considerations
+
+| Scenario | Detection Accuracy | Notes |
+|----------|-------------------|-------|
+| Two DHCP clients got same IP | **High** | Shows in lease table with duplicate IPs |
+| Static device conflicts with lease | **High** | ARP scan shows MAC mismatch |
+| Static device in DHCP range (no conflict yet) | **High** | Live IP not in lease table = static |
+| Powered-off static device | **Low** | Won't respond to ARP until online |
+| VLANed/firewalled segments | **Variable** | Depends on routing from DHCP server |
+| Devices blocking ICMP | **Medium** | ARP still works at layer 2 |
 
 ---
 
@@ -226,6 +387,28 @@ Advanced connectivity testing with multiple diagnostic methods.
 
 ## Quick Reference
 
+### IP Conflict Troubleshooting Workflow
+
+```
+IP Conflict Reported
+    │
+    ├─► Run Find-DuplicateIPAddresses.ps1
+    │       │
+    │       ├─► Critical: Duplicate IP?
+    │       │       ──► Check both MACs, identify rogue device
+    │       │
+    │       ├─► High: Static in DHCP Range?
+    │       │       ──► Either exclude from scope or convert to DHCP
+    │       │
+    │       ├─► Medium: MAC Mismatch?
+    │       │       ──► Device replaced? Update DHCP reservation
+    │       │
+    │       └─► Low: Stale Lease?
+    │               ──► Device decommissioned? Clear lease
+    │
+    └─► Export HTML report for documentation
+```
+
 ### SMTP Method Selection
 
 ```
@@ -274,6 +457,7 @@ Start Here
 | Script | Requirements |
 |--------|-------------|
 | All scripts | PowerShell 5.1+ |
+| Find-DuplicateIPAddresses | DhcpServer module (RSAT or DHCP role), Admin rights |
 | Get-NetworkDiscovery | ICMP allowed, Internet for MAC API (optional) |
 | Get-VLANDiscovery | RSAT-DHCP, AD module, Admin for pktmon |
 | Test-NetworkConnectivity | ICMP/TCP access to targets |
