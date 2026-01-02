@@ -2485,18 +2485,68 @@ function Connect-TenantServices {
             return $false
         }
     }
-    
+
     #══════════════════════════════════════════════════════════
-    # PHASE 2: MODULE IMPORT AND AUTHENTICATION PREPARATION
+    # PHASE 2: MODULE CONFLICT RESOLUTION
+    #══════════════════════════════════════════════════════════
+
+    # Remove any already-loaded Graph modules to avoid conflicts
+    # This is critical when both Microsoft.Graph and Microsoft.Graph.Beta are installed
+    Update-GuiStatus "Preparing Graph modules (resolving conflicts)..." ([System.Drawing.Color]::Orange)
+    Write-Log "Checking for Graph module conflicts..." -Level "Info"
+
+    $loadedGraphModules = Get-Module -Name "Microsoft.Graph.*" -ErrorAction SilentlyContinue
+    if ($loadedGraphModules) {
+        Write-Log "Removing $($loadedGraphModules.Count) already-loaded Graph module(s) to prevent conflicts" -Level "Info"
+        foreach ($mod in $loadedGraphModules) {
+            Remove-Module -Name $mod.Name -Force -ErrorAction SilentlyContinue
+            Write-Log "  Removed: $($mod.Name)" -Level "Info"
+        }
+    }
+
+    # Check for Graph vs Graph.Beta conflicts and prefer Beta when available
+    $hasStableGraph = Get-Module -Name "Microsoft.Graph.*" -ListAvailable | Where-Object { $_.Name -notlike "*Beta*" }
+    $hasBetaGraph = Get-Module -Name "Microsoft.Graph.Beta.*" -ListAvailable
+
+    if ($hasStableGraph -and $hasBetaGraph) {
+        Write-Log "Both Microsoft.Graph and Microsoft.Graph.Beta modules detected" -Level "Info"
+        Write-Log "Beta modules will be preferred when available for better compatibility." -Level "Info"
+
+        # Replace stable modules with Beta equivalents where available
+        $updatedModules = @()
+        foreach ($module in $requiredModules) {
+            # Check if this is a stable module and if Beta equivalent exists
+            if ($module -notlike "*Beta*") {
+                $betaModuleName = $module -replace "^Microsoft\.Graph\.", "Microsoft.Graph.Beta."
+                $betaExists = Get-Module -Name $betaModuleName -ListAvailable -ErrorAction SilentlyContinue
+
+                if ($betaExists) {
+                    Write-Log "  Preferring Beta: $betaModuleName" -Level "Info"
+                    $updatedModules += $betaModuleName
+                } else {
+                    $updatedModules += $module
+                }
+            } else {
+                $updatedModules += $module
+            }
+        }
+        $requiredModules = $updatedModules
+    }
+
+    #══════════════════════════════════════════════════════════
+    # PHASE 3: MODULE IMPORT AND AUTHENTICATION PREPARATION
     #══════════════════════════════════════════════════════════
     
     try {
-        # Import required modules
+        # Import required modules with conflict handling
         Update-GuiStatus "Loading Microsoft Graph modules..." ([System.Drawing.Color]::Orange)
         Write-Log "Importing Microsoft Graph modules..." -Level "Info"
-        
+
         foreach ($module in $requiredModules) {
-            Import-Module $module -Force -ErrorAction Stop
+            # Import with -DisableNameChecking to suppress warnings about cmdlet conflicts
+            # between stable and beta modules
+            Write-Log "Importing $module..." -Level "Info"
+            Import-Module $module -Force -DisableNameChecking -ErrorAction Stop
         }
         Write-Log "All modules imported successfully" -Level "Info"
         
@@ -2709,8 +2759,49 @@ function Connect-TenantServices {
                 Write-Log "Exchange Online module imported" -Level "Info"
             }
             
-            # Connect to Exchange Online (uses same auth as Graph when possible)
-            Connect-ExchangeOnline -ShowProgress $false -ShowBanner:$false -ErrorAction Stop
+            # Connect to Exchange Online using appropriate auth method for PowerShell version
+            Write-Log "Retrieving authenticated account from Graph session..." -Level "Info"
+            $graphContext = Get-MgContext
+            $userPrincipalName = $graphContext.Account
+            $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
+
+            if ($userPrincipalName) {
+                # PowerShell 5.1: Use device code flow if available (more compatible)
+                # PowerShell 7+: Use interactive browser auth
+                if ($isPowerShell51) {
+                    Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
+                    Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
+
+                    # Check if -Device parameter exists in this version of the module
+                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+
+                    if ($deviceParamExists) {
+                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
+                    } else {
+                        Write-Log "Device parameter not available - using Remote PowerShell session for PS 5.1 compatibility" -Level "Info"
+
+                        # Try -UseRPSSession for better PS 5.1 compatibility
+                        $useRPSExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('UseRPSSession')
+
+                        if ($useRPSExists) {
+                            Write-Log "Using Remote PowerShell session mode (better for PS 5.1)" -Level "Info"
+                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -UseRPSSession -ShowBanner:$false -ErrorAction Stop
+                        } else {
+                            Write-Log "Attempting connection without UPN (may prompt for credentials)" -Level "Warning"
+                            Update-GuiStatus "Exchange Online: Please complete authentication if prompted..." ([System.Drawing.Color]::Yellow)
+                            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                        }
+                    }
+                } else {
+                    Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
+                    Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
+                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
+                }
+            } else {
+                Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
+                Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
+                Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+            }
             
             # Test connection to verify it worked
             $testResult = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
@@ -2977,8 +3068,49 @@ function Connect-ExchangeOnlineIfNeeded {
             Write-Log "Attempting to connect to Exchange Online..." -Level "Info"
             
             try {
-                # Connect using modern auth (inherits credentials from Graph when possible)
-                Connect-ExchangeOnline -ShowProgress $false -ShowBanner:$false -ErrorAction Stop
+                # Connect using appropriate auth method for PowerShell version
+                Write-Log "Retrieving authenticated account from Graph session..." -Level "Info"
+                $graphContext = Get-MgContext
+                $userPrincipalName = $graphContext.Account
+                $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
+
+                if ($userPrincipalName) {
+                    # PowerShell 5.1: Use device code flow if available (more compatible)
+                    # PowerShell 7+: Use interactive browser auth
+                    if ($isPowerShell51) {
+                        Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
+                        Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
+
+                        # Check if -Device parameter exists in this version of the module
+                        $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+
+                        if ($deviceParamExists) {
+                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
+                        } else {
+                            Write-Log "Device parameter not available - using Remote PowerShell session for PS 5.1 compatibility" -Level "Info"
+
+                            # Try -UseRPSSession for better PS 5.1 compatibility
+                            $useRPSExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('UseRPSSession')
+
+                            if ($useRPSExists) {
+                                Write-Log "Using Remote PowerShell session mode (better for PS 5.1)" -Level "Info"
+                                Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -UseRPSSession -ShowBanner:$false -ErrorAction Stop
+                            } else {
+                                Write-Log "Attempting connection without UPN (may prompt for credentials)" -Level "Warning"
+                                Update-GuiStatus "Exchange Online: Please complete authentication if prompted..." ([System.Drawing.Color]::Yellow)
+                                Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                            }
+                        }
+                    } else {
+                        Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
+                        Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
+                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
+                    }
+                } else {
+                    Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
+                    Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
+                    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                }
                 
                 # Verify connection worked
                 $testResult = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
@@ -3584,8 +3716,8 @@ function Get-TenantSignInData {
     #═══════════════════════════════════════════════════════════════════════════
     
     try {
-        Import-Module Microsoft.Graph.Beta.Reports -Force -ErrorAction Stop
-        Write-Log "Microsoft.Graph.Reports module imported successfully" -Level "Info"
+        Import-Module Microsoft.Graph.Beta.Reports -Force -DisableNameChecking -ErrorAction Stop
+        Write-Log "Microsoft.Graph.Beta.Reports module imported successfully" -Level "Info"
     }
     catch {
         Update-GuiStatus "Failed to import Microsoft.Graph.Reports module: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
