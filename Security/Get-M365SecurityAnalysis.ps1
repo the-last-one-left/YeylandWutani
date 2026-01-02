@@ -8869,52 +8869,6 @@ function Show-MainGUI {
     $form.Controls.Add($versionLabel)
 
     #──────────────────────────────────────────────────────────────
-    # DISCLAIMER PANEL
-    #──────────────────────────────────────────────────────────────
-    
-    $disclaimerPanel = New-Object System.Windows.Forms.Panel
-    $disclaimerPanel.Size = New-Object System.Drawing.Size(780, 80)
-    $disclaimerPanel.Location = New-Object System.Drawing.Point(20, 90)
-    $disclaimerPanel.BorderStyle = "FixedSingle"
-    
-    if ($script:CurrentTheme -eq "Dark") {
-        $disclaimerPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 140, 0)
-    } else {
-        $disclaimerPanel.BackColor = [System.Drawing.Color]::FromArgb(255, 248, 220)
-    }
-    $form.Controls.Add($disclaimerPanel)
-
-    $disclaimerTitle = New-Object System.Windows.Forms.Label
-    $disclaimerTitle.Text = "⚠️ NOTICE - PROPRIETARY TOOL"
-    $disclaimerTitle.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
-    $disclaimerTitle.Size = New-Object System.Drawing.Size(760, 25)
-    $disclaimerTitle.Location = New-Object System.Drawing.Point(10, 10)
-    $disclaimerTitle.TextAlign = "MiddleCenter"
-    
-    if ($script:CurrentTheme -eq "Dark") {
-        $disclaimerTitle.ForeColor = [System.Drawing.Color]::White
-    } else {
-        $disclaimerTitle.ForeColor = [System.Drawing.Color]::FromArgb(184, 134, 11)
-    }
-    $disclaimerPanel.Controls.Add($disclaimerTitle)
-
-    $disclaimerText = New-Object System.Windows.Forms.Label
-    $disclaimerText.Text = "This tool was developed by Yeyland Wutani LLC for security engagements." + [Environment]::NewLine + 
-                          "Licensed for use by Yeyland Wutani and clients." + [Environment]::NewLine +
-                          "Unauthorized use, distribution, or modification is strictly prohibited."
-    $disclaimerText.Font = New-Object System.Drawing.Font("Segoe UI", 8)
-    $disclaimerText.Size = New-Object System.Drawing.Size(760, 45)
-    $disclaimerText.Location = New-Object System.Drawing.Point(10, 35)
-    $disclaimerText.TextAlign = "MiddleCenter"
-    
-    if ($script:CurrentTheme -eq "Dark") {
-        $disclaimerText.ForeColor = [System.Drawing.Color]::FromArgb(255, 228, 181)
-    } else {
-        $disclaimerText.ForeColor = [System.Drawing.Color]::FromArgb(133, 77, 14)
-    }
-    $disclaimerPanel.Controls.Add($disclaimerText)
-
-    #──────────────────────────────────────────────────────────────
     # STATUS PANEL
     #──────────────────────────────────────────────────────────────
     
