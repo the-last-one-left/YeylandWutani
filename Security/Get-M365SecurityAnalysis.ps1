@@ -199,6 +199,28 @@ function Set-Theme {
     Write-Log "Theme changed to: $Theme" -Level "Info"
 }
 
+function Show-YWBanner {
+    $logo = @(
+        "  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ "
+        "  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|"
+        "   \ V /| _| \ V /| |__ / _ \ | .`` | |) |  \ \/\/ /| |_| | | |/ _ \| .`` || | "
+        "    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|"
+    )
+    
+    $tagline = "B U I L D I N G   B E T T E R   S Y S T E M S"
+    $border  = ("=" * 81)
+    
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    foreach ($line in $logo) {
+        Write-Host $line -ForegroundColor DarkYellow
+    }
+    Write-Host ""
+    Write-Host $tagline.PadLeft(62) -ForegroundColor Gray
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
+}
+
 function Apply-ThemeToGui {
     <#
     .SYNOPSIS
@@ -9693,12 +9715,15 @@ function Show-MainGUI {
 # SCRIPT INITIALIZATION
 #══════════════════════════════════════════════════════════════
 
+Show-YWBanner
+
 Write-Host ""
 Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║ Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition  ║" -ForegroundColor Cyan
 Write-Host ("║ Version {0,-55}║" -f $ScriptVer) -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
+
 
 
 # Initialize environment
