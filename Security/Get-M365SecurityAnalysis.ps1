@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "10.3"
+$ScriptVer = "10.4"
 
 #--------------------------------------------------------------
 # GLOBAL CONNECTION STATE
@@ -297,19 +297,26 @@ function New-GuiButton {
     $button.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
     $button.Cursor = [System.Windows.Forms.Cursors]::Hand
 
+    # Store original color in Tag property for hover effect
+    $button.Tag = $button.BackColor
+
     # Add hover effect
-    $originalColor = $button.BackColor
     $button.Add_MouseEnter({
-        $hoverColor = [System.Drawing.Color]::FromArgb(
-            [Math]::Min(255, $originalColor.R + 20),
-            [Math]::Min(255, $originalColor.G + 20),
-            [Math]::Min(255, $originalColor.B + 20)
-        )
-        $this.BackColor = $hoverColor
+        if ($this.Tag -and $this.Tag -is [System.Drawing.Color]) {
+            $origColor = $this.Tag
+            $hoverColor = [System.Drawing.Color]::FromArgb(
+                [Math]::Min(255, $origColor.R + 20),
+                [Math]::Min(255, $origColor.G + 20),
+                [Math]::Min(255, $origColor.B + 20)
+            )
+            $this.BackColor = $hoverColor
+        }
     })
 
     $button.Add_MouseLeave({
-        $this.BackColor = $originalColor
+        if ($this.Tag -and $this.Tag -is [System.Drawing.Color]) {
+            $this.BackColor = $this.Tag
+        }
     })
 
     if ($action) {
@@ -8830,7 +8837,7 @@ function Show-MainGUI {
     
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Microsoft 365 Security Analysis Tool - v$ScriptVer"
-    $form.Size = New-Object System.Drawing.Size(840, 630)
+    $form.Size = New-Object System.Drawing.Size(840, 650)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedSingle"
     $form.MaximizeBox = $false
@@ -8873,8 +8880,10 @@ function Show-MainGUI {
     }
     $themeToggle.FlatAppearance.BorderSize = 2
 
+    # Store original color in Tag for hover effects
+    $themeToggle.Tag = $themeToggle.BackColor
+
     # Add hover effects
-    $themeOriginalColor = $themeToggle.BackColor
     $themeToggle.Add_MouseEnter({
         if ($script:CurrentTheme -eq "Dark") {
             $this.BackColor = [System.Drawing.Color]::FromArgb(100, 181, 246)
@@ -8884,7 +8893,9 @@ function Show-MainGUI {
     })
 
     $themeToggle.Add_MouseLeave({
-        $this.BackColor = $themeOriginalColor
+        if ($this.Tag -and $this.Tag -is [System.Drawing.Color]) {
+            $this.BackColor = $this.Tag
+        }
     })
 
     $themeToggle.Add_Click({
@@ -8926,7 +8937,9 @@ function Show-MainGUI {
         param($sender, $e)
         $borderColor = Get-ThemeColor -ColorName "Primary"
         $pen = New-Object System.Drawing.Pen($borderColor, 3)
-        $rect = New-Object System.Drawing.Rectangle(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $width = [int]$sender.Width - 1
+        $height = [int]$sender.Height - 1
+        $rect = New-Object System.Drawing.Rectangle(0, 0, $width, $height)
         $e.Graphics.DrawRectangle($pen, $rect)
         $pen.Dispose()
     })
@@ -8989,7 +9002,9 @@ function Show-MainGUI {
         param($sender, $e)
         $borderColor = Get-ThemeColor -ColorName "Border"
         $pen = New-Object System.Drawing.Pen($borderColor, 2)
-        $rect = New-Object System.Drawing.Rectangle(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $width = [int]$sender.Width - 1
+        $height = [int]$sender.Height - 1
+        $rect = New-Object System.Drawing.Rectangle(0, 0, $width, $height)
         $e.Graphics.DrawRectangle($pen, $rect)
         $pen.Dispose()
     })
