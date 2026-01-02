@@ -1,4 +1,4 @@
-﻿#################################################################
+#################################################################
 #
 #  Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition
 #  
@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "10.2"
+$ScriptVer = "10.3"
 
 #--------------------------------------------------------------
 # GLOBAL CONNECTION STATE
@@ -89,6 +89,17 @@ $Global:ExchangeOnlineState = @{
     IsConnected       = $false  # Is currently connected to EXO
     LastChecked       = $null   # Last connection verification time
     ConnectionAttempts = 0      # Number of connection attempts (for retry logic)
+}
+
+#--------------------------------------------------------------
+# IPSTACK API KEY STATE
+#--------------------------------------------------------------
+# Tracks whether the IPStack API key has been validated
+# and is available for geolocation lookups
+$Global:IPStackKeyState = @{
+    IsValid     = $false        # Has been validated
+    KeySource   = $null         # "Environment" or "UserProvided"
+    LastChecked = $null         # Last validation timestamp
 }
 
 #===============================================================================
@@ -361,10 +372,15 @@ $ConfigData = @{
     # IP Geolocation Configuration
     #───────────────────────────────────────────────────────────
     
-    # IPStack API key (Base64 encoded for basic obfuscation)
-    # This is NOT secure encryption - just prevents plain text exposure
-    # To update: [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("your-api-key"))
-    IPStackAPIKey = [System.Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("5f8d47763f5761d29f9af71460d94cd5"))
+    # IPStack API key is now retrieved from environment variable
+    # Set IPSTACK_KEY environment variable with your API key
+    # Get a free key at: https://ipstack.com/signup/free
+    # 
+    # To set permanently (PowerShell as Admin):
+    #   [Environment]::SetEnvironmentVariable("IPSTACK_KEY", "your-api-key", "User")
+    #
+    # Or temporarily for current session:
+    #   $env:IPSTACK_KEY = "your-api-key"
     
     # Expected sign-in countries for unusual location detection
     # Customize this list based on your organization's geographic presence
@@ -548,6 +564,374 @@ $Global:DateRangeLabel = $null      # Date range configuration label
 
 #endregion
 
+#region IPSTACK API KEY MANAGEMENT
+
+#══════════════════════════════════════════════════════════════
+# IPSTACK API KEY VALIDATION AND SETUP
+#══════════════════════════════════════════════════════════════
+
+function Get-IPStackAPIKey {
+    <#
+    .SYNOPSIS
+        Retrieves the IPStack API key from environment variable.
+    
+    .DESCRIPTION
+        Checks for the IPSTACK_KEY environment variable and returns 
+        the API key if found. Returns $null if not configured.
+    
+    .OUTPUTS
+        String - The API key if found, $null otherwise.
+    
+    .EXAMPLE
+        $apiKey = Get-IPStackAPIKey
+        if ($apiKey) { Write-Host "Key found" }
+    #>
+    
+    [CmdletBinding()]
+    param()
+    
+    # Check for environment variable (supports both User and Machine scope)
+    $apiKey = $env:IPSTACK_KEY
+    
+    if ([string]::IsNullOrWhiteSpace($apiKey)) {
+        return $null
+    }
+    
+    return $apiKey.Trim()
+}
+
+function Test-IPStackAPIKey {
+    <#
+    .SYNOPSIS
+        Validates the IPStack API key by making a test API call.
+    
+    .DESCRIPTION
+        Tests if the provided API key is valid by querying a known IP address
+        (8.8.8.8 - Google DNS) and checking for a successful response.
+    
+    .PARAMETER APIKey
+        The IPStack API key to validate.
+    
+    .OUTPUTS
+        PSCustomObject with properties:
+        - IsValid: Boolean indicating if the key is valid
+        - Message: Descriptive message about the result
+        - QuotaRemaining: Remaining API calls (if available)
+    
+    .EXAMPLE
+        $result = Test-IPStackAPIKey -APIKey "your-api-key"
+        if ($result.IsValid) { Write-Host "Key is valid!" }
+    #>
+    
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$APIKey
+    )
+    
+    try {
+        # Test with Google's public DNS IP
+        $testIP = "8.8.8.8"
+        $uri = "http://api.ipstack.com/${testIP}?access_key=${APIKey}&output=json"
+        
+        $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
+        
+        # Check for API error responses
+        if ($response.success -eq $false) {
+            $errorInfo = $response.error
+            return [PSCustomObject]@{
+                IsValid        = $false
+                Message        = "API Error: $($errorInfo.info)"
+                ErrorCode      = $errorInfo.code
+                QuotaRemaining = $null
+            }
+        }
+        
+        # Check for valid response data
+        if ($response.ip -eq $testIP) {
+            return [PSCustomObject]@{
+                IsValid        = $true
+                Message        = "API key validated successfully"
+                ErrorCode      = $null
+                QuotaRemaining = $null  # Free tier doesn't return quota info
+            }
+        }
+        
+        return [PSCustomObject]@{
+            IsValid        = $false
+            Message        = "Unexpected API response format"
+            ErrorCode      = $null
+            QuotaRemaining = $null
+        }
+    }
+    catch {
+        return [PSCustomObject]@{
+            IsValid        = $false
+            Message        = "Connection error: $($_.Exception.Message)"
+            ErrorCode      = $null
+            QuotaRemaining = $null
+        }
+    }
+}
+
+function Initialize-IPStackAPIKey {
+    <#
+    .SYNOPSIS
+        Ensures IPStack API key is configured and valid.
+    
+    .DESCRIPTION
+        Checks for existing IPSTACK_KEY environment variable, validates it,
+        and prompts user for setup if not configured. Provides clear 
+        instructions for obtaining a free API key.
+    
+    .PARAMETER Silent
+        If specified, skips user prompts and returns status only.
+    
+    .OUTPUTS
+        PSCustomObject with properties:
+        - Success: Boolean indicating if a valid key is available
+        - APIKey: The validated API key (or $null)
+        - Source: "Environment" or "UserProvided"
+        - Message: Status message
+    
+    .EXAMPLE
+        $keyStatus = Initialize-IPStackAPIKey
+        if ($keyStatus.Success) {
+            # Proceed with geolocation lookups
+        }
+    #>
+    
+    [CmdletBinding()]
+    param(
+        [switch]$Silent
+    )
+    
+    Write-Log "Checking IPStack API key configuration..." -Level "Info"
+    
+    # First, check for existing environment variable
+    $existingKey = Get-IPStackAPIKey
+    
+    if ($existingKey) {
+        Write-Log "Found IPSTACK_KEY environment variable, validating..." -Level "Info"
+        
+        $validation = Test-IPStackAPIKey -APIKey $existingKey
+        
+        if ($validation.IsValid) {
+            Write-Log "IPStack API key validated successfully" -Level "Info"
+            
+            $Global:IPStackKeyState.IsValid = $true
+            $Global:IPStackKeyState.KeySource = "Environment"
+            $Global:IPStackKeyState.LastChecked = Get-Date
+            
+            return [PSCustomObject]@{
+                Success = $true
+                APIKey  = $existingKey
+                Source  = "Environment"
+                Message = "API key validated successfully"
+            }
+        }
+        else {
+            Write-Log "IPStack API key validation failed: $($validation.Message)" -Level "Warning"
+            
+            if (-not $Silent) {
+                Write-Host ""
+                Write-Host "WARNING: Your IPSTACK_KEY environment variable contains an invalid key." -ForegroundColor Yellow
+                Write-Host "Error: $($validation.Message)" -ForegroundColor Yellow
+                Write-Host ""
+            }
+        }
+    }
+    
+    # No valid key found - prompt user if not silent
+    if (-not $Silent) {
+        return Request-IPStackAPIKey
+    }
+    
+    # Silent mode with no valid key
+    return [PSCustomObject]@{
+        Success = $false
+        APIKey  = $null
+        Source  = $null
+        Message = "No valid IPStack API key configured. Set IPSTACK_KEY environment variable."
+    }
+}
+
+function Request-IPStackAPIKey {
+    <#
+    .SYNOPSIS
+        Prompts user to enter IPStack API key with setup instructions.
+    
+    .DESCRIPTION
+        Displays instructions for obtaining a free IPStack API key,
+        prompts user to enter their key, validates it, and offers
+        to save it as an environment variable.
+    
+    .OUTPUTS
+        PSCustomObject with Success, APIKey, Source, and Message properties.
+    #>
+    
+    [CmdletBinding()]
+    param()
+    
+    $separator = "=" * 70
+    
+    Write-Host ""
+    Write-Host $separator -ForegroundColor DarkYellow
+    Write-Host "                   IPSTACK API KEY CONFIGURATION" -ForegroundColor DarkYellow
+    Write-Host $separator -ForegroundColor DarkYellow
+    Write-Host ""
+    Write-Host "  This tool requires an IPStack API key for IP geolocation lookups." -ForegroundColor White
+    Write-Host "  IPStack provides a FREE tier with 100 lookups per month." -ForegroundColor White
+    Write-Host ""
+    Write-Host "  TO GET YOUR FREE API KEY:" -ForegroundColor Cyan
+    Write-Host "  -------------------------" -ForegroundColor Cyan
+    Write-Host "  1. Visit: " -ForegroundColor Gray -NoNewline
+    Write-Host "https://ipstack.com/signup/free" -ForegroundColor Green
+    Write-Host "  2. Create a free account (email verification required)" -ForegroundColor Gray
+    Write-Host "  3. Copy your API Access Key from the dashboard" -ForegroundColor Gray
+    Write-Host "  4. Paste it below when prompted" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host "  NOTE: The free tier includes:" -ForegroundColor Yellow
+    Write-Host "        - 100 API requests per month" -ForegroundColor Gray
+    Write-Host "        - Basic geolocation data (country, city, region)" -ForegroundColor Gray
+    Write-Host "        - IPv4 and IPv6 support" -ForegroundColor Gray
+    Write-Host ""
+    Write-Host $separator -ForegroundColor DarkYellow
+    Write-Host ""
+    
+    # Prompt for API key
+    $userKey = Read-Host "Enter your IPStack API key (or press Enter to skip)"
+    
+    if ([string]::IsNullOrWhiteSpace($userKey)) {
+        Write-Host ""
+        Write-Host "Skipping API key configuration." -ForegroundColor Yellow
+        Write-Host "Geolocation will use fallback service (ip-api.com) with limited features." -ForegroundColor Yellow
+        Write-Host ""
+        
+        return [PSCustomObject]@{
+            Success = $false
+            APIKey  = $null
+            Source  = $null
+            Message = "User skipped API key configuration"
+        }
+    }
+    
+    # Validate the provided key
+    Write-Host ""
+    Write-Host "Validating API key..." -ForegroundColor Cyan
+    
+    $validation = Test-IPStackAPIKey -APIKey $userKey.Trim()
+    
+    if ($validation.IsValid) {
+        Write-Host "API key validated successfully!" -ForegroundColor Green
+        Write-Host ""
+        
+        # Offer to save as environment variable
+        $saveChoice = Read-Host "Would you like to save this key as an environment variable for future use? (Y/N)"
+        
+        if ($saveChoice -match '^[Yy]') {
+            try {
+                # Save to User environment (persists across sessions)
+                [Environment]::SetEnvironmentVariable("IPSTACK_KEY", $userKey.Trim(), "User")
+                
+                # Also set for current session
+                $env:IPSTACK_KEY = $userKey.Trim()
+                
+                Write-Host ""
+                Write-Host "API key saved to user environment variables." -ForegroundColor Green
+                Write-Host "It will be available automatically in future PowerShell sessions." -ForegroundColor Gray
+                Write-Host ""
+                
+                $Global:IPStackKeyState.IsValid = $true
+                $Global:IPStackKeyState.KeySource = "Environment"
+                $Global:IPStackKeyState.LastChecked = Get-Date
+                
+                return [PSCustomObject]@{
+                    Success = $true
+                    APIKey  = $userKey.Trim()
+                    Source  = "Environment"
+                    Message = "API key validated and saved to environment"
+                }
+            }
+            catch {
+                Write-Host ""
+                Write-Host "Could not save to environment variable: $($_.Exception.Message)" -ForegroundColor Yellow
+                Write-Host "You can set it manually with:" -ForegroundColor Yellow
+                Write-Host '  [Environment]::SetEnvironmentVariable("IPSTACK_KEY", "your-key", "User")' -ForegroundColor Gray
+                Write-Host ""
+            }
+        }
+        
+        # Key is valid but not saved to environment
+        $Global:IPStackKeyState.IsValid = $true
+        $Global:IPStackKeyState.KeySource = "UserProvided"
+        $Global:IPStackKeyState.LastChecked = Get-Date
+        
+        # Store in current session
+        $env:IPSTACK_KEY = $userKey.Trim()
+        
+        return [PSCustomObject]@{
+            Success = $true
+            APIKey  = $userKey.Trim()
+            Source  = "UserProvided"
+            Message = "API key validated (session only)"
+        }
+    }
+    else {
+        Write-Host ""
+        Write-Host "API key validation failed: $($validation.Message)" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Please check your API key and try again." -ForegroundColor Yellow
+        Write-Host "You can also set the IPSTACK_KEY environment variable manually." -ForegroundColor Gray
+        Write-Host ""
+        
+        return [PSCustomObject]@{
+            Success = $false
+            APIKey  = $null
+            Source  = $null
+            Message = "Invalid API key: $($validation.Message)"
+        }
+    }
+}
+
+function Get-ValidatedIPStackKey {
+    <#
+    .SYNOPSIS
+        Returns a validated IPStack API key for use in geolocation lookups.
+    
+    .DESCRIPTION
+        Quick function to get the current API key, using cached validation
+        state to avoid repeated API calls. Returns $null if no valid key.
+    
+    .OUTPUTS
+        String - The validated API key, or $null if not available.
+    #>
+    
+    [CmdletBinding()]
+    param()
+    
+    # Check if we have a recently validated key
+    if ($Global:IPStackKeyState.IsValid -and $Global:IPStackKeyState.LastChecked) {
+        $timeSinceCheck = (Get-Date) - $Global:IPStackKeyState.LastChecked
+        
+        # Reuse validation for up to 1 hour
+        if ($timeSinceCheck.TotalHours -lt 1) {
+            return Get-IPStackAPIKey
+        }
+    }
+    
+    # Need to validate
+    $keyStatus = Initialize-IPStackAPIKey -Silent
+    
+    if ($keyStatus.Success) {
+        return $keyStatus.APIKey
+    }
+    
+    return $null
+}
+
+#endregion
+
 #region CORE HELPER FUNCTIONS
 
 #══════════════════════════════════════════════════════════════
@@ -629,6 +1013,17 @@ function Initialize-Environment {
         }
         else {
             Write-Log "No existing connection found. User will need to connect manually." -Level "Info"
+        }
+        
+        # Initialize IPStack API key
+        Write-Log "Checking IPStack API key configuration..." -Level "Info"
+        $ipStackStatus = Initialize-IPStackAPIKey
+        
+        if ($ipStackStatus.Success) {
+            Write-Log "IPStack API key configured ($($ipStackStatus.Source))" -Level "Info"
+        }
+        else {
+            Write-Log "IPStack API key not configured - geolocation will use fallback service" -Level "Warning"
         }
         
         Write-Log "Environment initialization completed successfully" -Level "Info"
@@ -1607,49 +2002,53 @@ function Invoke-IPGeolocation {
     $success = $false
     $result = $null
     
-    # Try primary service (IPStack) with retries
-    while ($attempt -lt $RetryCount -and -not $success) {
-        $attempt++
-        
-        try {
-            $apiKey = [System.Text.Encoding]::UTF8.GetString([System.Convert]::FromBase64String($ConfigData.IPStackAPIKey))
-            $uri = "http://api.ipstack.com/${IPAddress}?access_key=${apiKey}&output=json"
+    # Get API key from environment variable
+    $apiKey = Get-ValidatedIPStackKey
+    
+    # Try primary service (IPStack) with retries - only if API key is available
+    if ($apiKey) {
+        while ($attempt -lt $RetryCount -and -not $success) {
+            $attempt++
             
-            $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
-            
-            if ($response -and $response.ip) {
-                $result = @{
-                    ip           = $response.ip
-                    city         = if ($response.city) { $response.city } else { "Unknown" }
-                    region_name  = if ($response.region_name) { $response.region_name } else { "Unknown" }
-                    country_name = if ($response.country_name) { $response.country_name } else { "Unknown" }
-                    connection   = @{ 
-                        isp = if ($response.connection -and $response.connection.isp) { 
-                            $response.connection.isp 
-                        } else { 
-                            "Unknown" 
+            try {
+                $uri = "http://api.ipstack.com/${IPAddress}?access_key=${apiKey}&output=json"
+                
+                $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
+                
+                if ($response -and $response.ip) {
+                    $result = @{
+                        ip           = $response.ip
+                        city         = if ($response.city) { $response.city } else { "Unknown" }
+                        region_name  = if ($response.region_name) { $response.region_name } else { "Unknown" }
+                        country_name = if ($response.country_name) { $response.country_name } else { "Unknown" }
+                        connection   = @{ 
+                            isp = if ($response.connection -and $response.connection.isp) { 
+                                $response.connection.isp 
+                            } else { 
+                                "Unknown" 
+                            }
                         }
+                        ip_version   = if ($isIPv4) { "IPv4" } else { "IPv6" }
+                        latitude     = $response.latitude
+                        longitude    = $response.longitude
+                        is_private   = $false
                     }
-                    ip_version   = if ($isIPv4) { "IPv4" } else { "IPv6" }
-                    latitude     = $response.latitude
-                    longitude    = $response.longitude
-                    is_private   = $false
+                    
+                    $success = $true
+                    
+                    $Cache[$IPAddress] = @{
+                        Data     = $result
+                        CachedAt = Get-Date
+                    }
+                    
+                    return $result
                 }
-                
-                $success = $true
-                
-                $Cache[$IPAddress] = @{
-                    Data     = $result
-                    CachedAt = Get-Date
-                }
-                
-                return $result
             }
-        }
-        catch {
-            if ($attempt -lt $RetryCount) {
-                $delay = $RetryDelay * [Math]::Pow(2, $attempt - 1)
-                Start-Sleep -Seconds $delay
+            catch {
+                if ($attempt -lt $RetryCount) {
+                    $delay = $RetryDelay * [Math]::Pow(2, $attempt - 1)
+                    Start-Sleep -Seconds $delay
+                }
             }
         }
     }
