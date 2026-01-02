@@ -1,4 +1,4 @@
-#################################################################
+﻿#################################################################
 #
 #  Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition
 #  
@@ -599,10 +599,10 @@ try {
     Add-Type -AssemblyName Microsoft.VisualBasic
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
-    Write-Host "✓ Assemblies loaded successfully" -ForegroundColor Green
+    Write-Host "[OK] Assemblies loaded successfully" -ForegroundColor Green
 }
 catch {
-    Write-Host "✗ Failed to load required assemblies: $($_.Exception.Message)" -ForegroundColor Red
+    Write-Host "[X] Failed to load required assemblies: $($_.Exception.Message)" -ForegroundColor Red
     Write-Host "  The script may not function properly." -ForegroundColor Yellow
 }
 
@@ -688,7 +688,7 @@ function Test-IPStackAPIKey {
     try {
         # Test with Google's public DNS IP
         $testIP = "8.8.8.8"
-        $uri = "http://api.ipstack.com/${testIP}?access_key=${APIKey}&output=json"
+        $uri = "http://api.ipstack.com/${testIP}?access_key=${APIKey}" + "&output=json"
         
         $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
         
@@ -1763,7 +1763,7 @@ function Test-ScriptVersion {
         # Extract version number using regex
         # Pattern matches: $ScriptVer = "8.2" or $ScriptVer = '8.2'
         # Captures the version number in group 1
-        $versionPattern = '\$ScriptVer\s*=\s*["'']([0-9.]+)["'']'
+        $versionPattern = '\$ScriptVer\s*=\s*["\x27]([0-9.]+)["\x27]'
         
         if ($latestScriptContent.Content -match $versionPattern) {
             $latestVersion = $matches[1]
@@ -2067,7 +2067,7 @@ function Invoke-IPGeolocation {
             $attempt++
             
             try {
-                $uri = "http://api.ipstack.com/${IPAddress}?access_key=${apiKey}&output=json"
+                $uri = "http://api.ipstack.com/${IPAddress}?access_key=${apiKey}" + "&output=json"
                 
                 $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
                 
@@ -2756,7 +2756,7 @@ function Connect-TenantServices {
                          "═══════════════════════════════════════`n" +
                          "CONNECTION STATUS`n" +
                          "═══════════════════════════════════════`n" +
-                         "Microsoft Graph: ✓ Connected`n" +
+                         "Microsoft Graph: [OK] Connected`n" +
                          "Exchange Online: $exoStatus`n" +
                          "Admin Audit: $($auditStatus.Status)`n`n" +
                          "You can now proceed with data collection."
@@ -3375,14 +3375,14 @@ function Show-AuditLogStatusWarning {
     
     switch ($AuditStatus.Status) {
         "Enabled" {
-            $message = "✅ Admin Audit Logging: ENABLED`n`n" +
+            $message = "[OK] Admin Audit Logging: ENABLED`n`n" +
                       "Status: Working properly with recent data`n" +
                       "Impact: All admin audit data collection will work normally"
             $icon = "Information"
         }
         
         "Enabled-NoData" {
-            $message = "⚠️ Admin Audit Logging: ENABLED (No Recent Data)`n`n" +
+            $message = "[WARNING] Admin Audit Logging: ENABLED (No Recent Data)`n`n" +
                       "Status: Audit logging is enabled but no recent admin activities found`n" +
                       "Impact: This is normal if there haven't been recent admin changes`n" +
                       "Note: Data collection will work when admin activities occur"
@@ -3390,7 +3390,7 @@ function Show-AuditLogStatusWarning {
         }
         
         "Disabled" {
-            $message = "❌ Admin Audit Logging: DISABLED`n`n" +
+            $message = "[ERROR] Admin Audit Logging: DISABLED`n`n" +
                       "Status: Admin audit logging is not enabled in this tenant`n" +
                       "Impact: Admin audit data collection will NOT work`n`n" +
                       "Resolution: Enable audit logging in Microsoft 365 Admin Center:`n" +
@@ -3401,7 +3401,7 @@ function Show-AuditLogStatusWarning {
         }
         
         "PermissionDenied" {
-            $message = "🔒 Admin Audit Logging: PERMISSION DENIED`n`n" +
+            $message = "[LOCKED] Admin Audit Logging: PERMISSION DENIED`n`n" +
                       "Status: Your account lacks permission to read audit logs`n" +
                       "Impact: Admin audit data collection will NOT work`n`n" +
                       "Resolution: You need one of these roles:`n" +
@@ -3413,7 +3413,7 @@ function Show-AuditLogStatusWarning {
         }
         
         "ConfigurationIssue" {
-            $message = "⚙️ Admin Audit Logging: CONFIGURATION ISSUE`n`n" +
+            $message = "≡ Admin Audit Logging: CONFIGURATION ISSUE`n`n" +
                       "Status: There may be a configuration problem with audit logging`n" +
                       "Impact: Admin audit data collection may not work properly`n`n" +
                       "Resolution: Check audit log configuration in Admin Center"
@@ -3421,7 +3421,7 @@ function Show-AuditLogStatusWarning {
         }
         
         default {
-            $message = "❓ Admin Audit Logging: UNKNOWN STATUS`n`n" +
+            $message = "[UNKNOWN] Admin Audit Logging: UNKNOWN STATUS`n`n" +
                       "Status: Unable to determine audit log status`n" +
                       "Details: $($AuditStatus.Message)`n`n" +
                       "Impact: Admin audit data collection may not work properly`n" +
@@ -4849,16 +4849,16 @@ function Get-MFAStatusAudit {
             if ($mfaEnforced -and $mfaCapable) {
                 $hasMFAValue = "Yes"
                 $enforcementList = $enforcementMethod -join " + "
-                $mfaStatusDetail = "✅ Enforced via $enforcementList with $($registeredMethods.Count) method(s) registered"
+                $mfaStatusDetail = "[OK] Enforced via $enforcementList with $($registeredMethods.Count) method(s) registered"
             }
             elseif ($mfaEnforced -and -not $mfaCapable) {
                 $hasMFAValue = "Partial"
                 $enforcementList = $enforcementMethod -join " + "
-                $mfaStatusDetail = "⚠️ Enforced via $enforcementList but NO methods registered (broken state)"
+                $mfaStatusDetail = "[WARNING] Enforced via $enforcementList but NO methods registered (broken state)"
             }
             elseif (-not $mfaEnforced -and $mfaCapable) {
                 $hasMFAValue = "Capable"
-                $mfaStatusDetail = "⚠️ Methods registered ($($registeredMethods.Count)) but NOT enforced"
+                $mfaStatusDetail = "[WARNING] Methods registered ($($registeredMethods.Count)) but NOT enforced"
             }
             elseif ($mfaUsagePercent -gt 0 -and $signInTotalCount -gt 0) {
                 if ($mfaUsagePercent -gt 80) {
@@ -4872,7 +4872,7 @@ function Get-MFAStatusAudit {
             }
             else {
                 $hasMFAValue = "No"
-                $mfaStatusDetail = "❌ No MFA enforcement or registration"
+                $mfaStatusDetail = "[ERROR] No MFA enforcement or registration"
             }
             
             # ═══════════════════════════════════════════════════════════════════════════
@@ -4885,41 +4885,41 @@ function Get-MFAStatusAudit {
             if ($hasMFAValue -eq "No") {
                 if ($isAdmin) {
                     $riskLevel = "Critical"
-                    $recommendation = "🚨 CRITICAL: Admin account with NO MFA - Enable immediately!"
+                    $recommendation = "[CRITICAL] CRITICAL: Admin account with NO MFA - Enable immediately!"
                 }
                 else {
                     $riskLevel = "High"
-                    $recommendation = "🚨 HIGH: No MFA protection - Enable enforcement and register methods"
+                    $recommendation = "[CRITICAL] HIGH: No MFA protection - Enable enforcement and register methods"
                 }
             }
             elseif ($hasMFAValue -eq "Partial") {
                 if ($isAdmin) {
                     $riskLevel = "Critical"
-                    $recommendation = "🚨 CRITICAL: MFA enforced but no methods registered - User cannot sign in!"
+                    $recommendation = "[CRITICAL] CRITICAL: MFA enforced but no methods registered - User cannot sign in!"
                 }
                 else {
                     $riskLevel = "High"
-                    $recommendation = "⚠️ HIGH: MFA enforced but no methods - User needs to register auth methods"
+                    $recommendation = "[WARNING] HIGH: MFA enforced but no methods - User needs to register auth methods"
                 }
             }
             elseif ($hasMFAValue -eq "Capable") {
                 if ($isAdmin) {
                     $riskLevel = "High"
-                    $recommendation = "⚠️ HIGH: Admin has MFA methods but not enforced - Enable enforcement"
+                    $recommendation = "[WARNING] HIGH: Admin has MFA methods but not enforced - Enable enforcement"
                 }
                 else {
                     $riskLevel = "Medium"
-                    $recommendation = "⚡ MEDIUM: MFA methods registered but not enforced - Enable per-user MFA or CA policy"
+                    $recommendation = "[ALERT] MEDIUM: MFA methods registered but not enforced - Enable per-user MFA or CA policy"
                 }
             }
             elseif ($hasMFAValue -eq "Likely" -or $hasMFAValue -eq "Inconsistent") {
                 $riskLevel = "Medium"
-                $recommendation = "⚡ MEDIUM: Cannot fully verify MFA status - Manual review recommended"
+                $recommendation = "[ALERT] MEDIUM: Cannot fully verify MFA status - Manual review recommended"
             }
             else {
                 # Has MFA = Yes
                 $riskLevel = "Low"
-                $recommendation = "✅ MFA properly configured"
+                $recommendation = "[OK] MFA properly configured"
             }
             
             # ═══════════════════════════════════════════════════════════════════════════
@@ -4944,7 +4944,7 @@ function Get-MFAStatusAudit {
                 PerUserMFA = $perUserMFAState
                 PerUserMFAEnforced = $perUserMFAEnforced
                 ConditionalAccess = $caPolicyEnforced
-                ApplicablePolicies = ($applicablePolicies -join "; ")
+                ApplicablePolicies = ($applicablePolicies -join ", ")
                 
                 # Registration details
                 MFARegistered = $hasMFAMethods
@@ -5178,7 +5178,7 @@ function Get-FailedLoginPatterns {
         Update-GuiStatus "Detecting successful breaches (5+ failures, same IP required)..." ([System.Drawing.Color]::Orange)
         
         # Group failed logins by user and IP combination
-        $failedByUserIP = $failedLogins | Group-Object -Property { "$($_.UserId)|$($_.IP)" }
+        $failedByUserIP = $failedLogins | Group-Object -Property { "{0}{1}{2}" -f $_.UserId, [char]124, $_.IP }
         
         $breachCount = 0
         foreach ($group in $failedByUserIP) {
@@ -5456,7 +5456,7 @@ function Get-RecentPasswordChanges {
                         OffHoursChanges = $offHoursChanges
                         RiskScore = $riskScore
                         RiskLevel = $riskLevel
-                        SuspiciousReasons = ($reasons -join "; ")
+                        SuspiciousReasons = ($reasons -join ", ")
                         Recommendation = if ($riskScore -ge 50) {
                             "URGENT: Investigate immediately - possible active compromise"
                         } elseif ($riskScore -ge 30) {
@@ -5919,16 +5919,16 @@ function Get-MailboxRules {
                             Description = $rule.Description
                             Enabled = $rule.Enabled
                             Priority = $rule.Priority
-                            ForwardTo = if ($rule.ForwardTo) { $rule.ForwardTo -join "; " } else { "" }
-                            RedirectTo = if ($rule.RedirectTo) { $rule.RedirectTo -join "; " } else { "" }
-                            ForwardAsAttachmentTo = if ($rule.ForwardAsAttachmentTo) { $rule.ForwardAsAttachmentTo -join "; " } else { "" }
+                            ForwardTo = if ($rule.ForwardTo) { $rule.ForwardTo -join ", " } else { "" }
+                            RedirectTo = if ($rule.RedirectTo) { $rule.RedirectTo -join ", " } else { "" }
+                            ForwardAsAttachmentTo = if ($rule.ForwardAsAttachmentTo) { $rule.ForwardAsAttachmentTo -join ", " } else { "" }
                             DeleteMessage = $rule.DeleteMessage
                             MarkAsRead = $rule.MarkAsRead
                             StopProcessingRules = $rule.StopProcessingRules
                             MoveToFolder = $rule.MoveToFolder
-                            SubjectContains = if ($rule.SubjectContainsWords) { $rule.SubjectContainsWords -join "; " } else { "" }
-                            FromAddress = if ($rule.From) { $rule.From -join "; " } else { "" }
-                            SentTo = if ($rule.SentTo) { $rule.SentTo -join "; " } else { "" }
+                            SubjectContains = if ($rule.SubjectContainsWords) { $rule.SubjectContainsWords -join ", " } else { "" }
+                            FromAddress = if ($rule.From) { $rule.From -join ", " } else { "" }
+                            SentTo = if ($rule.SentTo) { $rule.SentTo -join ", " } else { "" }
                             IsSuspicious = $isSuspicious
                             SuspiciousReasons = if ($suspiciousReasons.Count -gt 0) { $suspiciousReasons -join ", " } else { "" }
                             RuleIdentity = $rule.Identity
@@ -6082,9 +6082,9 @@ function Get-MailboxDelegationData {
                             DisplayName = $user.DisplayName
                             DelegateName = $delegate.DisplayName
                             DelegateEmail = $delegateEmail
-                            Permissions = ($delegate.Permissions -join "; ")
+                            Permissions = ($delegate.Permissions -join ", ")
                             IsSuspicious = $isSuspicious
-                            SuspiciousReasons = $suspiciousReasons -join "; "
+                            SuspiciousReasons = $suspiciousReasons -join ", "
                         }
                         
                         $delegations += $delegationEntry
@@ -6193,7 +6193,7 @@ function Get-AppRegistrationData {
                     SignInAudience = $app.SignInAudience
                     RequiredResourceAccess = ($app.RequiredResourceAccess | ConvertTo-Json -Compress -Depth 10)
                     RiskLevel = $riskLevel
-                    RiskReasons = ($riskReasons -join "; ")
+                    RiskReasons = ($riskReasons -join ", ")
                 }
                 
                 $appRegs += $appReg
@@ -6277,7 +6277,7 @@ function Get-ConditionalAccessData {
                 GrantControls = ($policy.GrantControls | ConvertTo-Json -Compress -Depth 10)
                 SessionControls = ($policy.SessionControls | ConvertTo-Json -Compress -Depth 10)
                 IsSuspicious = $isSuspicious
-                SuspiciousReasons = ($suspiciousReasons -join "; ")
+                SuspiciousReasons = ($suspiciousReasons -join ", ")
             }
             
             $policies += $policyEntry
@@ -6648,7 +6648,7 @@ function Get-ETRColumnMapping {
         }
         
         if (-not $mapping.ContainsKey($field)) {
-            Write-Log "  ✗ No mapping found for $field" -Level "Warning"
+            Write-Log "  [X] No mapping found for $field" -Level "Warning"
         }
     }
     
@@ -6761,7 +6761,7 @@ function Analyze-ETRData {
         # Warn if file is very large
         if ($fileSize -gt 100) {
             $result = [System.Windows.Forms.MessageBox]::Show(
-                "The ETR file is very large ($([math]::Round($fileSize, 1)) MB).`n`n" +
+                "The ETR file is very large ($([math]::Round($fileSize, 1))) MB.`n`n" +
                 "This may cause memory issues or take significant time.`n`n" +
                 "Continue with analysis?",
                 "Large File Warning", "YesNo", "Warning"
@@ -6771,7 +6771,7 @@ function Analyze-ETRData {
             }
         }
         
-        Update-GuiStatus "Analyzing ETR file: $($selectedFile.Name) ($([math]::Round($fileSize, 1)) MB)..." ([System.Drawing.Color]::Orange)
+        Update-GuiStatus "Analyzing ETR file: $($selectedFile.Name) ($([math]::Round($fileSize, 1))) MB..." ([System.Drawing.Color]::Orange)
         Write-Log "Selected file: $($selectedFile.FullName)" -Level "Info"
         Write-Log "File size: $([math]::Round($fileSize, 1)) MB" -Level "Info"
         
@@ -6813,7 +6813,7 @@ function Analyze-ETRData {
             $processingCount++
             if ($processingCount % 10000 -eq 0) {
                 $percentage = [math]::Round(($processingCount / $etrData.Count) * 100, 1)
-                Update-GuiStatus "Processing ETR records: $processingCount of $($etrData.Count) ($percentage%)" ([System.Drawing.Color]::Orange)
+                Update-GuiStatus "Processing ETR records: $processingCount of $($etrData.Count) ($percentage)%" ([System.Drawing.Color]::Orange)
                 [System.Windows.Forms.Application]::DoEvents()
             }
             
@@ -6883,9 +6883,9 @@ function Analyze-ETRData {
                     RiskLevel = "High"
                     MessageCount = $messageCount
                     Description = "Excessive outbound messages: $messageCount messages"
-                    MessageIds = ($senderMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join "; "
-                    Recipients = ($senderMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 5) -join "; "
-                    Subjects = ($senderMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join "; "
+                    MessageIds = ($senderMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join ", "
+                    Recipients = ($senderMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 5) -join ", "
+                    Subjects = ($senderMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join ", "
                     RiskScore = $ConfigData.ETRAnalysis.RiskWeights.ExcessiveVolume
                 }
                 [void]$spamIndicators.Add($indicator)
@@ -6903,7 +6903,8 @@ function Analyze-ETRData {
         $subjectGroups = @{}
         foreach ($msg in $outboundMessages) {
             if (-not [string]::IsNullOrEmpty($msg.Subject) -and $msg.Subject.Length -ge $ConfigData.ETRAnalysis.MinSubjectLength) {
-                $key = "$($msg.SenderAddress)|$($msg.Subject.ToLower().Trim())"
+                $normalizedSubject = $msg.Subject.ToLower().Trim()
+                $key = "{0}{1}{2}" -f $msg.SenderAddress, [char]124, $normalizedSubject
                 if ($subjectGroups.ContainsKey($key)) {
                     $subjectGroups[$key] += @($msg)
                 } else {
@@ -6922,8 +6923,8 @@ function Analyze-ETRData {
                     RiskLevel = "Critical"
                     MessageCount = $messages.Count
                     Description = "Identical subject spam: $($messages.Count) messages"
-                    MessageIds = ($messages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join "; "
-                    Recipients = ($messages.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join "; "
+                    MessageIds = ($messages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join ", "
+                    Recipients = ($messages.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join ", "
                     Subjects = $messages[0].Subject
                     RiskScore = $ConfigData.ETRAnalysis.RiskWeights.MassDistribution
                 }
@@ -6967,9 +6968,9 @@ function Analyze-ETRData {
                             RiskLevel = "Medium"
                             MessageCount = $senderMessages.Count
                             Description = "Spam keyword '$keyword' in $($senderMessages.Count) messages"
-                            MessageIds = ($senderMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 5) -join "; "
-                            Recipients = ($senderMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 5) -join "; "
-                            Subjects = ($senderMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join "; "
+                            MessageIds = ($senderMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 5) -join ", "
+                            Recipients = ($senderMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 5) -join ", "
+                            Subjects = ($senderMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join ", "
                             RiskScore = $ConfigData.ETRAnalysis.RiskWeights.SpamKeywords
                             DetectedKeyword = $keyword
                         }
@@ -6994,14 +6995,14 @@ function Analyze-ETRData {
                 
                 if ($riskyIPMessages.Count -gt 0) {
                     $indicator = [PSCustomObject]@{
-                        SenderAddress = ($riskyIPMessages.SenderAddress | Select-Object -Unique) -join "; "
+                        SenderAddress = ($riskyIPMessages.SenderAddress | Select-Object -Unique) -join ", "
                         RiskType = "RiskyIPCorrelation"
                         RiskLevel = "Critical"
                         MessageCount = $riskyIPMessages.Count
                         Description = "Messages from/to risky IP $riskyIP"
-                        MessageIds = ($riskyIPMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join "; "
-                        Recipients = ($riskyIPMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join "; "
-                        Subjects = ($riskyIPMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join "; "
+                        MessageIds = ($riskyIPMessages.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join ", "
+                        Recipients = ($riskyIPMessages.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join ", "
+                        Subjects = ($riskyIPMessages.Subject | Select-Object -Unique | Select-Object -First 3) -join ", "
                         RiskScore = $ConfigData.ETRAnalysis.RiskWeights.RiskyIPMatch
                         RiskyIP = $riskyIP
                     }
@@ -7046,9 +7047,9 @@ function Analyze-ETRData {
                         RiskLevel = "Medium"
                         MessageCount = $senderFailures.Count
                         Description = "Excessive failed deliveries: $($senderFailures.Count) failed"
-                        MessageIds = ($senderFailures.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join "; "
-                        Recipients = ($senderFailures.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join "; "
-                        Subjects = ($senderFailures.Subject | Select-Object -Unique | Select-Object -First 3) -join "; "
+                        MessageIds = ($senderFailures.MessageId | Where-Object { -not [string]::IsNullOrEmpty($_) } | Select-Object -First 10) -join ", "
+                        Recipients = ($senderFailures.RecipientAddress | Select-Object -Unique | Select-Object -First 10) -join ", "
+                        Subjects = ($senderFailures.Subject | Select-Object -Unique | Select-Object -First 3) -join ", "
                         RiskScore = $ConfigData.ETRAnalysis.RiskWeights.FailedDelivery
                     }
                     [void]$spamIndicators.Add($indicator)
@@ -7705,7 +7706,7 @@ function Invoke-CompromiseDetection {
 			if ([string]::IsNullOrEmpty($details)) { continue }
 			
 			# Extract user from Details field
-			if ($details -match "User\s+([^\s]+@[^\s]+)") {
+			if ($details -match "User\s+(\S+@\S+)") {
 				$userId = $Matches[1]
 				
 				if (-not $users.ContainsKey($userId)) {
@@ -8324,7 +8325,7 @@ function Generate-HTMLReport {
 
     <div class="container">
         <div class="header">
-            <h1>🛡️ Microsoft 365 Security Analysis Report</h1>
+            <h1>[SECURITY] Microsoft 365 Security Analysis Report</h1>
             <div class="subtitle">Yeyland Wutani - Comprehensive Threat Detection & Risk Assessment</div>
             <div class="report-meta">
                 Generated: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss") | 
@@ -8365,7 +8366,7 @@ function Generate-HTMLReport {
     if ($criticalCount -gt 0) {
         $html += @"
         <div class="alert critical">
-            <strong>⚠️ CRITICAL ALERT:</strong> $criticalCount user(s) identified with critical security risks requiring immediate attention!
+            <strong>[CRITICAL ALERT]:</strong> $criticalCount user(s) identified with critical security risks requiring immediate attention!
         </div>
 "@
     }
@@ -8373,7 +8374,7 @@ function Generate-HTMLReport {
 if ($highCount -gt 0) {
         $html += @"
         <div class="alert warning">
-            <strong>⚠️ WARNING:</strong> $highCount user(s) identified with high security risks requiring review.
+            <strong>[WARNING]:</strong> $highCount user(s) identified with high security risks requiring review.
         </div>
 "@
     }
@@ -8419,13 +8420,13 @@ if ($highCount -gt 0) {
         
         # Build key indicators summary
         $indicators = @()
-        if ($user.UnusualSignInCount -gt 0) { $indicators += "🌍 Unusual Locations ($($user.UnusualSignInCount))" }
-        if ($user.FailedSignInCount -gt 0) { $indicators += "🚫 Failed Logins ($($user.FailedSignInCount))" }
-        if ($user.HighRiskOperationsCount -gt 0) { $indicators += "⚡ High-Risk Ops ($($user.HighRiskOperationsCount))" }
-        if ($user.SuspiciousRulesCount -gt 0) { $indicators += "📨 Suspicious Rules ($($user.SuspiciousRulesCount))" }
-        if ($user.FailedLoginPatternCount -gt 0) { $indicators += "🚨 Attack Patterns ($($user.FailedLoginPatternCount))" }
-        if ($user.PasswordChangeIssuesCount -gt 0) { $indicators += "🔑 PW Changes ($($user.PasswordChangeIssuesCount))" }
-		if ($user.HighRiskISPCount -gt 0) { $indicators += "⚠️ High-Risk ISPs ($($user.HighRiskISPCount))" }
+        if ($user.UnusualSignInCount -gt 0) { $indicators += "[LOCATION] Unusual Locations ($($user.UnusualSignInCount))" }
+        if ($user.FailedSignInCount -gt 0) { $indicators += "[BLOCKED] Failed Logins ($($user.FailedSignInCount))" }
+        if ($user.HighRiskOperationsCount -gt 0) { $indicators += "[!] High-Risk Ops ($($user.HighRiskOperationsCount))" }
+        if ($user.SuspiciousRulesCount -gt 0) { $indicators += "✉ Suspicious Rules ($($user.SuspiciousRulesCount))" }
+        if ($user.FailedLoginPatternCount -gt 0) { $indicators += "[ALERT] Attack Patterns ($($user.FailedLoginPatternCount))" }
+        if ($user.PasswordChangeIssuesCount -gt 0) { $indicators += "[PWD] PW Changes ($($user.PasswordChangeIssuesCount))" }
+		if ($user.HighRiskISPCount -gt 0) { $indicators += "[WARNING] High-Risk ISPs ($($user.HighRiskISPCount))" }
         
         $indicatorText = if ($indicators.Count -gt 0) { $indicators -join "<br>" } else { "None" }
         
@@ -8485,7 +8486,7 @@ if ($highCount -gt 0) {
         } elseif ($mfaStatus -eq "Yes") {
             $html += @"
                     <div class="alert success">
-                        ✅ <strong>MFA Enabled</strong>
+                        [OK] <strong>MFA Enabled</strong>
                     </div>
 "@
         }
@@ -8538,7 +8539,7 @@ if ($highCount -gt 0) {
 		if ($user.UnusualSignIns -and $user.UnusualSignIns.Count -gt 0) {
 			$html += @"
 							<div class="evidence-section">
-								<h4>🌍 Unusual Sign-In Locations</h4>
+								<h4>[LOCATION] Unusual Sign-In Locations</h4>
 								<table>
 									<tr>
 										<th>Date/Time</th>
@@ -8558,7 +8559,7 @@ if ($highCount -gt 0) {
 			}
 			
 			$riskBadge = if ($isHighRiskISP) {
-				"<span class='badge danger' title='VPN/Hosting/Datacenter Provider'>⚠️ HIGH-RISK ISP</span>"
+				"<span class='badge danger' title='VPN/Hosting/Datacenter Provider'>[WARNING] HIGH-RISK ISP</span>"
 			} else {
 				"<span class='badge info'>Standard</span>"
 			}
@@ -8587,7 +8588,7 @@ if ($highCount -gt 0) {
 if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
     $html += @"
                     <div class="evidence-section">
-                        <h4 class="high-risk-title">⚠️ High-Risk ISP Connections (VPN/Hosting/Datacenter)</h4>
+                        <h4 class="high-risk-title">[WARNING] High-Risk ISP Connections (VPN/Hosting/Datacenter)</h4>
                         <div class="alert warning">
                             <strong>Security Alert:</strong> These sign-ins originated from ISPs commonly associated with VPS hosting, 
                             VPN services, or datacenter infrastructure. While not always malicious, these connections warrant investigation 
@@ -8638,7 +8639,7 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
         if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
             $html += @"
                     <div class="evidence-section">
-                        <h4>🚨 Failed Login Attack Patterns</h4>
+                        <h4>[ALERT] Failed Login Attack Patterns</h4>
                         <table>
                             <tr>
                                 <th>Pattern Type</th>
@@ -8667,7 +8668,7 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
         if ($user.PasswordChangeIssues -and $user.PasswordChangeIssues.Count -gt 0) {
             $html += @"
                     <div class="evidence-section">
-                        <h4>🔑 Suspicious Password Changes</h4>
+                        <h4>[PWD] Suspicious Password Changes</h4>
                         <table>
                             <tr>
                                 <th>Change Count</th>
@@ -8696,7 +8697,7 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
         if ($user.SuspiciousRules -and $user.SuspiciousRules.Count -gt 0) {
             $html += @"
                     <div class="evidence-section">
-                        <h4>📨 Suspicious Inbox Rules</h4>
+                        <h4>✉ Suspicious Inbox Rules</h4>
                         <table>
                             <tr>
                                 <th>Rule Name</th>
@@ -8757,10 +8758,10 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
             const text = document.getElementById('themeText');
             
             if (isDark) {
-                icon.textContent = '🌙';
+                icon.textContent = '[Dark]';
                 text.textContent = 'Dark Mode';
             } else {
-                icon.textContent = '☀️';
+                icon.textContent = '[Light]';
                 text.textContent = 'Light Mode';
             }
             
@@ -8779,7 +8780,7 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
             
             const icon = document.getElementById('themeIcon');
             const text = document.getElementById('themeText');
-            icon.textContent = isDark ? '🌙' : '☀️';
+            icon.textContent = isDark ? '[Dark]' : '[Light]';
             text.textContent = isDark ? 'Dark Mode' : 'Light Mode';
         });
         
@@ -8873,7 +8874,7 @@ function Show-MainGUI {
     #──────────────────────────────────────────────────────────────
     
     $headerLabel = New-Object System.Windows.Forms.Label
-    $headerLabel.Text = "🛡️ Microsoft 365 Security Analysis Tool"
+    $headerLabel.Text = "[SECURITY] Microsoft 365 Security Analysis Tool"
     $headerLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 16, [System.Drawing.FontStyle]::Bold)
     $headerLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
     $headerLabel.Size = New-Object System.Drawing.Size(650, 40)
@@ -8890,12 +8891,12 @@ function Show-MainGUI {
     $themeToggle.Cursor = [System.Windows.Forms.Cursors]::Hand
 
     if ($script:CurrentTheme -eq "Dark") {
-        $themeToggle.Text = "☀️ Light"
+        $themeToggle.Text = "☼ Light"
         $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(66, 165, 245)
         $themeToggle.ForeColor = [System.Drawing.Color]::White
         $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(41, 128, 185)
     } else {
-        $themeToggle.Text = "🌙 Dark"
+        $themeToggle.Text = "☾ Dark"
         $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
         $themeToggle.ForeColor = [System.Drawing.Color]::White
         $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(44, 62, 80)
@@ -8977,7 +8978,7 @@ function Show-MainGUI {
     $statusPanel.Controls.Add($Global:WorkDirLabel)
 
     $Global:DateRangeLabel = New-Object System.Windows.Forms.Label
-    $Global:DateRangeLabel.Text = "📅 Date Range: $($ConfigData.DateRange) days back"
+    $Global:DateRangeLabel.Text = "► Date Range: $($ConfigData.DateRange) days back"
     $Global:DateRangeLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
     $Global:DateRangeLabel.Size = New-Object System.Drawing.Size(760, 28)
     $Global:DateRangeLabel.Location = New-Object System.Drawing.Point(15, 40)
@@ -9001,7 +9002,7 @@ function Show-MainGUI {
     $statusPanel.Controls.Add($Global:TenantInfoLabel)
 
     $performanceLabel = New-Object System.Windows.Forms.Label
-    $performanceLabel.Text = "⚡ Performance: Batch Size $($ConfigData.BatchSize) | Cache Timeout $($ConfigData.CacheTimeout)s"
+    $performanceLabel.Text = "[Performance] Batch Size $($ConfigData.BatchSize) | Cache Timeout $($ConfigData.CacheTimeout)s"
     $performanceLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 8.5)
     $performanceLabel.Size = New-Object System.Drawing.Size(760, 22)
     $performanceLabel.Location = New-Object System.Drawing.Point(15, 124)
@@ -9032,7 +9033,7 @@ function Show-MainGUI {
     })
 
     $Global:StatusLabel = New-Object System.Windows.Forms.Label
-    $Global:StatusLabel.Text = "✅ Ready - Please connect to Microsoft Graph to begin"
+    $Global:StatusLabel.Text = "[OK] Ready - Please connect to Microsoft Graph to begin"
     $Global:StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
     $Global:StatusLabel.Size = New-Object System.Drawing.Size(780, 45)
     $Global:StatusLabel.Location = New-Object System.Drawing.Point(15, 2)
@@ -9053,7 +9054,7 @@ function Show-MainGUI {
 
     # Section header for Setup Controls
     $setupHeader = New-Object System.Windows.Forms.Label
-    $setupHeader.Text = "⚙️ Configuration & Connection"
+    $setupHeader.Text = "≡ Configuration & Connection"
     $setupHeader.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
     $setupHeader.ForeColor = Get-ThemeColor -ColorName "Primary"
     $setupHeader.Size = New-Object System.Drawing.Size(780, 25)
@@ -9065,7 +9066,7 @@ function Show-MainGUI {
         $folder = Get-Folder -initialDirectory $ConfigData.WorkDir
         if ($folder) {
             Update-WorkingDirectoryDisplay -NewWorkDir $folder
-            Update-GuiStatus "✅ Working directory updated successfully" (Get-ThemeColor -ColorName "Success")
+            Update-GuiStatus "[OK] Working directory updated successfully" (Get-ThemeColor -ColorName "Success")
             
             if ($Global:ConnectionState.IsConnected) {
                 [System.Windows.Forms.MessageBox]::Show(
@@ -9088,15 +9089,15 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnWorkDir)
 
-    $btnDateRange = New-GuiButton -text "📅 Change Date Range" -x 185 -y 285 -width 145 -height 38 `
+    $btnDateRange = New-GuiButton -text "► Change Date Range" -x 185 -y 285 -width 145 -height 38 `
         -ColorType "Accent" -action {
         $newRange = Get-DateRangeInput -CurrentValue $ConfigData.DateRange
         if ($newRange -ne $null) {
             $oldRange = $ConfigData.DateRange
             $ConfigData.DateRange = $newRange
-            $Global:DateRangeLabel.Text = "📅 Date Range: $($ConfigData.DateRange) days back"
+            $Global:DateRangeLabel.Text = "► Date Range: $($ConfigData.DateRange) days back"
             $Global:DateRangeLabel.Refresh()
-            Update-GuiStatus "✅ Date range updated from $oldRange to $newRange days" (Get-ThemeColor -ColorName "Success")
+            Update-GuiStatus "[OK] Date range updated from $oldRange to $newRange days" (Get-ThemeColor -ColorName "Success")
             
             [System.Windows.Forms.MessageBox]::Show(
                 "Date range updated successfully!`n`nOld range: $oldRange days`nNew range: $newRange days`n`n" +
@@ -9119,9 +9120,9 @@ function Show-MainGUI {
             $connected = Connect-TenantServices
 
             if ($connected) {
-                Update-GuiStatus "✅ Connected to Microsoft Graph successfully!" (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Connected to Microsoft Graph successfully!" (Get-ThemeColor -ColorName "Success")
             } else {
-                Update-GuiStatus "❌ Failed to connect to Microsoft Graph" (Get-ThemeColor -ColorName "Danger")
+                Update-GuiStatus "[ERROR] Failed to connect to Microsoft Graph" (Get-ThemeColor -ColorName "Danger")
             }
         }
         finally {
@@ -9169,7 +9170,7 @@ function Show-MainGUI {
     $btnSignIn = New-GuiButton -text "👤 Collect Sign-In Data" -x 30 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9180,7 +9181,7 @@ function Show-MainGUI {
         try {
             $result = Get-TenantSignInData
             if ($result) {
-                Update-GuiStatus "✅ Sign-in data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Sign-in data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9193,7 +9194,7 @@ function Show-MainGUI {
     $btnAudit = New-GuiButton -text "📋 Collect Admin Audits" -x 225 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9204,7 +9205,7 @@ function Show-MainGUI {
         try {
             $result = Get-AdminAuditData
             if ($result) {
-                Update-GuiStatus "✅ Admin audit data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Admin audit data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9214,10 +9215,10 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnAudit)
 
-    $btnRules = New-GuiButton -text "📨 Collect Inbox Rules" -x 420 -y 365 -width 185 -height 38 `
+    $btnRules = New-GuiButton -text "✉ Collect Inbox Rules" -x 420 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9228,7 +9229,7 @@ function Show-MainGUI {
         try {
             $result = Get-MailboxRules
             if ($result) {
-                Update-GuiStatus "✅ Inbox rules collected! Found $($result.Count) rules." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Inbox rules collected! Found $($result.Count) rules." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9241,7 +9242,7 @@ function Show-MainGUI {
     $btnDelegation = New-GuiButton -text "👥 Collect Delegations" -x 615 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9252,7 +9253,7 @@ function Show-MainGUI {
         try {
             $result = Get-MailboxDelegationData
             if ($result) {
-                Update-GuiStatus "✅ Delegation data collected! Found $($result.Count) delegations." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Delegation data collected! Found $($result.Count) delegations." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9269,7 +9270,7 @@ function Show-MainGUI {
     $btnApps = New-GuiButton -text "🔐 Collect App Registrations" -x 30 -y 413 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9280,7 +9281,7 @@ function Show-MainGUI {
         try {
             $result = Get-AppRegistrationData
             if ($result) {
-                Update-GuiStatus "✅ App registration data collected! Found $($result.Count) apps." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] App registration data collected! Found $($result.Count) apps." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9293,7 +9294,7 @@ function Show-MainGUI {
     $btnConditionalAccess = New-GuiButton -text "🔒 Conditional Access" -x 225 -y 413 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
 
@@ -9304,7 +9305,7 @@ function Show-MainGUI {
         try {
             $result = Get-ConditionalAccessData
             if ($result) {
-                Update-GuiStatus "✅ Conditional access data collected! Found $($result.Count) policies." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Conditional access data collected! Found $($result.Count) policies." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9338,7 +9339,7 @@ function Show-MainGUI {
             if ($result) {
                 $criticalCount = ($result | Where-Object { $_.RiskLevel -eq "Critical" }).Count
                 $highCount = ($result | Where-Object { $_.RiskLevel -eq "High" }).Count
-                Update-GuiStatus "✅ ETR analysis completed! Found $criticalCount critical and $highCount high-risk patterns." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] ETR analysis completed! Found $criticalCount critical and $highCount high-risk patterns." (Get-ThemeColor -ColorName "Success")
             }
         }
         finally {
@@ -9357,7 +9358,7 @@ function Show-MainGUI {
         try {
             $result = Get-MessageTraceExchangeOnline
             if ($result) {
-                Update-GuiStatus "✅ Message trace collected! Processed $($result.Count) messages." (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Message trace collected! Processed $($result.Count) messages." (Get-ThemeColor -ColorName "Success")
                 
                 $runAnalysis = [System.Windows.Forms.MessageBox]::Show(
                     "Message trace collection complete!`n`n$($result.Count) messages saved.`n`nRun ETR analysis now?",
@@ -9403,7 +9404,7 @@ function Show-MainGUI {
     $btnRunAll = New-GuiButton -text "🚀 Run All Data Collection" -x 30 -y 493 -width 245 -height 45 `
         -ColorType "Warning" -action {
         if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
         
@@ -9457,17 +9458,17 @@ function Show-MainGUI {
                     }
                 }
                 $completed++
-                Update-GuiStatus "✅ Completed: $($task.Name) ($completed/$($tasks.Count))" (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Completed: $($task.Name) ($completed/$($tasks.Count))" (Get-ThemeColor -ColorName "Success")
             }
             catch {
                 Write-Log "Error in $($task.Name): $($_.Exception.Message)" -Level "Error"
-                Update-GuiStatus "❌ Error in $($task.Name): $($_.Exception.Message)" (Get-ThemeColor -ColorName "Danger")
+                Update-GuiStatus "[ERROR] Error in $($task.Name): $($_.Exception.Message)" (Get-ThemeColor -ColorName "Danger")
             }
         }
         
         $btnRunAll.Enabled = $true
         $btnRunAll.Text = $originalText
-        Update-GuiStatus "✅ Data collection completed! Finished $completed of $($tasks.Count) tasks." (Get-ThemeColor -ColorName "Success")
+        Update-GuiStatus "[OK] Data collection completed! Finished $completed of $($tasks.Count) tasks." (Get-ThemeColor -ColorName "Success")
         
         [System.Windows.Forms.MessageBox]::Show(
             "Data collection completed!`n`nFinished $completed out of $($tasks.Count) tasks successfully.",
@@ -9495,7 +9496,7 @@ function Show-MainGUI {
                 $high = ($results | Where-Object { $_.RiskLevel -eq "High" }).Count
                 $medium = ($results | Where-Object { $_.RiskLevel -eq "Medium" }).Count
                 
-                Update-GuiStatus "✅ Analysis completed - $critical critical, $high high, $medium medium risk users" (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Analysis completed - $critical critical, $high high, $medium medium risk users" (Get-ThemeColor -ColorName "Success")
                 
                 $result = [System.Windows.Forms.MessageBox]::Show(
                     "Security Analysis Completed!`n`n" +
@@ -9510,7 +9511,7 @@ function Show-MainGUI {
                     Start-Process $reportPath
                 }
             } else {
-                Update-GuiStatus "❌ Analysis failed - no data available" (Get-ThemeColor -ColorName "Danger")
+                Update-GuiStatus "[ERROR] Analysis failed - no data available" (Get-ThemeColor -ColorName "Danger")
                 [System.Windows.Forms.MessageBox]::Show(
                     "Analysis failed or no data available.`n`nPlease ensure you have collected data first.",
                     "Analysis Failed",
@@ -9533,7 +9534,7 @@ function Show-MainGUI {
         $reports = Get-ChildItem -Path $ConfigData.WorkDir -Filter "*.html" -ErrorAction SilentlyContinue
         
         if ($reports.Count -eq 0) {
-            Update-GuiStatus "⚠️ No reports found in working directory" (Get-ThemeColor -ColorName "Warning")
+            Update-GuiStatus "[WARNING] No reports found in working directory" (Get-ThemeColor -ColorName "Warning")
             [System.Windows.Forms.MessageBox]::Show(
                 "No HTML reports found in the working directory:`n$($ConfigData.WorkDir)`n`n" +
                 "Please run the analysis first to generate reports.",
@@ -9545,7 +9546,7 @@ function Show-MainGUI {
         }
         
         if ($reports.Count -eq 1) {
-            Update-GuiStatus "✅ Opening report: $($reports[0].Name)" (Get-ThemeColor -ColorName "Success")
+            Update-GuiStatus "[OK] Opening report: $($reports[0].Name)" (Get-ThemeColor -ColorName "Success")
             Start-Process $reports[0].FullName
         } else {
             $reportForm = New-Object System.Windows.Forms.Form
@@ -9586,7 +9587,7 @@ function Show-MainGUI {
             $reportForm.Controls.Add($buttonPanel)
             
             $openBtn = New-Object System.Windows.Forms.Button
-            $openBtn.Text = "✅ Open Selected Report"
+            $openBtn.Text = "[OK] Open Selected Report"
             $openBtn.Size = New-Object System.Drawing.Size(180, 35)
             $openBtn.Location = New-Object System.Drawing.Point(270, 10)
             $openBtn.BackColor = Get-ThemeColor -ColorName "Primary"
@@ -9602,7 +9603,7 @@ function Show-MainGUI {
             $buttonPanel.Controls.Add($openBtn)
             
             $cancelBtn = New-Object System.Windows.Forms.Button
-            $cancelBtn.Text = "❌ Cancel"
+            $cancelBtn.Text = "[X] Cancel"
             $cancelBtn.Size = New-Object System.Drawing.Size(100, 35)
             $cancelBtn.Location = New-Object System.Drawing.Point(460, 10)
             $cancelBtn.BackColor = Get-ThemeColor -ColorName "Secondary"
@@ -9688,9 +9689,9 @@ function Show-MainGUI {
         }
         
         if ($Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "✅ Application ready - Using existing Microsoft Graph connection" (Get-ThemeColor -ColorName "Success")
+            Update-GuiStatus "[OK] Application ready - Using existing Microsoft Graph connection" (Get-ThemeColor -ColorName "Success")
         } else {
-            Update-GuiStatus "⚠️ Application ready - Please connect to Microsoft Graph to begin" (Get-ThemeColor -ColorName "Warning")
+            Update-GuiStatus "[INFO] Application ready - Please connect to Microsoft Graph to begin" (Get-ThemeColor -ColorName "Warning")
         }
     })
 
@@ -9767,7 +9768,7 @@ try {
 }
 catch {
     Write-Log "Final cleanup warning: $($_.Exception.Message)" -Level "Warning"
-    Write-Host "⚠ Cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "[WARNING] Cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 # Ensure clean disconnect from Exchange Online
@@ -9786,7 +9787,7 @@ try {
 }
 catch {
     Write-Log "Exchange Online cleanup warning: $($_.Exception.Message)" -Level "Warning"
-    Write-Host "⚠ Exchange cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
+    Write-Host "[WARNING] Exchange cleanup warning: $($_.Exception.Message)" -ForegroundColor Yellow
 }
 
 # Stop transcript
