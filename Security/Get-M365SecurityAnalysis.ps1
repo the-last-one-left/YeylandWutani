@@ -9695,10 +9695,11 @@ function Show-MainGUI {
 
 Write-Host ""
 Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
-Write-Host "║   Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition      ║" -ForegroundColor Cyan
-Write-Host "║   Version $ScriptVer                                           ║" -ForegroundColor Cyan
+Write-Host "║ Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition  ║" -ForegroundColor Cyan
+Write-Host ("║ Version {0,-55}║" -f $ScriptVer) -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
+
 
 # Initialize environment
 Write-Host "Initializing environment..." -ForegroundColor Yellow
@@ -9782,7 +9783,7 @@ Write-Host "║                     Script Execution Summary                   �
 Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
 Write-Host ("║  Working Directory: {0,-43}║" -f $ConfigData.WorkDir) -ForegroundColor Cyan
 Write-Host ("║  Date Range: {0,-50}║" -f "$($ConfigData.DateRange) days") -ForegroundColor Cyan
-Write-Host ("║  Script Version: {0,-47}║" -f $ScriptVer) -ForegroundColor Cyan
+Write-Host ("║  Script Version:{0,-47}║" -f $ScriptVer) -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Thank you for using the Microsoft 365 Security Analysis Tool!" -ForegroundColor Green
