@@ -1792,7 +1792,7 @@ function Test-ScriptVersion {
                     
                     if ($updateChoice -eq "Yes") {
                         # Open GitHub page in default browser
-                        $githubPageUrl = "https://github.com/the-last-one-left/Scripts/blob/main/CompromisedDiscovery-Graph.ps1"
+                        $githubPageUrl = "https://github.com/the-last-one-left/YeylandWutani/blob/main/Security/Get-M365SecurityAnalysis.ps1"
                         Start-Process $githubPageUrl
                         Update-GuiStatus "Opening GitHub page for update download..." ([System.Drawing.Color]::Green)
                         Write-Log "User chose to update - opening GitHub page" -Level "Info"
@@ -9780,14 +9780,15 @@ Write-Host ""
 Write-Host "╔════════════════════════════════════════════════════════════════╗" -ForegroundColor Cyan
 Write-Host "║                     Script Execution Summary                   ║" -ForegroundColor Cyan
 Write-Host "╠════════════════════════════════════════════════════════════════╣" -ForegroundColor Cyan
-Write-Host "║  Working Directory: $('{0,-43}' -f $ConfigData.WorkDir) ║" -ForegroundColor Cyan
-Write-Host "║  Date Range: $('{0,-50}' -f "$($ConfigData.DateRange) days") ║" -ForegroundColor Cyan
-Write-Host "║  Script Version: $('{0,-47}' -f $ScriptVer) ║" -ForegroundColor Cyan
+Write-Host ("║  Working Directory: {0,-43}║" -f $ConfigData.WorkDir) -ForegroundColor Cyan
+Write-Host ("║  Date Range: {0,-50}║" -f "$($ConfigData.DateRange) days") -ForegroundColor Cyan
+Write-Host ("║  Script Version: {0,-47}║" -f $ScriptVer) -ForegroundColor Cyan
 Write-Host "╚════════════════════════════════════════════════════════════════╝" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Thank you for using the Microsoft 365 Security Analysis Tool!" -ForegroundColor Green
-Write-Host "For support or updates, visit: https://github.com/the-last-one-left/Scripts" -ForegroundColor Gray
+Write-Host "For support or updates, visit: https://github.com/the-last-one-left/YeylandWutani" -ForegroundColor Gray
 Write-Host ""
+
 
 #endregion
 
