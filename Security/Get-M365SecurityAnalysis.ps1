@@ -270,25 +270,52 @@ function New-GuiButton {
         [string]$ColorType,
         [scriptblock]$action
     )
-    
+
     $button = New-Object System.Windows.Forms.Button
     $button.Text = $text
     $button.Location = New-Object System.Drawing.Point($x, $y)
     $button.Size = New-Object System.Drawing.Size($width, $height)
     $button.BackColor = Get-ThemeColor -ColorName $ColorType
-    
+
     # ALWAYS USE WHITE TEXT ON COLORED BUTTONS FOR MAXIMUM CONTRAST
     $button.ForeColor = [System.Drawing.Color]::White
-    
+
+    # Enhanced visual styling
     $button.FlatStyle = "Flat"
-    $button.FlatAppearance.BorderSize = 0
-    $button.Font = New-Object System.Drawing.Font("Segoe UI Symbol", 9, [System.Drawing.FontStyle]::Bold)
+    $button.FlatAppearance.BorderSize = 2
+
+    # Create a slightly darker border color for depth
+    $baseColor = Get-ThemeColor -ColorName $ColorType
+    $darkerColor = [System.Drawing.Color]::FromArgb(
+        [Math]::Max(0, $baseColor.R - 30),
+        [Math]::Max(0, $baseColor.G - 30),
+        [Math]::Max(0, $baseColor.B - 30)
+    )
+    $button.FlatAppearance.BorderColor = $darkerColor
+
+    # Improved typography
+    $button.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
     $button.Cursor = [System.Windows.Forms.Cursors]::Hand
-    
+
+    # Add hover effect
+    $originalColor = $button.BackColor
+    $button.Add_MouseEnter({
+        $hoverColor = [System.Drawing.Color]::FromArgb(
+            [Math]::Min(255, $originalColor.R + 20),
+            [Math]::Min(255, $originalColor.G + 20),
+            [Math]::Min(255, $originalColor.B + 20)
+        )
+        $this.BackColor = $hoverColor
+    })
+
+    $button.Add_MouseLeave({
+        $this.BackColor = $originalColor
+    })
+
     if ($action) {
         $button.Add_Click($action)
     }
-    
+
     return $button
 }
 
@@ -8803,7 +8830,7 @@ function Show-MainGUI {
     
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Microsoft 365 Security Analysis Tool - v$ScriptVer"
-    $form.Size = New-Object System.Drawing.Size(820, 750)
+    $form.Size = New-Object System.Drawing.Size(840, 630)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedSingle"
     $form.MaximizeBox = $false
@@ -8825,38 +8852,54 @@ function Show-MainGUI {
     $headerLabel.TextAlign = "MiddleLeft"
     $form.Controls.Add($headerLabel)
     
-    # Theme toggle button - positioned INSIDE the form properly
+    # Theme toggle button - Enhanced with better styling
     $themeToggle = New-Object System.Windows.Forms.Button
-    $themeToggle.Size = New-Object System.Drawing.Size(100, 35)
-    $themeToggle.Location = New-Object System.Drawing.Point(680, 22)
+    $themeToggle.Size = New-Object System.Drawing.Size(110, 38)
+    $themeToggle.Location = New-Object System.Drawing.Point(690, 20)
     $themeToggle.FlatStyle = "Flat"
-    $themeToggle.FlatAppearance.BorderSize = 1
-    $themeToggle.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
+    $themeToggle.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
     $themeToggle.Cursor = [System.Windows.Forms.Cursors]::Hand
-    
+
     if ($script:CurrentTheme -eq "Dark") {
         $themeToggle.Text = "☀️ Light"
         $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(66, 165, 245)
         $themeToggle.ForeColor = [System.Drawing.Color]::White
+        $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(41, 128, 185)
     } else {
         $themeToggle.Text = "🌙 Dark"
-        $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(60, 60, 60)
+        $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
         $themeToggle.ForeColor = [System.Drawing.Color]::White
+        $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(44, 62, 80)
     }
-    
-	$themeToggle.Add_Click({
-		if ($script:CurrentTheme -eq "Dark") {
-			Set-Theme -Theme "Light"
-		} else {
-			Set-Theme -Theme "Dark"
-		}
-		
-		# Properly dispose the form before creating new one
-		$form.Dispose()
-		Show-MainGUI
-	})
-	
-	$form.Controls.Add($themeToggle)
+    $themeToggle.FlatAppearance.BorderSize = 2
+
+    # Add hover effects
+    $themeOriginalColor = $themeToggle.BackColor
+    $themeToggle.Add_MouseEnter({
+        if ($script:CurrentTheme -eq "Dark") {
+            $this.BackColor = [System.Drawing.Color]::FromArgb(100, 181, 246)
+        } else {
+            $this.BackColor = [System.Drawing.Color]::FromArgb(69, 90, 100)
+        }
+    })
+
+    $themeToggle.Add_MouseLeave({
+        $this.BackColor = $themeOriginalColor
+    })
+
+    $themeToggle.Add_Click({
+        if ($script:CurrentTheme -eq "Dark") {
+            Set-Theme -Theme "Light"
+        } else {
+            Set-Theme -Theme "Dark"
+        }
+
+        # Properly dispose the form before creating new one
+        $form.Dispose()
+        Show-MainGUI
+    })
+
+    $form.Controls.Add($themeToggle)
 
     # Version label
     $versionLabel = New-Object System.Windows.Forms.Label
@@ -8869,78 +8912,118 @@ function Show-MainGUI {
     $form.Controls.Add($versionLabel)
 
     #──────────────────────────────────────────────────────────────
-    # STATUS PANEL
+    # STATUS PANEL - Enhanced Design
     #──────────────────────────────────────────────────────────────
-    
+
     $statusPanel = New-Object System.Windows.Forms.Panel
-    $statusPanel.Size = New-Object System.Drawing.Size(780, 140)
-    $statusPanel.Location = New-Object System.Drawing.Point(20, 180)
+    $statusPanel.Size = New-Object System.Drawing.Size(780, 150)
+    $statusPanel.Location = New-Object System.Drawing.Point(20, 95)
     $statusPanel.BorderStyle = "FixedSingle"
     $statusPanel.BackColor = Get-ThemeColor -ColorName "Surface"
+
+    # Add visual depth with Paint event for custom border
+    $statusPanel.Add_Paint({
+        param($sender, $e)
+        $borderColor = Get-ThemeColor -ColorName "Primary"
+        $pen = New-Object System.Drawing.Pen($borderColor, 3)
+        $rect = New-Object System.Drawing.Rectangle(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $e.Graphics.DrawRectangle($pen, $rect)
+        $pen.Dispose()
+    })
+
     $form.Controls.Add($statusPanel)
 
     $Global:WorkDirLabel = New-Object System.Windows.Forms.Label
     $Global:WorkDirLabel.Text = "📁 Working Directory: $($ConfigData.WorkDir)"
-    $Global:WorkDirLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9)
-    $Global:WorkDirLabel.Size = New-Object System.Drawing.Size(760, 25)
-    $Global:WorkDirLabel.Location = New-Object System.Drawing.Point(10, 10)
+    $Global:WorkDirLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
+    $Global:WorkDirLabel.Size = New-Object System.Drawing.Size(760, 28)
+    $Global:WorkDirLabel.Location = New-Object System.Drawing.Point(15, 12)
     $Global:WorkDirLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
     $statusPanel.Controls.Add($Global:WorkDirLabel)
 
     $Global:DateRangeLabel = New-Object System.Windows.Forms.Label
     $Global:DateRangeLabel.Text = "📅 Date Range: $($ConfigData.DateRange) days back"
-    $Global:DateRangeLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9)
-    $Global:DateRangeLabel.Size = New-Object System.Drawing.Size(760, 25)
-    $Global:DateRangeLabel.Location = New-Object System.Drawing.Point(10, 35)
+    $Global:DateRangeLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
+    $Global:DateRangeLabel.Size = New-Object System.Drawing.Size(760, 28)
+    $Global:DateRangeLabel.Location = New-Object System.Drawing.Point(15, 40)
     $Global:DateRangeLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
     $statusPanel.Controls.Add($Global:DateRangeLabel)
 
     $Global:ConnectionLabel = New-Object System.Windows.Forms.Label
     $Global:ConnectionLabel.Text = "🔌 Microsoft Graph: Not Connected"
-    $Global:ConnectionLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
-    $Global:ConnectionLabel.Size = New-Object System.Drawing.Size(760, 25)
-    $Global:ConnectionLabel.Location = New-Object System.Drawing.Point(10, 60)
+    $Global:ConnectionLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
+    $Global:ConnectionLabel.Size = New-Object System.Drawing.Size(760, 28)
+    $Global:ConnectionLabel.Location = New-Object System.Drawing.Point(15, 68)
     $Global:ConnectionLabel.ForeColor = Get-ThemeColor -ColorName "Danger"
     $statusPanel.Controls.Add($Global:ConnectionLabel)
 
     $Global:TenantInfoLabel = New-Object System.Windows.Forms.Label
     $Global:TenantInfoLabel.Text = "🏢 Not connected to any tenant"
-    $Global:TenantInfoLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9)
-    $Global:TenantInfoLabel.Size = New-Object System.Drawing.Size(760, 25)
-    $Global:TenantInfoLabel.Location = New-Object System.Drawing.Point(10, 85)
+    $Global:TenantInfoLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
+    $Global:TenantInfoLabel.Size = New-Object System.Drawing.Size(760, 28)
+    $Global:TenantInfoLabel.Location = New-Object System.Drawing.Point(15, 96)
     $Global:TenantInfoLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
     $statusPanel.Controls.Add($Global:TenantInfoLabel)
 
     $performanceLabel = New-Object System.Windows.Forms.Label
     $performanceLabel.Text = "⚡ Performance: Batch Size $($ConfigData.BatchSize) | Cache Timeout $($ConfigData.CacheTimeout)s"
-    $performanceLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 8)
-    $performanceLabel.Size = New-Object System.Drawing.Size(760, 20)
-    $performanceLabel.Location = New-Object System.Drawing.Point(10, 110)
-    $performanceLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+    $performanceLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 8.5)
+    $performanceLabel.Size = New-Object System.Drawing.Size(760, 22)
+    $performanceLabel.Location = New-Object System.Drawing.Point(15, 124)
+    $performanceLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
     $statusPanel.Controls.Add($performanceLabel)
 
     #──────────────────────────────────────────────────────────────
-    # BOTTOM STATUS BAR
+    # BOTTOM STATUS BAR - Enhanced Design
     #──────────────────────────────────────────────────────────────
-    
+
+    # Create a status bar panel for better visual separation
+    $statusBarPanel = New-Object System.Windows.Forms.Panel
+    $statusBarPanel.Size = New-Object System.Drawing.Size(800, 50)
+    $statusBarPanel.Location = New-Object System.Drawing.Point(20, 555)
+    $statusBarPanel.BorderStyle = "FixedSingle"
+    $statusBarPanel.BackColor = Get-ThemeColor -ColorName "Surface"
+
+    # Add custom border to status bar
+    $statusBarPanel.Add_Paint({
+        param($sender, $e)
+        $borderColor = Get-ThemeColor -ColorName "Border"
+        $pen = New-Object System.Drawing.Pen($borderColor, 2)
+        $rect = New-Object System.Drawing.Rectangle(0, 0, $sender.Width - 1, $sender.Height - 1)
+        $e.Graphics.DrawRectangle($pen, $rect)
+        $pen.Dispose()
+    })
+
     $Global:StatusLabel = New-Object System.Windows.Forms.Label
     $Global:StatusLabel.Text = "✅ Ready - Please connect to Microsoft Graph to begin"
-    $Global:StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9)
-    $Global:StatusLabel.Size = New-Object System.Drawing.Size(780, 25)
-    $Global:StatusLabel.Location = New-Object System.Drawing.Point(20, 620)
-    
+    $Global:StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
+    $Global:StatusLabel.Size = New-Object System.Drawing.Size(780, 45)
+    $Global:StatusLabel.Location = New-Object System.Drawing.Point(15, 2)
+    $Global:StatusLabel.TextAlign = "MiddleLeft"
+
     if ($script:CurrentTheme -eq "Dark") {
         $Global:StatusLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 193, 7)
     } else {
-        $Global:StatusLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
+        $Global:StatusLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
     }
-    $form.Controls.Add($Global:StatusLabel)
+
+    $statusBarPanel.Controls.Add($Global:StatusLabel)
+    $form.Controls.Add($statusBarPanel)
 
     #──────────────────────────────────────────────────────────────
     # ROW 1: SETUP BUTTONS WITH EMOJIS
     #──────────────────────────────────────────────────────────────
-    
-    $btnWorkDir = New-GuiButton -text "📂 Set Working Directory" -x 30 -y 340 -width 140 -height 35 `
+
+    # Section header for Setup Controls
+    $setupHeader = New-Object System.Windows.Forms.Label
+    $setupHeader.Text = "⚙️ Configuration & Connection"
+    $setupHeader.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
+    $setupHeader.ForeColor = Get-ThemeColor -ColorName "Primary"
+    $setupHeader.Size = New-Object System.Drawing.Size(780, 25)
+    $setupHeader.Location = New-Object System.Drawing.Point(30, 258)
+    $form.Controls.Add($setupHeader)
+
+    $btnWorkDir = New-GuiButton -text "📂 Set Working Directory" -x 30 -y 285 -width 145 -height 38 `
         -ColorType "Secondary" -action {
         $folder = Get-Folder -initialDirectory $ConfigData.WorkDir
         if ($folder) {
@@ -8968,7 +9051,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnWorkDir)
 
-    $btnDateRange = New-GuiButton -text "📅 Change Date Range" -x 180 -y 340 -width 140 -height 35 `
+    $btnDateRange = New-GuiButton -text "📅 Change Date Range" -x 185 -y 285 -width 145 -height 38 `
         -ColorType "Accent" -action {
         $newRange = Get-DateRangeInput -CurrentValue $ConfigData.DateRange
         if ($newRange -ne $null) {
@@ -8989,15 +9072,15 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnDateRange)
 
-    $btnConnect = New-GuiButton -text "🔌 Connect to Microsoft Graph" -x 330 -y 340 -width 140 -height 35 `
+    $btnConnect = New-GuiButton -text "🔌 Connect to Microsoft Graph" -x 340 -y 285 -width 185 -height 38 `
         -ColorType "Primary" -action {
         $btnConnect.Enabled = $false
         $originalText = $btnConnect.Text
         $btnConnect.Text = "⏳ Connecting..."
-        
+
         try {
             $connected = Connect-TenantServices
-            
+
             if ($connected) {
                 Update-GuiStatus "✅ Connected to Microsoft Graph successfully!" (Get-ThemeColor -ColorName "Success")
             } else {
@@ -9011,12 +9094,12 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnConnect)
 
-    $btnDisconnect = New-GuiButton -text "🔴 Disconnect" -x 480 -y 340 -width 100 -height 35 `
+    $btnDisconnect = New-GuiButton -text "🔴 Disconnect" -x 535 -y 285 -width 115 -height 38 `
         -ColorType "Danger" -action {
         $btnDisconnect.Enabled = $false
         $originalText = $btnDisconnect.Text
         $btnDisconnect.Text = "⏳ Disconnecting..."
-        
+
         try {
             Disconnect-GraphSafely -ShowMessage $true
         }
@@ -9027,7 +9110,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnDisconnect)
 
-    $btnCheckVersion = New-GuiButton -text "🔄 Check Version" -x 590 -y 340 -width 190 -height 35 `
+    $btnCheckVersion = New-GuiButton -text "🔄 Check Version" -x 660 -y 285 -width 140 -height 38 `
         -ColorType "Accent" -action {
         Test-ScriptVersion -ShowMessageBox $true
     }
@@ -9036,8 +9119,17 @@ function Show-MainGUI {
     #──────────────────────────────────────────────────────────────
     # ROW 2: DATA COLLECTION BUTTONS (PART 1) WITH EMOJIS
     #──────────────────────────────────────────────────────────────
-    
-    $btnSignIn = New-GuiButton -text "👤 Collect Sign-In Data" -x 30 -y 390 -width 180 -height 35 `
+
+    # Section header for Data Collection
+    $dataCollectionHeader = New-Object System.Windows.Forms.Label
+    $dataCollectionHeader.Text = "📊 Data Collection"
+    $dataCollectionHeader.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
+    $dataCollectionHeader.ForeColor = Get-ThemeColor -ColorName "Success"
+    $dataCollectionHeader.Size = New-Object System.Drawing.Size(780, 25)
+    $dataCollectionHeader.Location = New-Object System.Drawing.Point(30, 338)
+    $form.Controls.Add($dataCollectionHeader)
+
+    $btnSignIn = New-GuiButton -text "👤 Collect Sign-In Data" -x 30 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9061,7 +9153,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnSignIn)
 
-    $btnAudit = New-GuiButton -text "📋 Collect Admin Audits" -x 220 -y 390 -width 180 -height 35 `
+    $btnAudit = New-GuiButton -text "📋 Collect Admin Audits" -x 225 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9085,7 +9177,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnAudit)
 
-    $btnRules = New-GuiButton -text "📨 Collect Inbox Rules" -x 410 -y 390 -width 180 -height 35 `
+    $btnRules = New-GuiButton -text "📨 Collect Inbox Rules" -x 420 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9109,7 +9201,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnRules)
 
-    $btnDelegation = New-GuiButton -text "👥 Collect Delegations" -x 600 -y 390 -width 180 -height 35 `
+    $btnDelegation = New-GuiButton -text "👥 Collect Delegations" -x 615 -y 365 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9136,8 +9228,8 @@ function Show-MainGUI {
     #──────────────────────────────────────────────────────────────
     # ROW 3: DATA COLLECTION BUTTONS (PART 2) WITH EMOJIS
     #──────────────────────────────────────────────────────────────
-    
-    $btnApps = New-GuiButton -text "🔐 Collect App Registrations" -x 30 -y 440 -width 180 -height 35 `
+
+    $btnApps = New-GuiButton -text "🔐 Collect App Registrations" -x 30 -y 413 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9161,17 +9253,17 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnApps)
 
-    $btnConditionalAccess = New-GuiButton -text "🔒 Conditional Access" -x 220 -y 440 -width 180 -height 35 `
+    $btnConditionalAccess = New-GuiButton -text "🔒 Conditional Access" -x 225 -y 413 -width 185 -height 38 `
         -ColorType "Success" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
-        
+
         $btnConditionalAccess.Enabled = $false
         $originalText = $btnConditionalAccess.Text
         $btnConditionalAccess.Text = "⏳ Running..."
-        
+
         try {
             $result = Get-ConditionalAccessData
             if ($result) {
@@ -9185,7 +9277,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnConditionalAccess)
 
-    $btnETRAnalysis = New-GuiButton -text "🔍 Analyze ETR Files" -x 410 -y 440 -width 180 -height 35 `
+    $btnETRAnalysis = New-GuiButton -text "🔍 Analyze ETR Files" -x 420 -y 413 -width 185 -height 38 `
         -ColorType "Accent" -action {
         $btnETRAnalysis.Enabled = $false
         $originalText = $btnETRAnalysis.Text
@@ -9219,7 +9311,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnETRAnalysis)
 
-    $btnMessageTrace = New-GuiButton -text "📧 Collect Message Trace" -x 600 -y 440 -width 180 -height 35 `
+    $btnMessageTrace = New-GuiButton -text "📧 Collect Message Trace" -x 615 -y 413 -width 185 -height 38 `
         -ColorType "Accent" -action {
         $btnMessageTrace.Enabled = $false
         $originalText = $btnMessageTrace.Text
@@ -9261,8 +9353,17 @@ function Show-MainGUI {
     #──────────────────────────────────────────────────────────────
     # ROW 4: BULK OPERATIONS WITH EMOJIS
     #──────────────────────────────────────────────────────────────
-    
-    $btnRunAll = New-GuiButton -text "🚀 Run All Data Collection" -x 30 -y 500 -width 280 -height 45 `
+
+    # Section header for Analysis & Operations
+    $operationsHeader = New-Object System.Windows.Forms.Label
+    $operationsHeader.Text = "🔬 Analysis & Operations"
+    $operationsHeader.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
+    $operationsHeader.ForeColor = Get-ThemeColor -ColorName "Warning"
+    $operationsHeader.Size = New-Object System.Drawing.Size(780, 25)
+    $operationsHeader.Location = New-Object System.Drawing.Point(30, 466)
+    $form.Controls.Add($operationsHeader)
+
+    $btnRunAll = New-GuiButton -text "🚀 Run All Data Collection" -x 30 -y 493 -width 245 -height 45 `
         -ColorType "Warning" -action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "❌ Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
@@ -9340,7 +9441,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnRunAll)
 
-    $btnAnalyze = New-GuiButton -text "🔎 Analyze Data" -x 330 -y 500 -width 150 -height 45 `
+    $btnAnalyze = New-GuiButton -text "🔎 Analyze Data" -x 290 -y 493 -width 180 -height 45 `
         -ColorType "Danger" -action {
         $btnAnalyze.Enabled = $false
         $originalText = $btnAnalyze.Text
@@ -9388,7 +9489,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnAnalyze)
 
-    $btnViewReports = New-GuiButton -text "📊 View Reports" -x 500 -y 500 -width 140 -height 45 `
+    $btnViewReports = New-GuiButton -text "📊 View Reports" -x 485 -y 493 -width 155 -height 45 `
         -ColorType "Accent" -action {
         Update-GuiStatus "🔍 Looking for reports in working directory..." (Get-ThemeColor -ColorName "Warning")
         
@@ -9479,7 +9580,7 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnViewReports)
 
-    $btnExit = New-GuiButton -text "🚪 Exit Application" -x 660 -y 500 -width 120 -height 45 `
+    $btnExit = New-GuiButton -text "🚪 Exit Application" -x 655 -y 493 -width 145 -height 45 `
         -ColorType "Secondary" -action {
         $result = [System.Windows.Forms.MessageBox]::Show(
             "Are you sure you want to exit the application?`n`n" +
