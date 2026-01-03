@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "10.5"
+$ScriptVer = "10.7"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -435,16 +435,21 @@ function New-GuiButton {
     # Store original color in Tag property for hover effect
     $button.Tag = $button.BackColor
 
-    # Add hover effect
+    # Add hover effect with HIGH CONTRAST
     $button.Add_MouseEnter({
         if ($this.Tag -and $this.Tag -is [System.Drawing.Color]) {
             $origColor = $this.Tag
+            # Much brighter hover - increase RGB by 50 (was 20)
             $hoverColor = [System.Drawing.Color]::FromArgb(
-                [Math]::Min(255, $origColor.R + 20),
-                [Math]::Min(255, $origColor.G + 20),
-                [Math]::Min(255, $origColor.B + 20)
+                [Math]::Min(255, $origColor.R + 50),
+                [Math]::Min(255, $origColor.G + 50),
+                [Math]::Min(255, $origColor.B + 50)
             )
             $this.BackColor = $hoverColor
+
+            # Add white border glow effect for extra visibility
+            $this.FlatAppearance.BorderColor = [System.Drawing.Color]::White
+            $this.FlatAppearance.BorderSize = 3
         }
     })
 
@@ -8322,8 +8327,9 @@ function Generate-HTMLReport {
         }
         
         .dark-mode-toggle button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 6px 20px var(--shadow);
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 8px 30px rgba(255, 102, 0, 0.5);
+            filter: brightness(1.2);
         }
         
         /* DASHBOARD STATISTICS */
@@ -8564,6 +8570,55 @@ function Generate-HTMLReport {
 		body.dark-mode .recommendation-box {
 			background-color: rgba(255, 167, 38, 0.15);
 		}
+
+		/* Summary Table Row Highlighting */
+		.summary-row-critical {
+			background: linear-gradient(to right, rgba(211, 47, 47, 0.2), rgba(211, 47, 47, 0.05)) !important;
+			border-left: 5px solid var(--critical-color) !important;
+			font-weight: 500;
+		}
+
+		.summary-row-high {
+			background: linear-gradient(to right, rgba(244, 67, 54, 0.15), rgba(244, 67, 54, 0.03)) !important;
+			border-left: 5px solid var(--danger-color) !important;
+			font-weight: 500;
+		}
+
+		.summary-row-medium {
+			background: linear-gradient(to right, rgba(255, 152, 0, 0.1), transparent) !important;
+			border-left: 4px solid var(--warning-color) !important;
+		}
+
+		.summary-row-low {
+			background: transparent;
+			border-left: 2px solid var(--border-color);
+		}
+
+		.summary-row-critical:hover,
+		.summary-row-high:hover,
+		.summary-row-medium:hover {
+			transform: translateX(3px);
+			box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
+			transition: all 0.2s ease;
+		}
+
+		/* Summary Table Styling */
+		.summary-table {
+			width: 100%;
+			margin-bottom: 30px;
+		}
+
+		.summary-table th {
+			position: sticky;
+			top: 0;
+			z-index: 10;
+			background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+		}
+
+		.summary-table td {
+			vertical-align: top;
+			line-height: 1.6;
+		}
         /* BADGES & ALERTS */
         .badge {
             display: inline-block;
@@ -8609,7 +8664,180 @@ function Generate-HTMLReport {
             border-color: var(--success-color);
             color: var(--success-color);
         }
-        
+
+        /* CHARTS & VISUALIZATIONS */
+        .charts-section {
+            margin: 40px 0;
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 30px;
+        }
+
+        .chart-container {
+            background-color: var(--surface-color);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 2px 10px var(--shadow);
+        }
+
+        .chart-title {
+            font-size: 1.3em;
+            color: var(--primary-color);
+            margin-bottom: 20px;
+            font-weight: 600;
+            text-align: center;
+        }
+
+        .chart {
+            position: relative;
+            height: 250px;
+            display: flex;
+            align-items: flex-end;
+            justify-content: space-around;
+            padding: 10px 0;
+        }
+
+        .bar {
+            flex: 1;
+            margin: 0 5px;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-end;
+        }
+
+        .bar-fill {
+            width: 100%;
+            border-radius: 8px 8px 0 0;
+            transition: all 0.3s ease;
+            position: relative;
+        }
+
+        .bar-fill:hover {
+            filter: brightness(1.2);
+            transform: scaleY(1.05);
+        }
+
+        .bar-value {
+            position: absolute;
+            top: -25px;
+            font-weight: 700;
+            font-size: 1.1em;
+            color: var(--text-primary);
+        }
+
+        .bar-label {
+            margin-top: 10px;
+            font-size: 0.85em;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        /* QUICK ACTION PANEL */
+        .quick-actions {
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            padding: 20px;
+            border-radius: 12px;
+            margin-bottom: 30px;
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+
+        .action-btn {
+            background-color: rgba(255, 255, 255, 0.2);
+            color: white;
+            border: 2px solid rgba(255, 255, 255, 0.4);
+            padding: 12px 24px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 0.95em;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(10px);
+        }
+
+        .action-btn:hover {
+            background-color: rgba(255, 255, 255, 0.35);
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
+            border-color: rgba(255, 255, 255, 0.8);
+        }
+
+        /* LOW RISK USERS - COMPACT VIEW */
+        .low-risk-summary {
+            background-color: var(--surface-color);
+            border: 2px solid var(--border-color);
+            border-left: 6px solid var(--success-color);
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .low-risk-summary h3 {
+            color: var(--success-color);
+            margin-bottom: 15px;
+            font-size: 1.3em;
+        }
+
+        .low-risk-summary .expand-btn {
+            background-color: var(--success-color);
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 600;
+            margin-top: 10px;
+            transition: all 0.3s ease;
+        }
+
+        .low-risk-summary .expand-btn:hover {
+            background-color: var(--success-color);
+            transform: translateY(-2px) scale(1.05);
+            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
+            filter: brightness(1.15);
+        }
+
+        .low-risk-users-hidden {
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.5s ease;
+        }
+
+        .low-risk-users-shown {
+            max-height: none;
+        }
+
+        /* HIGH PRIORITY ALERT BOX */
+        .priority-alert {
+            background: linear-gradient(135deg, rgba(244, 67, 54, 0.1), rgba(211, 47, 47, 0.05));
+            border-left: 6px solid var(--danger-color);
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 30px;
+        }
+
+        .priority-alert h3 {
+            color: var(--danger-color);
+            font-size: 1.4em;
+            margin-bottom: 10px;
+        }
+
+        .priority-alert ul {
+            list-style-position: inside;
+            color: var(--text-primary);
+        }
+
+        .priority-alert li {
+            margin: 8px 0;
+            padding-left: 10px;
+        }
+
         /* FOOTER */
         .footer {
             margin-top: 60px;
@@ -8711,6 +8939,205 @@ if ($highCount -gt 0) {
 "@
     }
 
+    # Add Quick Actions Panel
+    $html += @"
+        <div class="quick-actions">
+            <button class="action-btn" onclick="scrollToSection('criticalUsersSection')">⚠ Jump to Critical Users</button>
+            <button class="action-btn" onclick="scrollToSection('highRiskUsersSection')">⚡ Jump to High-Risk Users</button>
+            <button class="action-btn" onclick="exportSummary()">📊 Export Summary CSV</button>
+            <button class="action-btn" onclick="printReport()">🖨 Print Report</button>
+        </div>
+"@
+
+    # Add Charts Section
+    $totalUsers = $Data.Count
+    $maxValue = @($criticalCount, $highCount, $mediumCount, $lowCount) | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum
+    if ($maxValue -eq 0) { $maxValue = 1 } # Prevent division by zero
+
+    $criticalHeight = ($criticalCount / $maxValue) * 200
+    $highHeight = ($highCount / $maxValue) * 200
+    $mediumHeight = ($mediumCount / $maxValue) * 200
+    $lowHeight = ($lowCount / $maxValue) * 200
+
+    $html += @"
+        <div class="charts-section">
+            <div class="chart-container">
+                <div class="chart-title">Risk Distribution Overview</div>
+                <div class="chart">
+                    <div class="bar">
+                        <div class="bar-fill" style="height: ${criticalHeight}px; background: linear-gradient(to top, #D32F2F, #F44336);"></div>
+                        <div class="bar-value">$criticalCount</div>
+                        <div class="bar-label">Critical</div>
+                    </div>
+                    <div class="bar">
+                        <div class="bar-fill" style="height: ${highHeight}px; background: linear-gradient(to top, #F44336, #FF5722);"></div>
+                        <div class="bar-value">$highCount</div>
+                        <div class="bar-label">High</div>
+                    </div>
+                    <div class="bar">
+                        <div class="bar-fill" style="height: ${mediumHeight}px; background: linear-gradient(to top, #FF9800, #FFC107);"></div>
+                        <div class="bar-value">$mediumCount</div>
+                        <div class="bar-label">Medium</div>
+                    </div>
+                    <div class="bar">
+                        <div class="bar-fill" style="height: ${lowHeight}px; background: linear-gradient(to top, #4CAF50, #66BB6A);"></div>
+                        <div class="bar-value">$lowCount</div>
+                        <div class="bar-label">Low</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                <div class="chart-title">Security Status Summary</div>
+                <div style="padding: 20px; text-align: center;">
+                    <div style="font-size: 3em; font-weight: 700; color: var(--primary-color); margin-bottom: 10px;">
+                        $totalUsers
+                    </div>
+                    <div style="font-size: 1.2em; color: var(--text-secondary); margin-bottom: 20px;">
+                        Total Users Analyzed
+                    </div>
+                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px;">
+                        <div style="padding: 15px; background: rgba(244, 67, 54, 0.1); border-radius: 8px;">
+                            <div style="font-size: 2em; font-weight: 700; color: #F44336;">
+                                $(($criticalCount + $highCount))
+                            </div>
+                            <div style="color: var(--text-secondary); font-size: 0.9em;">Need Attention</div>
+                        </div>
+                        <div style="padding: 15px; background: rgba(76, 175, 80, 0.1); border-radius: 8px;">
+                            <div style="font-size: 2em; font-weight: 700; color: #4CAF50;">
+                                $(($mediumCount + $lowCount))
+                            </div>
+                            <div style="color: var(--text-secondary); font-size: 0.9em;">Lower Priority</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+"@
+
+    # Add Executive Summary Section with Critical Information Upfront
+    if ($criticalCount -gt 0 -or $highCount -gt 0) {
+        $priorityUsers = $Data | Where-Object { $_.RiskLevel -in @("Critical", "High") } |
+                         Sort-Object RiskScore -Descending
+
+        # Calculate attack statistics
+        $totalBruteForceAttempts = 0
+        $uniqueAttackIPs = @()
+        $accountsUnderAttack = 0
+
+        foreach ($user in $priorityUsers) {
+            if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
+                $accountsUnderAttack++
+                foreach ($pattern in $user.FailedLoginPatterns) {
+                    $totalBruteForceAttempts += $pattern.FailedAttempts
+                    # Extract IPs from "Multiple IPs (X)" format or single IP
+                    if ($pattern.SourceIP -match "Multiple IPs") {
+                        # Extract count from pattern
+                        if ($pattern.SourceIP -match '\((\d+)\)') {
+                            $ipCount = [int]$matches[1]
+                            $uniqueAttackIPs += @(1..$ipCount)
+                        }
+                    } else {
+                        $uniqueAttackIPs += $pattern.SourceIP
+                    }
+                }
+            }
+        }
+        $uniqueIPCount = ($uniqueAttackIPs | Select-Object -Unique).Count
+
+        # Executive Summary Dashboard
+        $html += @"
+        <div class="priority-alert" id="criticalUsersSection">
+            <h3>🚨 Executive Security Summary - Immediate Action Required</h3>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
+                <div style="background: rgba(211, 47, 47, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--danger-color);">
+                    <div style="font-size: 2.5em; font-weight: 700; color: var(--danger-color);">$accountsUnderAttack</div>
+                    <div style="font-size: 0.9em; color: var(--text-secondary);">Accounts Under Active Attack</div>
+                </div>
+                <div style="background: rgba(255, 152, 0, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--warning-color);">
+                    <div style="font-size: 2.5em; font-weight: 700; color: var(--warning-color);">$totalBruteForceAttempts</div>
+                    <div style="font-size: 0.9em; color: var(--text-secondary);">Total Failed Login Attempts</div>
+                </div>
+                <div style="background: rgba(244, 67, 54, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--danger-color);">
+                    <div style="font-size: 2.5em; font-weight: 700; color: var(--danger-color);">$uniqueIPCount</div>
+                    <div style="font-size: 0.9em; color: var(--text-secondary);">Unique Attack Source IPs</div>
+                </div>
+                <div style="background: rgba(33, 150, 243, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--primary-color);">
+                    <div style="font-size: 2.5em; font-weight: 700; color: var(--primary-color);">$($priorityUsers.Count)</div>
+                    <div style="font-size: 0.9em; color: var(--text-secondary);">High-Priority Accounts</div>
+                </div>
+            </div>
+
+            <h4 style="margin-top: 25px; margin-bottom: 15px; color: var(--danger-color); font-size: 1.2em;">⚠ Active Brute Force Attacks Detected</h4>
+            <div class="evidence-section">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>User Account</th>
+                            <th>Email</th>
+                            <th>Attack Pattern</th>
+                            <th>Failed Attempts</th>
+                            <th>Source IPs</th>
+                            <th>Risk Level</th>
+                            <th>MFA Status</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+"@
+
+        # Show all priority users with their attack details
+        foreach ($user in $priorityUsers) {
+            $attackInfo = "No active attacks"
+            $attemptCount = 0
+            $sourceIPs = "N/A"
+            $attackRisk = "info"
+
+            if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
+                $pattern = $user.FailedLoginPatterns[0]  # Get the primary pattern
+                $attackInfo = $pattern.PatternType
+                $attemptCount = $pattern.FailedAttempts
+                $sourceIPs = $pattern.SourceIP
+                $attackRisk = if ($pattern.RiskLevel -eq "Critical") { "danger" } else { "warning" }
+            }
+
+            $mfaStatus = if ($user.MFAEnabled -eq "Yes") { "success" } else { "danger" }
+            $mfaBadge = if ($user.MFAEnabled -eq "Yes") { "✓ Enabled" } else { "✗ DISABLED" }
+
+            $riskBadgeClass = switch ($user.RiskLevel) {
+                "Critical" { "danger" }
+                "High" { "warning" }
+                default { "info" }
+            }
+
+            $html += @"
+                        <tr>
+                            <td><strong>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</strong></td>
+                            <td>$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</td>
+                            <td>$attackInfo</td>
+                            <td><span class="badge $attackRisk" style="font-size: 1.1em;">$attemptCount</span></td>
+                            <td style="font-family: monospace; font-size: 0.9em;">$([System.Web.HttpUtility]::HtmlEncode($sourceIPs))</td>
+                            <td><span class="badge $riskBadgeClass">$($user.RiskLevel)</span></td>
+                            <td><span class="badge $mfaStatus">$mfaBadge</span></td>
+                        </tr>
+"@
+        }
+
+        $html += @"
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="alert warning" style="margin-top: 20px;">
+                <strong>🔒 Immediate Recommendations:</strong><br>
+                • <strong>CRITICAL:</strong> Verify MFA is enabled on all accounts under attack (especially those with "DISABLED" status above)<br>
+                • <strong>HIGH:</strong> Contact affected users to verify recent login activity<br>
+                • <strong>MEDIUM:</strong> Consider implementing Conditional Access policies to block suspicious IPs<br>
+                • <strong>LOW:</strong> Review and update password policies - enforce strong passwords and rotation
+            </div>
+        </div>
+"@
+    }
+
     # Sort users by risk
     $sortedData = $Data | Sort-Object @{Expression = {
         switch ($_.RiskLevel) {
@@ -8722,10 +9149,11 @@ if ($highCount -gt 0) {
         }
     }}, RiskScore -Descending
 
-    # Add User Summary Table
+    # Add User Summary Table with Attack Details Visible
     $html += @"
         <div class="users-section">
-            <h2 class="section-title">👥 User Summary Overview</h2>
+            <h2 class="section-title">👥 User Summary Overview - All Security Findings</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 15px;">Complete list of all users sorted by risk level. Attack details are shown inline for immediate visibility.</p>
             <div class="evidence-section">
                 <table class="summary-table">
                     <thead>
@@ -8735,7 +9163,8 @@ if ($highCount -gt 0) {
                             <th>Risk Level</th>
                             <th>Risk Score</th>
                             <th>MFA Status</th>
-                            <th>Key Indicators</th>
+                            <th>Attack Details</th>
+                            <th>Other Indicators</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -8749,19 +9178,26 @@ if ($highCount -gt 0) {
             "No" { "danger" }
             default { "info" }
         }
-        
-        # Build key indicators summary
+
+        # Build attack details (prioritized)
+        $attackDetails = @()
+        if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
+            foreach ($pattern in $user.FailedLoginPatterns) {
+                $attackDetails += "<span class='badge danger'>$($pattern.FailedAttempts) attempts</span> from $([System.Web.HttpUtility]::HtmlEncode($pattern.SourceIP))"
+            }
+        }
+        $attackText = if ($attackDetails.Count -gt 0) { $attackDetails -join "<br>" } else { "<span style='color: var(--text-secondary);'>No attacks detected</span>" }
+
+        # Build other indicators
         $indicators = @()
-        if ($user.UnusualSignInCount -gt 0) { $indicators += "[LOCATION] Unusual Locations ($($user.UnusualSignInCount))" }
-        if ($user.FailedSignInCount -gt 0) { $indicators += "[BLOCKED] Failed Logins ($($user.FailedSignInCount))" }
-        if ($user.HighRiskOperationsCount -gt 0) { $indicators += "[!] High-Risk Ops ($($user.HighRiskOperationsCount))" }
-        if ($user.SuspiciousRulesCount -gt 0) { $indicators += "✉ Suspicious Rules ($($user.SuspiciousRulesCount))" }
-        if ($user.FailedLoginPatternCount -gt 0) { $indicators += "[ALERT] Attack Patterns ($($user.FailedLoginPatternCount))" }
-        if ($user.PasswordChangeIssuesCount -gt 0) { $indicators += "[PWD] PW Changes ($($user.PasswordChangeIssuesCount))" }
-		if ($user.HighRiskISPCount -gt 0) { $indicators += "[WARNING] High-Risk ISPs ($($user.HighRiskISPCount))" }
-        
-        $indicatorText = if ($indicators.Count -gt 0) { $indicators -join "<br>" } else { "None" }
-        
+        if ($user.UnusualSignInCount -gt 0) { $indicators += "<span class='badge warning'>$($user.UnusualSignInCount)</span> Unusual Locations" }
+        if ($user.HighRiskISPCount -gt 0) { $indicators += "<span class='badge danger'>$($user.HighRiskISPCount)</span> High-Risk ISPs" }
+        if ($user.SuspiciousRulesCount -gt 0) { $indicators += "<span class='badge danger'>$($user.SuspiciousRulesCount)</span> Suspicious Rules" }
+        if ($user.HighRiskOperationsCount -gt 0) { $indicators += "<span class='badge danger'>$($user.HighRiskOperationsCount)</span> High-Risk Ops" }
+        if ($user.PasswordChangeIssuesCount -gt 0) { $indicators += "<span class='badge warning'>$($user.PasswordChangeIssuesCount)</span> Password Issues" }
+
+        $indicatorText = if ($indicators.Count -gt 0) { $indicators -join "<br>" } else { "<span style='color: var(--text-secondary);'>None</span>" }
+
         $html += @"
                         <tr class="summary-row-$riskClass">
                             <td><strong>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</strong></td>
@@ -8769,6 +9205,7 @@ if ($highCount -gt 0) {
                             <td><span class="badge $riskClass">$($user.RiskLevel)</span></td>
                             <td><strong>$($user.RiskScore)</strong></td>
                             <td><span class="badge $mfaBadgeClass">$mfaStatus</span></td>
+                            <td style="font-size: 0.85em;">$attackText</td>
                             <td style="font-size: 0.85em;">$indicatorText</td>
                         </tr>
 "@
@@ -8782,12 +9219,18 @@ if ($highCount -gt 0) {
 
         <div class="users-section">
             <h2 class="section-title">📊 Detailed User Risk Analysis</h2>
+            <div id="highRiskUsersSection"></div>
 "@
 
-    foreach ($user in $sortedData) {
+    # Separate low-risk users for collapsible section
+    $highPriorityUsers = $sortedData | Where-Object { $_.RiskLevel -in @("Critical", "High", "Medium") }
+    $lowRiskUsers = $sortedData | Where-Object { $_.RiskLevel -eq "Low" }
+
+    # Display high-priority users first
+    foreach ($user in $highPriorityUsers) {
         $riskClass = $user.RiskLevel.ToLower()
         $autoExpand = if ($user.RiskLevel -in @("Critical", "High")) { "show" } else { "" }
-        
+
         $html += @"
             <div class="user-card $riskClass">
                 <div class="user-header" onclick="toggleDetails(this)">
@@ -9064,6 +9507,57 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
 "@
     }
 
+    # Add collapsible low-risk users section
+    if ($lowRiskUsers.Count -gt 0) {
+        $html += @"
+            <div class="low-risk-summary">
+                <h3>✅ Low-Risk Users ($($lowRiskUsers.Count) accounts)</h3>
+                <p>These users have minimal security findings. Click below to expand details if needed.</p>
+                <button class="expand-btn" id="lowRiskToggleBtn" onclick="toggleLowRiskUsers()">Show All Low-Risk Users</button>
+
+                <div id="lowRiskUsersContainer" class="low-risk-users-hidden" style="margin-top: 20px;">
+"@
+
+        foreach ($user in $lowRiskUsers) {
+            $riskClass = "low"
+            $mfaStatus = if ($user.MFAStatus) { $user.MFAStatus } else { "Unknown" }
+            $mfaBadgeClass = switch ($mfaStatus) {
+                "Yes" { "success" }
+                "No" { "danger" }
+                default { "info" }
+            }
+
+            # Build key indicators summary
+            $indicators = @()
+            if ($user.UnusualSignInCount -gt 0) { $indicators += "[LOCATION] Unusual Locations ($($user.UnusualSignInCount))" }
+            if ($user.FailedSignInCount -gt 0) { $indicators += "[BLOCKED] Failed Logins ($($user.FailedSignInCount))" }
+            if ($user.FailedLoginPatternCount -gt 0) { $indicators += "[ALERT] Attack Patterns ($($user.FailedLoginPatternCount))" }
+
+            $indicatorText = if ($indicators.Count -gt 0) { $indicators -join " | " } else { "No security findings" }
+
+            $html += @"
+                    <div class="user-card low" style="padding: 15px;">
+                        <div class="user-header" onclick="toggleDetails(this)">
+                            <div class="user-info">
+                                <h3 style="font-size: 1.1em;">$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</h3>
+                                <div class="user-email">$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</div>
+                                <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">$indicatorText</div>
+                            </div>
+                            <div style="text-align: right;">
+                                <div style="font-size: 0.9em; color: var(--text-secondary);">MFA: <span class="badge $mfaBadgeClass">$mfaStatus</span></div>
+                                <div style="font-size: 0.9em; color: var(--success-color); margin-top: 5px;">Risk Score: $($user.RiskScore)</div>
+                            </div>
+                        </div>
+                    </div>
+"@
+        }
+
+        $html += @"
+                </div>
+            </div>
+"@
+    }
+
     $html += @"
         </div>
 
@@ -9135,6 +9629,78 @@ if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
                 }
             });
         });
+
+        // Enhanced scroll functionality
+        function scrollToSection(sectionId) {
+            const element = document.getElementById(sectionId);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+        }
+
+        // Toggle low-risk users visibility
+        function toggleLowRiskUsers() {
+            const container = document.getElementById('lowRiskUsersContainer');
+            const btn = document.getElementById('lowRiskToggleBtn');
+
+            if (container.classList.contains('low-risk-users-hidden')) {
+                container.classList.remove('low-risk-users-hidden');
+                container.classList.add('low-risk-users-shown');
+                btn.textContent = 'Hide Low-Risk Users';
+            } else {
+                container.classList.remove('low-risk-users-shown');
+                container.classList.add('low-risk-users-hidden');
+                btn.textContent = 'Show All Low-Risk Users';
+            }
+        }
+
+        // Expand all high/critical risk users on load
+        window.addEventListener('DOMContentLoaded', function() {
+            // Auto-expand critical and high risk
+            const highPriorityCards = document.querySelectorAll('.user-card.critical, .user-card.high');
+            highPriorityCards.forEach(card => {
+                const content = card.querySelector('.collapsible-content');
+                const icon = card.querySelector('.toggle-icon');
+                if (content && icon) {
+                    content.classList.add('show');
+                    icon.classList.add('rotated');
+                }
+            });
+
+            // Initialize charts if present
+            if (typeof initializeCharts === 'function') {
+                initializeCharts();
+            }
+        });
+
+        // Print optimized version
+        function printReport() {
+            // Expand all sections before printing
+            document.querySelectorAll('.collapsible-content').forEach(el => el.classList.add('show'));
+            window.print();
+        }
+
+        // Export summary data
+        function exportSummary() {
+            const rows = Array.from(document.querySelectorAll('.summary-table tbody tr'));
+            const csv = ['User,Email,Risk Level,Risk Score,MFA Status,Indicators'].concat(
+                rows.map(row => {
+                    const cells = Array.from(row.querySelectorAll('td'));
+                    return cells.map(cell => {
+                        const text = cell.textContent.trim().replace(/"/g, '""');
+                        return `"${text}"`;
+                    }).join(',');
+                })
+            ).join('\n');
+
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `M365_Security_Summary_${new Date().toISOString().split('T')[0]}.csv`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
     </script>
 </body>
 </html>
