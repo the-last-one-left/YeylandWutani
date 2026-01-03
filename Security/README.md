@@ -532,7 +532,7 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 
 ---
 
-## Get-M365SecurityAnalysis.ps1 (v10.5)
+## Get-M365SecurityAnalysis.ps1 (v10.7)
 
 **Capabilities:**
 - Sign-in log analysis with geolocation and high-risk ISP detection
