@@ -1,4 +1,4 @@
-﻿#################################################################
+#################################################################
 #
 #  Microsoft 365 Security Analysis Tool - Yeyland Wutani Edition
 #  
@@ -32,7 +32,7 @@
 #  +-------------------------------------------------------------+
 #
 #  REQUIREMENTS:
-#  - PowerShell 5.1 or later
+#  - PowerShell 7.0 or later (PowerShell 5.1 is NOT supported)
 #  - Microsoft.Graph.* modules (auto-installed if missing)
 #  - ExchangeOnlineManagement module (auto-installed if missing)
 #  - Administrative permissions in Microsoft 365 tenant:
@@ -64,7 +64,116 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "10.4"
+$ScriptVer = "10.5"
+
+#--------------------------------------------------------------
+# POWERSHELL VERSION CHECK
+#--------------------------------------------------------------
+# PowerShell 7.0+ is required due to Microsoft Graph SDK compatibility issues
+# PowerShell 5.1 is NOT supported (Graph SDK v2.34.0+ breaks in PS 5.1)
+if ($PSVersionTable.PSVersion.Major -lt 7) {
+    $errorMessage = @"
+╔════════════════════════════════════════════════════════════════╗
+║  UNSUPPORTED POWERSHELL VERSION                                 ║
+╠════════════════════════════════════════════════════════════════╣
+║                                                                 ║
+║  This script requires PowerShell 7.0 or later.                  ║
+║  You are running: PowerShell $($PSVersionTable.PSVersion)                        ║
+║                                                                 ║
+║  PowerShell 5.1 is NOT supported due to Microsoft Graph SDK     ║
+║  compatibility issues (v2.34.0+ breaks in PS 5.1).             ║
+║                                                                 ║
+║  TO INSTALL POWERSHELL 7:                                       ║
+║  1. Visit: https://aka.ms/install-powershell                    ║
+║  2. Or run: winget install Microsoft.PowerShell                 ║
+║                                                                 ║
+║  After installing, run this script in PowerShell 7.             ║
+║                                                                 ║
+╚════════════════════════════════════════════════════════════════╝
+"@
+    Write-Host $errorMessage -ForegroundColor Red
+
+    # Show GUI message if possible
+    try {
+        Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+        [System.Windows.Forms.MessageBox]::Show(
+            "This script requires PowerShell 7.0 or later.`n`n" +
+            "You are running PowerShell $($PSVersionTable.PSVersion)`n`n" +
+            "Please install PowerShell 7 from:`nhttps://aka.ms/install-powershell",
+            "Unsupported PowerShell Version",
+            "OK",
+            "Error"
+        )
+    } catch {
+        # GUI not available, console message already shown
+    }
+
+    exit 1
+}
+
+#--------------------------------------------------------------
+# CLEANUP EXISTING GRAPH MODULES
+#--------------------------------------------------------------
+# Remove any Graph modules already loaded to prevent version conflicts
+# This must happen before anything else to avoid "assembly already loaded" errors
+Write-Host "[STARTUP] Checking for pre-loaded Graph modules and assemblies..." -ForegroundColor Cyan
+
+# Check for PowerShell modules
+$preloadedModules = Get-Module -Name "Microsoft.Graph*" -ErrorAction SilentlyContinue
+
+# Check for loaded .NET assemblies (more thorough)
+$loadedGraphAssemblies = [AppDomain]::CurrentDomain.GetAssemblies() |
+    Where-Object { $_.FullName -like "Microsoft.Graph.*" } |
+    Select-Object -ExpandProperty FullName
+
+if ($preloadedModules -or $loadedGraphAssemblies) {
+    Write-Host ""
+    Write-Host "  ╔════════════════════════════════════════════════════════════╗" -ForegroundColor Red
+    Write-Host "  ║  ERROR: Graph modules already loaded in this session      ║" -ForegroundColor Red
+    Write-Host "  ╚════════════════════════════════════════════════════════════╝" -ForegroundColor Red
+    Write-Host ""
+    if ($preloadedModules) {
+        Write-Host "  Found $($preloadedModules.Count) pre-loaded PowerShell module(s):" -ForegroundColor Yellow
+        foreach ($mod in $preloadedModules) {
+            Write-Host "    - $($mod.Name) v$($mod.Version)" -ForegroundColor Yellow
+        }
+    }
+    if ($loadedGraphAssemblies) {
+        Write-Host "  Found $($loadedGraphAssemblies.Count) pre-loaded .NET assembly(ies):" -ForegroundColor Yellow
+        foreach ($asm in $loadedGraphAssemblies) {
+            Write-Host "    - $asm" -ForegroundColor Yellow
+        }
+    }
+    Write-Host ""
+    Write-Host "  Once Graph modules are loaded, .NET assemblies cannot be unloaded" -ForegroundColor Yellow
+    Write-Host "  without restarting PowerShell. This causes 'assembly already loaded' errors." -ForegroundColor Yellow
+    Write-Host ""
+    Write-Host "  QUICK WORKAROUND (run script with -NoProfile):" -ForegroundColor Cyan
+    Write-Host "    pwsh -NoProfile -File .\$(Split-Path -Leaf $PSCommandPath)" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  PERMANENT FIX:" -ForegroundColor Cyan
+    Write-Host "  1. Close this PowerShell window completely" -ForegroundColor White
+    Write-Host "  2. Open a NEW PowerShell 7 window" -ForegroundColor White
+    Write-Host "  3. Check for Graph modules in old Windows PowerShell path:" -ForegroundColor White
+    Write-Host "       Get-Module Microsoft.Graph* -ListAvailable | Where Path -like '*WindowsPowerShell*'" -ForegroundColor Gray
+    Write-Host "  4. If found, uninstall them:" -ForegroundColor White
+    Write-Host "       Get-InstalledModule Microsoft.Graph* | Where InstalledLocation -like '*WindowsPowerShell*' | Uninstall-Module -AllVersions -Force" -ForegroundColor Gray
+    Write-Host "  5. Restart PowerShell and run script normally" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  Also check your PowerShell profile (if it exists):" -ForegroundColor Cyan
+    Write-Host "    Profile location: $PROFILE" -ForegroundColor Gray
+    Write-Host "    Remove any 'Import-Module Microsoft.Graph*' commands" -ForegroundColor Gray
+    Write-Host ""
+
+    Read-Host "Press Enter to exit"
+    exit 1
+} else {
+    Write-Host "  No pre-loaded modules found - safe to proceed" -ForegroundColor Green
+}
+
+# Note: v2.34.0 check removed - was a PowerShell 5.1 issue
+# Now that we require PowerShell 7.0+, we can use the latest Graph SDK versions
+Write-Host "[STARTUP] PowerShell 7.0+ detected - ready to use latest Graph SDK" -ForegroundColor Green
 
 #--------------------------------------------------------------
 # GLOBAL CONNECTION STATE
@@ -126,6 +235,10 @@ $script:HighRiskISPs = @(
 # YEYLAND WUTANI THEME SYSTEM
 #══════════════════════════════════════════════════════════════════════════════
 # Add this entire section BEFORE the Show-MainGUI function
+
+# Load System.Drawing assembly for PowerShell 5.1 compatibility
+# Required for color definitions below
+Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 # Theme Color Configuration
 $script:ThemeColors = @{
@@ -427,17 +540,23 @@ $ConfigData = @{
     #───────────────────────────────────────────────────────────
     # IP Geolocation Configuration
     #───────────────────────────────────────────────────────────
-    
+
     # IPStack API key is now retrieved from environment variable
     # Set IPSTACK_KEY environment variable with your API key
     # Get a free key at: https://ipstack.com/signup/free
-    # 
+    #
     # To set permanently (PowerShell as Admin):
     #   [Environment]::SetEnvironmentVariable("IPSTACK_KEY", "your-api-key", "User")
     #
     # Or temporarily for current session:
     #   $env:IPSTACK_KEY = "your-api-key"
-    
+
+    # Rate limiting for geolocation API calls (seconds between requests)
+    # Free tier ip-api.com: 45 requests/minute = 1.33s per request minimum
+    # Recommended: 1.5-2 seconds to stay safely under the limit
+    # Set to 0 to disable rate limiting (if using paid API)
+    GeolocationRateLimit = 1.5
+
     # Expected sign-in countries for unusual location detection
     # Customize this list based on your organization's geographic presence
     # Sign-ins from countries NOT in this list will be flagged as unusual
@@ -2112,42 +2231,68 @@ function Invoke-IPGeolocation {
     # ═══════════════════════════════════════════════════════════
     # FALLBACK SERVICE (ip-api.com)
     # ═══════════════════════════════════════════════════════════
-    
+
     if (-not $success) {
-        try {
-            # ip-api.com supports both IPv4 and IPv6
-            $uri = "http://ip-api.com/json/${IPAddress}"
-            
-            $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
-            
-            if ($response -and $response.status -eq "success") {
-                $result = @{
-                    ip           = $response.query
-                    city         = if ($response.city) { $response.city } else { "Unknown" }
-                    region_name  = if ($response.regionName) { $response.regionName } else { "Unknown" }
-                    country_name = if ($response.country) { $response.country } else { "Unknown" }
-                    connection   = @{ 
-                        isp = if ($response.isp) { $response.isp } else { "Unknown" }
+        $fallbackAttempt = 0
+        $maxFallbackRetries = 3
+
+        while ($fallbackAttempt -lt $maxFallbackRetries -and -not $success) {
+            $fallbackAttempt++
+
+            try {
+                # ip-api.com supports both IPv4 and IPv6
+                # Free tier: 45 requests/minute
+                $uri = "http://ip-api.com/json/${IPAddress}"
+
+                $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
+
+                if ($response -and $response.status -eq "success") {
+                    $result = @{
+                        ip           = $response.query
+                        city         = if ($response.city) { $response.city } else { "Unknown" }
+                        region_name  = if ($response.regionName) { $response.regionName } else { "Unknown" }
+                        country_name = if ($response.country) { $response.country } else { "Unknown" }
+                        connection   = @{
+                            isp = if ($response.isp) { $response.isp } else { "Unknown" }
+                        }
+                        ip_version   = if ($isIPv4) { "IPv4" } else { "IPv6" }
+                        latitude     = $response.lat
+                        longitude    = $response.lon
+                        fallback_source = "ip-api.com"
+                        is_private   = $false
                     }
-                    ip_version   = if ($isIPv4) { "IPv4" } else { "IPv6" }
-                    latitude     = $response.lat
-                    longitude    = $response.lon
-                    fallback_source = "ip-api.com"
-                    is_private   = $false
+
+                    $success = $true
+
+                    $Cache[$IPAddress] = @{
+                        Data     = $result
+                        CachedAt = Get-Date
+                    }
+
+                    return $result
                 }
-                
-                $success = $true
-                
-                $Cache[$IPAddress] = @{
-                    Data     = $result
-                    CachedAt = Get-Date
-                }
-                
-                return $result
             }
-        }
-        catch {
-            Write-Log "Fallback geolocation service also failed for $IPAddress : $($_.Exception.Message)" -Level "Warning"
+            catch {
+                $errorMessage = $_.Exception.Message
+
+                # Check for 429 rate limit error
+                if ($errorMessage -match "429" -or $errorMessage -match "Too Many Requests") {
+                    if ($fallbackAttempt -lt $maxFallbackRetries) {
+                        # Exponential backoff for rate limiting: 5s, 15s, 45s
+                        $backoffDelay = 5 * [Math]::Pow(3, $fallbackAttempt - 1)
+                        Write-Log "Rate limit hit for $IPAddress - waiting ${backoffDelay}s before retry $fallbackAttempt/$maxFallbackRetries" -Level "Warning"
+                        Start-Sleep -Seconds $backoffDelay
+                    }
+                    else {
+                        Write-Log "Rate limit exceeded for $IPAddress after $maxFallbackRetries retries" -Level "Warning"
+                    }
+                }
+                else {
+                    # Non-rate-limit error, don't retry
+                    Write-Log "Fallback geolocation service failed for $IPAddress : $errorMessage" -Level "Warning"
+                    break
+                }
+            }
         }
     }
     
@@ -2415,9 +2560,9 @@ function Connect-TenantServices {
     $requiredModules = @(
         "Microsoft.Graph.Authentication",           # Core authentication
         "Microsoft.Graph.Users",                    # User operations
-        "Microsoft.Graph.Reports",                  # Sign-in logs
-		 "Microsoft.Graph.Beta.Reports",              # BETA - for complete data
+        "Microsoft.Graph.Beta.Reports",             # Sign-in logs (Beta for complete data)
         "Microsoft.Graph.Identity.DirectoryManagement",  # Directory operations
+        "Microsoft.Graph.Identity.SignIns",         # Authentication methods (MFA detection)
         "Microsoft.Graph.Applications"              # App registrations
     )
     
@@ -2456,11 +2601,13 @@ function Connect-TenantServices {
             
             try {
                 foreach ($module in $missingModules) {
-                    Write-Log "Installing $module..." -Level "Info"
+                    # Install latest version of all modules (PS 7.0+ compatible)
+                    Write-Log "Installing $module (latest version)..." -Level "Info"
                     Update-GuiStatus "Installing $module..." ([System.Drawing.Color]::Orange)
-                    
-                    Install-Module -Name $module -Scope CurrentUser -Force -ErrorAction Stop
-                    Write-Log "$module installed successfully" -Level "Info"
+                    Install-Module -Name $module -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+
+                    $installedVersion = (Get-InstalledModule -Name $module -ErrorAction SilentlyContinue | Select-Object -First 1).Version
+                    Write-Log "$module v$installedVersion installed successfully" -Level "Info"
                 }
                 Update-GuiStatus "All modules installed successfully" ([System.Drawing.Color]::Green)
             }
@@ -2504,34 +2651,9 @@ function Connect-TenantServices {
         }
     }
 
-    # Check for Graph vs Graph.Beta conflicts and prefer Beta when available
-    $hasStableGraph = Get-Module -Name "Microsoft.Graph.*" -ListAvailable | Where-Object { $_.Name -notlike "*Beta*" }
-    $hasBetaGraph = Get-Module -Name "Microsoft.Graph.Beta.*" -ListAvailable
-
-    if ($hasStableGraph -and $hasBetaGraph) {
-        Write-Log "Both Microsoft.Graph and Microsoft.Graph.Beta modules detected" -Level "Info"
-        Write-Log "Beta modules will be preferred when available for better compatibility." -Level "Info"
-
-        # Replace stable modules with Beta equivalents where available
-        $updatedModules = @()
-        foreach ($module in $requiredModules) {
-            # Check if this is a stable module and if Beta equivalent exists
-            if ($module -notlike "*Beta*") {
-                $betaModuleName = $module -replace "^Microsoft\.Graph\.", "Microsoft.Graph.Beta."
-                $betaExists = Get-Module -Name $betaModuleName -ListAvailable -ErrorAction SilentlyContinue
-
-                if ($betaExists) {
-                    Write-Log "  Preferring Beta: $betaModuleName" -Level "Info"
-                    $updatedModules += $betaModuleName
-                } else {
-                    $updatedModules += $module
-                }
-            } else {
-                $updatedModules += $module
-            }
-        }
-        $requiredModules = $updatedModules
-    }
+    # Note: Beta vs stable conflict check removed - was a PowerShell 5.1 issue
+    # In PowerShell 7.0+, Beta and stable modules can coexist without conflicts
+    Write-Log "Microsoft Graph modules prepared successfully" -Level "Info"
 
     #══════════════════════════════════════════════════════════
     # PHASE 3: MODULE IMPORT AND AUTHENTICATION PREPARATION
@@ -2616,12 +2738,91 @@ function Connect-TenantServices {
         
         Update-GuiStatus "Retrieving tenant information..." ([System.Drawing.Color]::Orange)
         Write-Log "Retrieving tenant context and organization information..." -Level "Info"
-        
-        $context = Get-MgContext -ErrorAction Stop
-        $organization = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
-        
+
+        # Try to get context with retry logic for assembly loading issues
+        $context = $null
+        $organization = $null
+        $retryCount = 0
+        $maxRetries = 2
+
+        while ($retryCount -le $maxRetries -and (-not $context)) {
+            try {
+                if ($retryCount -gt 0) {
+                    Write-Log "SELF-HEALING: Retry attempt $retryCount - reimporting Authentication module..." -Level "Info"
+                    Remove-Module Microsoft.Graph.Authentication -Force -ErrorAction SilentlyContinue
+                    Import-Module Microsoft.Graph.Authentication -Force -DisableNameChecking -ErrorAction Stop
+                    Start-Sleep -Seconds 1
+                }
+
+                $context = Get-MgContext -ErrorAction Stop
+                $organization = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
+
+                if ($context -and $organization) {
+                    Write-Log "Successfully retrieved tenant information" -Level "Info"
+                    break
+                }
+            }
+            catch {
+                $errorMsg = $_.Exception.Message
+
+                # Check if this is the assembly loading error indicating corrupted modules
+                if ($errorMsg -match "Could not load file or assembly.*Microsoft\.Graph\.Authentication") {
+                    Write-Log "Attempt $($retryCount + 1) failed: Assembly loading error detected" -Level "Warning"
+
+                    if ($retryCount -eq 0) {
+                        # First failure - try complete module reinstall
+                        Write-Log "SELF-HEALING: Graph modules appear corrupted - performing complete reinstall..." -Level "Warning"
+                        Update-GuiStatus "Corrupted modules detected - reinstalling Graph SDK (this may take 2-3 minutes)..." ([System.Drawing.Color]::Orange)
+
+                        try {
+                            # Uninstall ALL Graph modules
+                            Write-Log "Uninstalling all Microsoft.Graph modules..." -Level "Info"
+                            Get-InstalledModule -Name "Microsoft.Graph*" -ErrorAction SilentlyContinue |
+                                ForEach-Object {
+                                    Write-Log "  Removing: $($_.Name)" -Level "Info"
+                                    Uninstall-Module -Name $_.Name -AllVersions -Force -ErrorAction SilentlyContinue
+                                }
+
+                            # Remove loaded modules
+                            Get-Module -Name "Microsoft.Graph*" | Remove-Module -Force -ErrorAction SilentlyContinue
+
+                            # Reinstall with latest version (PS 7.0+ compatible)
+                            Write-Log "Reinstalling Microsoft.Graph SDK (latest version)..." -Level "Info"
+                            Install-Module -Name "Microsoft.Graph" -Scope CurrentUser -Force -AllowClobber -ErrorAction Stop
+
+                            $installedVersion = (Get-InstalledModule -Name "Microsoft.Graph" -ErrorAction SilentlyContinue | Select-Object -First 1).Version
+                            Write-Log "Graph modules reinstalled successfully (v$installedVersion) - please restart the script" -Level "Info"
+                            Update-GuiStatus "Graph modules reinstalled - PLEASE CLOSE AND RESTART PowerShell" ([System.Drawing.Color]::Orange)
+
+                            [System.Windows.Forms.MessageBox]::Show(
+                                "Microsoft Graph modules have been reinstalled to fix corruption.`n`n" +
+                                "Installed latest version (v$installedVersion)`n`n" +
+                                "IMPORTANT: Please close PowerShell completely and restart it, then run the script again.`n`n" +
+                                "This ensures the new modules load properly.",
+                                "Modules Reinstalled - Restart Required",
+                                "OK",
+                                "Warning"
+                            )
+
+                            throw "Graph modules reinstalled - please restart PowerShell and run the script again"
+                        }
+                        catch {
+                            Write-Log "Failed to reinstall modules: $($_.Exception.Message)" -Level "Error"
+                            throw
+                        }
+                    }
+                }
+
+                if ($retryCount -eq $maxRetries) {
+                    throw
+                }
+                Write-Log "Attempt $($retryCount + 1) failed: $errorMsg" -Level "Warning"
+                $retryCount++
+            }
+        }
+
         if (-not $context -or -not $organization) {
-            throw "Failed to retrieve tenant context or organization information"
+            throw "Failed to retrieve tenant context or organization information after $maxRetries retries"
         }
         
         Write-Log "Successfully retrieved tenant information" -Level "Info"
@@ -2722,25 +2923,31 @@ function Connect-TenantServices {
         
         Update-GuiStatus "Preparing Exchange Online connection..." ([System.Drawing.Color]::Orange)
         Write-Log "Preparing Exchange Online connection after Graph connection" -Level "Info"
-        
-        # Clean up any existing Exchange Online sessions first
-        $existingSessions = Get-PSSession | Where-Object { 
-            $_.ConfigurationName -eq "Microsoft.Exchange" 
-        }
-        
-        if ($existingSessions) {
-            Update-GuiStatus "Cleaning up existing Exchange Online sessions..." ([System.Drawing.Color]::Orange)
-            Write-Log "Found $($existingSessions.Count) existing Exchange Online session(s), cleaning up..." -Level "Info"
-            
-            try {
-                Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+
+        # Check for existing working Exchange Online connection instead of disconnecting
+        $existingConnection = $null
+        try {
+            # Try to get a test result to verify connection works
+            $existingConnection = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
+            if ($existingConnection) {
+                Write-Log "Found existing working Exchange Online connection - reusing it" -Level "Info"
+                Update-GuiStatus "Reusing existing Exchange Online connection" ([System.Drawing.Color]::Green)
+
+                # Mark as connected and skip connection attempt
+                $Global:ExchangeOnlineState = @{
+                    IsConnected       = $true
+                    LastChecked       = Get-Date
+                    ConnectionAttempts = 0
+                }
+                $skipExchangeConnection = $true
             }
-            catch {
-                # Force remove sessions if disconnect fails
-                $existingSessions | Remove-PSSession -ErrorAction SilentlyContinue
-            }
         }
-        
+        catch {
+            Write-Log "No existing working Exchange Online connection found" -Level "Info"
+            $skipExchangeConnection = $false
+        }
+
+        if (-not $skipExchangeConnection) {
         Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Orange)
         
         try {
@@ -2778,19 +2985,9 @@ function Connect-TenantServices {
                     if ($deviceParamExists) {
                         Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
                     } else {
-                        Write-Log "Device parameter not available - using Remote PowerShell session for PS 5.1 compatibility" -Level "Info"
-
-                        # Try -UseRPSSession for better PS 5.1 compatibility
-                        $useRPSExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('UseRPSSession')
-
-                        if ($useRPSExists) {
-                            Write-Log "Using Remote PowerShell session mode (better for PS 5.1)" -Level "Info"
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -UseRPSSession -ShowBanner:$false -ErrorAction Stop
-                        } else {
-                            Write-Log "Attempting connection without UPN (may prompt for credentials)" -Level "Warning"
-                            Update-GuiStatus "Exchange Online: Please complete authentication if prompted..." ([System.Drawing.Color]::Yellow)
-                            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
-                        }
+                        Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
+                        Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
+                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
                     }
                 } else {
                     Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
@@ -2829,7 +3026,8 @@ function Connect-TenantServices {
                 ConnectionAttempts = 1
             }
         }
-        
+        } # End of if (-not $skipExchangeConnection)
+
         #══════════════════════════════════════════════════════════
         # PHASE 9: SUCCESS SUMMARY
         #══════════════════════════════════════════════════════════
@@ -3087,19 +3285,9 @@ function Connect-ExchangeOnlineIfNeeded {
                         if ($deviceParamExists) {
                             Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
                         } else {
-                            Write-Log "Device parameter not available - using Remote PowerShell session for PS 5.1 compatibility" -Level "Info"
-
-                            # Try -UseRPSSession for better PS 5.1 compatibility
-                            $useRPSExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('UseRPSSession')
-
-                            if ($useRPSExists) {
-                                Write-Log "Using Remote PowerShell session mode (better for PS 5.1)" -Level "Info"
-                                Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -UseRPSSession -ShowBanner:$false -ErrorAction Stop
-                            } else {
-                                Write-Log "Attempting connection without UPN (may prompt for credentials)" -Level "Warning"
-                                Update-GuiStatus "Exchange Online: Please complete authentication if prompted..." ([System.Drawing.Color]::Yellow)
-                                Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
-                            }
+                            Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
+                            Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
+                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
                         }
                     } else {
                         Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
@@ -3720,9 +3908,9 @@ function Get-TenantSignInData {
         Write-Log "Microsoft.Graph.Beta.Reports module imported successfully" -Level "Info"
     }
     catch {
-        Update-GuiStatus "Failed to import Microsoft.Graph.Reports module: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
-        Write-Log "Failed to import Microsoft.Graph.Reports: $($_.Exception.Message)" -Level "Error"
-        throw "Microsoft.Graph.Reports module is required but could not be loaded. Please install it with: Install-Module Microsoft.Graph.Reports"
+        Update-GuiStatus "Failed to import Microsoft.Graph.Beta.Reports module: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
+        Write-Log "Failed to import Microsoft.Graph.Beta.Reports: $($_.Exception.Message)" -Level "Error"
+        throw "Microsoft.Graph.Beta.Reports module is required but could not be loaded. Please install it with: Install-Module Microsoft.Graph.Beta.Reports"
     }
     
     Update-GuiStatus "Starting sign-in data collection for the past $DaysBack days..." ([System.Drawing.Color]::Orange)
@@ -3761,7 +3949,11 @@ function Get-TenantSignInData {
         }
         catch {
             $errorMessage = $_.Exception.Message
+            $innerException = if ($_.Exception.InnerException) { $_.Exception.InnerException.Message } else { "None" }
             Write-Log "Premium Graph API failed: [$($_.Exception.GetType().Name)] : $errorMessage" -Level "Warning"
+            if ($innerException -ne "None") {
+                Write-Log "Inner exception details: $innerException" -Level "Warning"
+            }
             
             # Check if the error indicates lack of premium license or B2C tenant
             if ($errorMessage -match "Authentication_RequestFromNonPremiumTenantOrB2CTenant" -or 
@@ -3843,13 +4035,16 @@ function Get-TenantSignInData {
             
             foreach ($ip in $uniqueIPs) {
                 $geolocatedCount++
-                
+
                 if ($geolocatedCount % 10 -eq 0) {
                     $percentage = [math]::Round(($geolocatedCount / $uniqueIPs.Count) * 100, 1)
                     Update-GuiStatus "Geolocating: $geolocatedCount/$($uniqueIPs.Count) ($percentage%)" ([System.Drawing.Color]::Orange)
                     [System.Windows.Forms.Application]::DoEvents()
                 }
-                
+
+                # Check if this IP is already cached (to avoid unnecessary delays)
+                $wasCached = $ipCache.ContainsKey($ip)
+
                 try {
                     $geoResult = Invoke-IPGeolocation -IPAddress $ip -Cache $ipCache
                     if ($geoResult) {
@@ -3859,6 +4054,11 @@ function Get-TenantSignInData {
                 }
                 catch {
                     Write-Log "Error geolocating IP ${ip}: $($_.Exception.Message)" -Level "Warning"
+                }
+
+                # Rate limiting: Only delay if configured, not cached, and not last IP
+                if ($ConfigData.GeolocationRateLimit -gt 0 -and -not $wasCached -and $geolocatedCount -lt $uniqueIPs.Count) {
+                    Start-Sleep -Seconds $ConfigData.GeolocationRateLimit
                 }
             }
             
@@ -8457,7 +8657,7 @@ function Generate-HTMLReport {
 
     <div class="container">
         <div class="header">
-            <h1>[SECURITY] Microsoft 365 Security Analysis Report</h1>
+            <h1>◈ Microsoft 365 Security Analysis Report</h1>
             <div class="subtitle">Yeyland Wutani - Comprehensive Threat Detection & Risk Assessment</div>
             <div class="report-meta">
                 Generated: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss") | 
@@ -9006,7 +9206,7 @@ function Show-MainGUI {
     #──────────────────────────────────────────────────────────────
     
     $headerLabel = New-Object System.Windows.Forms.Label
-    $headerLabel.Text = "[SECURITY] Microsoft 365 Security Analysis Tool"
+    $headerLabel.Text = "◈ Microsoft 365 Security Analysis Tool"
     $headerLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 16, [System.Drawing.FontStyle]::Bold)
     $headerLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
     $headerLabel.Size = New-Object System.Drawing.Size(650, 40)
@@ -9600,10 +9800,19 @@ function Show-MainGUI {
         
         $btnRunAll.Enabled = $true
         $btnRunAll.Text = $originalText
-        Update-GuiStatus "[OK] Data collection completed! Finished $completed of $($tasks.Count) tasks." (Get-ThemeColor -ColorName "Success")
-        
+
+        # Determine status based on completion rate
+        $allSucceeded = ($completed -eq $tasks.Count)
+        if ($allSucceeded) {
+            Update-GuiStatus "[OK] Data collection completed! All $($tasks.Count) tasks finished. Check logs for details." (Get-ThemeColor -ColorName "Success")
+            $dialogMessage = "Data collection completed!`n`nAll $($tasks.Count) tasks finished.`n`nPlease review the logs for any warnings or errors."
+        } else {
+            Update-GuiStatus "[WARNING] Data collection finished with errors! $completed of $($tasks.Count) tasks succeeded." (Get-ThemeColor -ColorName "Warning")
+            $dialogMessage = "Data collection completed with errors!`n`n$completed out of $($tasks.Count) tasks succeeded.`n`nPlease review the logs for error details."
+        }
+
         [System.Windows.Forms.MessageBox]::Show(
-            "Data collection completed!`n`nFinished $completed out of $($tasks.Count) tasks successfully.",
+            $dialogMessage,
             "Collection Complete",
             "OK",
             "Information"
