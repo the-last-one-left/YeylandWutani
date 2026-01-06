@@ -18,9 +18,10 @@
     - Event log size adjustments
 
 .PARAMETER AgentToken
-    Optional agent token for ConnectWise Control installation.
+    Agent token for ConnectWise Control installation (REQUIRED for agent install).
     This is the only installation property required by the MSI installer.
-    If not provided, you will be prompted during execution (or can skip).
+    If not provided, you will be prompted during execution.
+    If skipped, ConnectWise Control installation will be skipped entirely.
 
 .PARAMETER NTPServer
     Custom NTP server (default: us.pool.ntp.org)
@@ -325,16 +326,21 @@ function Install-ConnectWiseControl {
         $msiArgs = @(
             "/i"
             "`"$installerPath`""
-            "/quiet"
+            "/qn"
             "/norestart"
             "/l*v"
             "`"$logPath`""
         )
 
         # Add agent token if provided
+        # ConnectWise Control typically uses e_install_key or INSTALLKEY parameter
         if (-not [string]::IsNullOrWhiteSpace($Token)) {
             Write-YWLog "Using provided agent token for installation" -Level Info
-            $msiArgs += "AGENTTOKEN=`"$Token`""
+            # Try common parameter names for ConnectWise Control
+            $msiArgs += "e_install_key=`"$Token`""
+        }
+        else {
+            Write-YWLog "No token provided - installing with embedded configuration" -Level Info
         }
 
         $argString = $msiArgs -join " "
@@ -881,9 +887,9 @@ function Install-PowerShell7 {
 
         # Fallback to known working URL if API failed
         if (-not $ps7Url) {
-            # Use PowerShell's official installation script approach
-            $ps7Url = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.1/PowerShell-7.4.1-win-x64.msi"
-            Write-YWLog "Using fallback URL for PowerShell 7.4.1" -Level Info
+            # Use latest stable version (not preview)
+            $ps7Url = "https://github.com/PowerShell/PowerShell/releases/download/v7.5.0/PowerShell-7.5.0-win-x64.msi"
+            Write-YWLog "Using fallback URL for PowerShell 7.5.0 (stable)" -Level Info
         }
 
         # Retry logic: up to 3 attempts with exponential backoff
@@ -1311,18 +1317,19 @@ function Start-ServerBaseline {
         if ([string]::IsNullOrWhiteSpace($AgentToken)) {
             Write-Host ""
             Write-Host "  ConnectWise Control Agent Installation" -ForegroundColor Cyan
-            Write-Host "  Agent token is optional. Provide if required by your ConnectWise Control setup." -ForegroundColor Gray
+            Write-Host "  Agent token is REQUIRED for installation." -ForegroundColor Yellow
             Write-Host ""
-            $AgentToken = Get-UserInput -Prompt "Enter Agent Token (or press Enter to skip)" -Default ""
+            $AgentToken = Get-UserInput -Prompt "Enter Agent Token (or press Enter to skip agent installation)" -Default ""
         }
 
-        # Install embedded agent with token (if provided)
+        # Install embedded agent with token (MANDATORY - skip if not provided)
         if (-not [string]::IsNullOrWhiteSpace($AgentToken)) {
             $Script:Results.RMMInstalled = Install-ConnectWiseControl -Token $AgentToken
         }
         else {
-            Write-YWLog "No agent token provided - installing without token" -Level Info
-            $Script:Results.RMMInstalled = Install-ConnectWiseControl
+            Write-YWLog "No agent token provided - SKIPPING ConnectWise Control installation" -Level Warning
+            Write-Host "  Agent installation skipped. Run script again with -AgentToken parameter to install." -ForegroundColor Yellow
+            $Script:Results.RMMInstalled = $false
         }
 
         Write-Host ""
