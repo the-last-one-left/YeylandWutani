@@ -5,6 +5,12 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 
 ## Available Scripts
 
+### Server Provisioning
+
+| Script | Description |
+|--------|-------------|
+| `Set-ServerBaseline.ps1` | Comprehensive server baseline automation for MSP deployments. Configures ConnectWise Control agent, hardware drivers (Dell DSU/HP SPP), Windows Terminal, PowerShell 7, NTP, power management, Windows Update, Remote Desktop, security logging, and event logs. Supports IT247.net hosted Control and embedded agent deployment. |
+
 ### Software Deployment
 
 | Script | Description |
@@ -42,6 +48,135 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 |--------|-------------|
 | `Convert-LegacyExcel.ps1` | Batch converts .xls files to .xlsx format |
 | `Convert-LegacyWord.ps1` | Batch converts .doc files to .docx format |
+
+---
+
+## Server Baseline Configuration (Set-ServerBaseline.ps1)
+
+Automated server provisioning and hardening for MSP environments with modular component deployment.
+
+### Deployment Components
+
+| Component | Configuration | Purpose |
+|-----------|---------------|----------|
+| **ConnectWise Control** | MSI deployment with custom installer ID or IT247.net URL | Remote management and monitoring |
+| **Hardware Drivers** | Dell DSU (OpenManage) or HP SPP (Support Pack) | Automated driver and firmware updates |
+| **Windows Terminal** | Latest stable release via GitHub | Modern command-line interface |
+| **PowerShell 7** | Latest stable release via GitHub | Cross-platform PowerShell core |
+| **NTP Configuration** | Time source, sync interval, reliability | Accurate time synchronization |
+| **Server Manager** | Disable auto-start on login | Reduce post-login delays |
+| **Power Management** | High performance, disable USB suspend, monitor timeout | Optimize server responsiveness |
+| **Windows Update** | Auto-download, notify for install | Controlled update management |
+| **Remote Desktop** | NLA requirement, session limits, timeouts | Secure RDP configuration |
+| **Security Logging** | Process creation, PowerShell logging, script block logging | Enhanced audit trail |
+| **Event Logs** | Application (32MB), Security (128MB), System (32MB) | Adequate log retention |
+
+### ConnectWise Control Deployment Methods
+
+| Method | Use Case | Configuration |
+|--------|----------|---------------|
+| **Standard Installer** | Self-hosted Control server | `-ControlServer "control.company.com" -AgentToken "{GUID}"` |
+| **IT247.net Hosted** | IT247.net managed Control | `-ControlServer "prod.setup.itsupport247.net" -AgentToken "{Full URL}"` |
+| **Embedded Agent** | Air-gapped or offline deployment | `-UseEmbeddedAgent` (requires Base64-encoded MSI in script) |
+
+### Usage Examples
+
+```powershell
+# Full baseline with standard ConnectWise Control
+.\Set-ServerBaseline.ps1 -ControlServer "control.company.com" -AgentToken "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+
+# Full baseline with IT247.net hosted Control
+.\Set-ServerBaseline.ps1 -ControlServer "prod.setup.itsupport247.net" -AgentToken "https://prod.setup.itsupport247.net/windows/BareboneAgent/32/Client_Name_MSI/setup"
+
+# Baseline with embedded agent (offline deployment)
+.\Set-ServerBaseline.ps1 -UseEmbeddedAgent
+
+# Baseline without RMM agent
+.\Set-ServerBaseline.ps1 -SkipRMMInstall -NTPServer "time.windows.com"
+
+# Skip driver updates (already managed)
+.\Set-ServerBaseline.ps1 -ControlServer "control.company.com" -AgentToken "{GUID}" -SkipDriverUpdates
+
+# Disable IE Enhanced Security (domain controllers, application servers)
+.\Set-ServerBaseline.ps1 -ControlServer "control.company.com" -AgentToken "{GUID}" -DisableIESecurity
+
+# Non-interactive deployment (automation/MDT/SCCM)
+.\Set-ServerBaseline.ps1 -ControlServer "control.company.com" -AgentToken "{GUID}" -Force
+
+# Minimal baseline (skip optional components)
+.\Set-ServerBaseline.ps1 -SkipRMMInstall -SkipDriverUpdates -SkipTerminalInstall -SkipPowerShell7
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|----------|
+| `-ControlServer` | ConnectWise Control server URL (no https:// or trailing slash) | None |
+| `-AgentToken` | Custom Installer ID (GUID) for standard Control, or full URL for IT247.net | None |
+| `-NTPServer` | Custom NTP time source | `us.pool.ntp.org` |
+| `-SkipRMMInstall` | Skip ConnectWise Control agent deployment | False |
+| `-UseEmbeddedAgent` | Use Base64-encoded embedded agent (no network download) | False |
+| `-SkipDriverUpdates` | Skip hardware driver updates | False |
+| `-SkipServerManager` | Skip disabling Server Manager auto-start | False |
+| `-SkipTerminalInstall` | Skip Windows Terminal installation | False |
+| `-SkipPowerShell7` | Skip PowerShell 7 installation | False |
+| `-DisableIESecurity` | Disable IE Enhanced Security Configuration | False |
+| `-Force` | Non-interactive mode, skip all prompts | False |
+
+### Hardware Driver Management
+
+| Manufacturer | Tool | Functionality |
+|--------------|------|---------------|
+| **Dell** | Dell System Update (DSU) | Automated firmware/driver updates via OpenManage repository |
+| **HP** | Service Pack for ProLiant (SPP) | Automated firmware/driver updates via HP repository |
+| **Other** | Skipped | Manual driver management required |
+
+### Obtaining ConnectWise Control Tokens
+
+**Standard Self-Hosted Control:**
+1. Navigate to Admin > Extensions > Custom Installers
+2. Create or select installer configuration
+3. Copy the GUID from the installer ID
+
+**IT247.net Hosted Control:**
+1. Log into IT247.net client portal
+2. Navigate to installer downloads section
+3. Copy the full MSI installer URL
+4. Use complete URL as `-AgentToken` parameter
+
+### Embedded Agent Configuration
+
+For air-gapped deployments, embed the ConnectWise Control MSI as Base64:
+
+```powershell
+# Generate Base64-encoded agent
+$bytes = [System.IO.File]::ReadAllBytes("C:\Path\To\Agent.msi")
+$base64 = [Convert]::ToBase64String($bytes)
+$base64 | Set-Content "agent_base64.txt"
+
+# Add to script's $EmbeddedAgent variable
+# Then deploy with -UseEmbeddedAgent switch
+```
+
+### Automation Integration
+
+| Platform | Implementation |
+|----------|----------------|
+| **MDT/WDS** | Add to task sequence post-OS install |
+| **SCCM/ConfigMgr** | Deploy as package with `-Force` switch |
+| **Azure Automation** | Run via Hybrid Worker on-premises |
+| **Group Policy** | Deploy via startup script (requires `-Force`) |
+| **Scheduled Task** | First-boot configuration with `-Force` |
+
+### Security Configuration Details
+
+| Setting | Value | Purpose |
+|---------|-------|----------|
+| **Process Creation Logging** | Enabled | Audit all process starts |
+| **PowerShell Module Logging** | Enabled | Log PowerShell module loads |
+| **PowerShell Script Block Logging** | Enabled | Log all PowerShell script execution |
+| **NLA for RDP** | Required | Prevent unauthenticated RDP enumeration |
+| **RDP Session Timeout** | Configured | Auto-disconnect idle sessions |
 
 ---
 
