@@ -348,7 +348,44 @@ function Install-ConnectWiseControl {
             Write-YWLog "Another version of ConnectWise Control is already installed (exit code 1638)" -Level Warning
             Write-YWLog "Attempting to uninstall existing version..." -Level Info
 
-            # Find installed ConnectWise/ScreenConnect products
+            # Step 1: Stop all related services first
+            $serviceNames = @("ScreenConnect Client*", "ConnectWise Control Client*", "screenconnect*", "connectwise*", "ITSPlatform*")
+            foreach ($serviceName in $serviceNames) {
+                $services = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                foreach ($service in $services) {
+                    if ($service.Status -eq 'Running') {
+                        Write-YWLog "Stopping service: $($service.DisplayName)" -Level Info
+                        try {
+                            Stop-Service -Name $service.Name -Force -ErrorAction Stop
+                            Write-YWLog "Service stopped: $($service.DisplayName)" -Level Success
+                        }
+                        catch {
+                            Write-YWLog "Could not stop service: $($_.Exception.Message)" -Level Warning
+                        }
+                    }
+                }
+            }
+
+            Start-Sleep -Seconds 3
+
+            # Step 2: Kill any related processes
+            $processNames = @("ScreenConnect.ClientService", "ScreenConnect.WindowsClient", "ConnectWiseControl.Client")
+            foreach ($processName in $processNames) {
+                $processes = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                foreach ($proc in $processes) {
+                    Write-YWLog "Killing process: $($proc.Name) (PID: $($proc.Id))" -Level Info
+                    try {
+                        Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                    }
+                    catch {
+                        Write-YWLog "Could not kill process: $($_.Exception.Message)" -Level Warning
+                    }
+                }
+            }
+
+            Start-Sleep -Seconds 2
+
+            # Step 3: Find and uninstall installed products
             $products = Get-CimInstance -ClassName Win32_Product -Filter "Name LIKE '%ConnectWise%' OR Name LIKE '%ScreenConnect%' OR Name LIKE '%ITSPlatform%'"
 
             if ($products) {
@@ -376,11 +413,34 @@ function Install-ConnectWiseControl {
                     }
                 }
 
-                # Wait for uninstall to fully complete
-                Start-Sleep -Seconds 5
+                # Step 4: Wait longer for uninstall to fully complete
+                Write-YWLog "Waiting for cleanup to complete..." -Level Info
+                Start-Sleep -Seconds 10
 
-                # Retry installation
-                Write-YWLog "Retrying installation after uninstall..." -Level Info
+                # Step 5: Clean up leftover directories
+                $cleanupPaths = @(
+                    "$env:ProgramFiles\ScreenConnect Client*",
+                    "$env:ProgramFiles (x86)\ScreenConnect Client*",
+                    "$env:ProgramFiles\ConnectWise Control*",
+                    "$env:ProgramFiles (x86)\ConnectWise Control*"
+                )
+
+                foreach ($path in $cleanupPaths) {
+                    $dirs = Get-Item -Path $path -ErrorAction SilentlyContinue
+                    foreach ($dir in $dirs) {
+                        Write-YWLog "Removing leftover directory: $($dir.FullName)" -Level Info
+                        try {
+                            Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction Stop
+                            Write-YWLog "Directory removed successfully" -Level Success
+                        }
+                        catch {
+                            Write-YWLog "Could not remove directory: $($_.Exception.Message)" -Level Warning
+                        }
+                    }
+                }
+
+                # Step 6: Retry installation
+                Write-YWLog "Retrying installation after cleanup..." -Level Info
                 $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argString -Wait -PassThru
             }
             else {
@@ -608,6 +668,81 @@ function Prompt-HPDriverUpdates {
 #endregion
 
 #region Application Installation
+function Install-Winget {
+    <#
+    .SYNOPSIS
+        Installs winget (Windows Package Manager) if not present.
+    #>
+
+    Write-YWLog "Checking for winget..." -Level Info
+
+    # Check if winget is already available
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-YWLog "Winget is already installed" -Level Success
+        return $true
+    }
+
+    Write-YWLog "Winget not found - installing App Installer..." -Level Info
+
+    try {
+        # Enable TLS 1.2
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        # Download latest App Installer from Microsoft
+        $appInstallerUrl = "https://aka.ms/getwinget"
+        $tempPath = "$env:TEMP\Microsoft.DesktopAppInstaller.msixbundle"
+
+        Write-YWLog "Downloading App Installer..." -Level Info
+
+        $webClient = New-Object System.Net.WebClient
+        $webClient.DownloadFile($appInstallerUrl, $tempPath)
+
+        if (Test-Path $tempPath) {
+            $fileSize = [math]::Round((Get-Item $tempPath).Length / 1MB, 2)
+            Write-YWLog "App Installer downloaded ($fileSize MB)" -Level Success
+
+            # Install the package
+            Write-YWLog "Installing App Installer..." -Level Info
+            Add-AppxPackage -Path $tempPath -ErrorAction Stop
+
+            Write-YWLog "App Installer installed successfully" -Level Success
+
+            # Cleanup
+            Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
+
+            # Refresh PATH and verify winget is now available
+            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+            Start-Sleep -Seconds 2
+
+            $winget = Get-Command winget -ErrorAction SilentlyContinue
+            if ($winget) {
+                Write-YWLog "Winget is now available" -Level Success
+                return $true
+            }
+            else {
+                Write-YWLog "Winget installed but not yet in PATH - restart may be required" -Level Warning
+                return $false
+            }
+        }
+        else {
+            Write-YWLog "Failed to download App Installer" -Level Error
+            return $false
+        }
+    }
+    catch {
+        Write-YWLog "Error installing winget: $($_.Exception.Message)" -Level Error
+        Write-Host ""
+        Write-Host "  To install winget manually:" -ForegroundColor Yellow
+        Write-Host "  1. Open Microsoft Store" -ForegroundColor Gray
+        Write-Host "  2. Search for 'App Installer'" -ForegroundColor Gray
+        Write-Host "  3. Click 'Get' or 'Update'" -ForegroundColor Gray
+        Write-Host ""
+        return $false
+    }
+}
+
 function Install-WindowsTerminal {
     <#
     .SYNOPSIS
@@ -624,8 +759,14 @@ function Install-WindowsTerminal {
             return $true
         }
 
-        # Try winget first (Windows 11 / Server 2022+)
+        # Check if winget is available, install if not
         $winget = Get-Command winget -ErrorAction SilentlyContinue
+        if (-not $winget) {
+            Write-YWLog "Winget not available - attempting to install..." -Level Info
+            if (Install-Winget) {
+                $winget = Get-Command winget -ErrorAction SilentlyContinue
+            }
+        }
 
         if ($winget) {
             Write-YWLog "Using winget to install Windows Terminal..." -Level Info
@@ -642,7 +783,7 @@ function Install-WindowsTerminal {
             }
         }
         else {
-            Write-YWLog "Winget is not available on this system" -Level Warning
+            Write-YWLog "Winget is not available and could not be installed" -Level Warning
         }
 
         # If winget failed or not available, provide manual instructions
@@ -680,8 +821,14 @@ function Install-PowerShell7 {
             return $true
         }
 
-        # Try winget first
+        # Check if winget is available, install if not
         $winget = Get-Command winget -ErrorAction SilentlyContinue
+        if (-not $winget) {
+            Write-YWLog "Winget not available - attempting to install..." -Level Info
+            if (Install-Winget) {
+                $winget = Get-Command winget -ErrorAction SilentlyContinue
+            }
+        }
 
         if ($winget) {
             Write-YWLog "Using winget to install PowerShell 7..." -Level Info
@@ -704,12 +851,40 @@ function Install-PowerShell7 {
         # Fallback to MSI download with retry logic
         Write-YWLog "Downloading PowerShell 7 MSI installer..." -Level Info
 
-        # Enable TLS 1.2 for GitHub downloads
+        # Enable TLS 1.2 for downloads
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-        # Get latest stable release URL
-        $ps7Url = "https://github.com/PowerShell/PowerShell/releases/latest/download/PowerShell-7-win-x64.msi"
+        # Get the latest release info from GitHub API
         $tempPath = "$env:TEMP\PowerShell7.msi"
+        $ps7Url = $null
+
+        try {
+            Write-YWLog "Querying GitHub API for latest PowerShell release..." -Level Info
+            $apiUrl = "https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
+            $releaseInfo = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+
+            # Find the x64 MSI asset
+            $asset = $releaseInfo.assets | Where-Object { $_.name -like "*win-x64.msi" } | Select-Object -First 1
+
+            if ($asset) {
+                $ps7Url = $asset.browser_download_url
+                Write-YWLog "Found PowerShell $($releaseInfo.tag_name) download URL" -Level Success
+            }
+            else {
+                Write-YWLog "Could not find x64 MSI in latest release" -Level Warning
+            }
+        }
+        catch {
+            Write-YWLog "GitHub API query failed: $($_.Exception.Message)" -Level Warning
+            Write-YWLog "Falling back to direct download URL..." -Level Info
+        }
+
+        # Fallback to known working URL if API failed
+        if (-not $ps7Url) {
+            # Use PowerShell's official installation script approach
+            $ps7Url = "https://github.com/PowerShell/PowerShell/releases/download/v7.4.1/PowerShell-7.4.1-win-x64.msi"
+            Write-YWLog "Using fallback URL for PowerShell 7.4.1" -Level Info
+        }
 
         # Retry logic: up to 3 attempts with exponential backoff
         $maxRetries = 3
@@ -724,6 +899,7 @@ function Install-PowerShell7 {
                     Start-Sleep -Seconds $waitSeconds
                 }
 
+                Write-YWLog "Downloading from: $ps7Url" -Level Info
                 $webClient = New-Object System.Net.WebClient
                 $webClient.DownloadFile($ps7Url, $tempPath)
 
@@ -1265,9 +1441,9 @@ function Start-ServerBaseline {
     #==========================================================================
     # Summary Report
     #==========================================================================
-    Write-Host "=" * 81 -ForegroundColor $Script:Config.Colors.Secondary
+    Write-Host ("=" * 81) -ForegroundColor $Script:Config.Colors.Secondary
     Write-Host "BASELINE CONFIGURATION SUMMARY" -ForegroundColor $Script:Config.Colors.Primary
-    Write-Host "=" * 81 -ForegroundColor $Script:Config.Colors.Secondary
+    Write-Host ("=" * 81) -ForegroundColor $Script:Config.Colors.Secondary
     Write-Host ""
     
     $statusIcon = @{ $true = '[X]'; $false = '[ ]' }
