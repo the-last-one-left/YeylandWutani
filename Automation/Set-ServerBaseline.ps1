@@ -751,11 +751,26 @@ function Install-WindowsTerminal {
     <#
     .SYNOPSIS
         Installs Windows Terminal using winget (automatic, no user interaction).
+    .NOTES
+        Windows Terminal is only available on Windows 10/11 desktop editions.
+        Not available on Windows Server - will be skipped automatically.
     #>
 
     Write-YWLog "Installing Windows Terminal..." -Level Info
 
     try {
+        # Check if running on Windows Server
+        $os = Get-CimInstance -ClassName Win32_OperatingSystem
+        if ($os.ProductType -ne 1) {
+            # ProductType: 1 = Workstation, 2 = Domain Controller, 3 = Server
+            Write-YWLog "Windows Server detected - Windows Terminal is not available on Server editions" -Level Info
+            Write-Host ""
+            Write-Host "  Note: Windows Terminal is designed for Windows 10/11 desktop" -ForegroundColor Yellow
+            Write-Host "  Use Windows PowerShell or PowerShell 7 console on Server" -ForegroundColor Gray
+            Write-Host ""
+            return $false
+        }
+
         # Check if already installed
         $terminal = Get-AppxPackage -Name "Microsoft.WindowsTerminal*" -ErrorAction SilentlyContinue
         if ($terminal) {
