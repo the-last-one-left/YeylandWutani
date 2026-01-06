@@ -333,14 +333,15 @@ function Install-ConnectWiseControl {
         )
 
         # Add agent token if provided
-        # ConnectWise Control typically uses e_install_key or INSTALLKEY parameter
+        # Per ConnectWise documentation: If installer doesn't have token embedded,
+        # pass it as a parameter for silent installation
         if (-not [string]::IsNullOrWhiteSpace($Token)) {
             Write-YWLog "Using provided agent token for installation" -Level Info
-            # Try common parameter names for ConnectWise Control
-            $msiArgs += "e_install_key=`"$Token`""
+            # ConnectWise Control/ASIO uses TOKEN parameter for installers without embedded token
+            $msiArgs += "TOKEN=`"$Token`""
         }
         else {
-            Write-YWLog "No token provided - installing with embedded configuration" -Level Info
+            Write-YWLog "No token provided - attempting installation (token may be embedded in MSI)" -Level Info
         }
 
         $argString = $msiArgs -join " "
@@ -752,25 +753,12 @@ function Install-WindowsTerminal {
     .SYNOPSIS
         Installs Windows Terminal using winget (automatic, no user interaction).
     .NOTES
-        Windows Terminal is only available on Windows 10/11 desktop editions.
-        Not available on Windows Server - will be skipped automatically.
+        Works on Windows 10/11 and Windows Server (Server 2019+).
     #>
 
     Write-YWLog "Installing Windows Terminal..." -Level Info
 
     try {
-        # Check if running on Windows Server
-        $os = Get-CimInstance -ClassName Win32_OperatingSystem
-        if ($os.ProductType -ne 1) {
-            # ProductType: 1 = Workstation, 2 = Domain Controller, 3 = Server
-            Write-YWLog "Windows Server detected - Windows Terminal is not available on Server editions" -Level Info
-            Write-Host ""
-            Write-Host "  Note: Windows Terminal is designed for Windows 10/11 desktop" -ForegroundColor Yellow
-            Write-Host "  Use Windows PowerShell or PowerShell 7 console on Server" -ForegroundColor Gray
-            Write-Host ""
-            return $false
-        }
-
         # Check if already installed
         $terminal = Get-AppxPackage -Name "Microsoft.WindowsTerminal*" -ErrorAction SilentlyContinue
         if ($terminal) {
