@@ -777,8 +777,10 @@ function Install-WindowsTerminal {
 
         if ($winget) {
             Write-YWLog "Using winget to install Windows Terminal..." -Level Info
+
+            # Try using the Store product ID first (more reliable on Server)
             $process = Start-Process -FilePath "winget" `
-                -ArgumentList "install --id Microsoft.WindowsTerminal --silent --accept-package-agreements --accept-source-agreements" `
+                -ArgumentList "install --id 9N0DX20HK701 --source msstore --accept-package-agreements --accept-source-agreements" `
                 -Wait -PassThru -NoNewWindow
 
             if ($process.ExitCode -eq 0) {
@@ -786,7 +788,20 @@ function Install-WindowsTerminal {
                 return $true
             }
             else {
-                Write-YWLog "Winget installation failed with code: $($process.ExitCode)" -Level Warning
+                Write-YWLog "Store installation failed (code: $($process.ExitCode)), trying alternate package ID..." -Level Warning
+
+                # Fallback to standard package ID
+                $process = Start-Process -FilePath "winget" `
+                    -ArgumentList "install --id Microsoft.WindowsTerminal --silent --accept-package-agreements --accept-source-agreements" `
+                    -Wait -PassThru -NoNewWindow
+
+                if ($process.ExitCode -eq 0) {
+                    Write-YWLog "Windows Terminal installed successfully" -Level Success
+                    return $true
+                }
+                else {
+                    Write-YWLog "Winget installation failed with code: $($process.ExitCode)" -Level Warning
+                }
             }
         }
         else {
