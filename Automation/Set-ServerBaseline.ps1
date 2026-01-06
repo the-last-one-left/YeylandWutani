@@ -17,29 +17,17 @@
     - Security and audit logging
     - Event log size adjustments
 
-.PARAMETER ControlServer
-    ConnectWise Control server URL (e.g., control.it247.net or screenconnect.company.com)
-    Do not include https:// or trailing slash
-
 .PARAMETER AgentToken
-    For standard ConnectWise Control:
-      - Custom Installer ID (GUID format)
-      - Obtain from: Admin > Extensions > Custom Installers
+    Agent token for ConnectWise Control installation (REQUIRED for agent install).
+    This is the only installation property required by the MSI installer.
+    If not provided, you will be prompted during execution.
+    If skipped, ConnectWise Control installation will be skipped entirely.
 
-    For IT247.net:
-      - Full installer URL from IT247.net portal
-      - Example: https://prod.setup.itsupport247.net/windows/BareboneAgent/32/{InstallerName}/MSI/setup
-      - Get from your IT247.net client portal
-    
 .PARAMETER NTPServer
     Custom NTP server (default: us.pool.ntp.org)
-    
+
 .PARAMETER SkipRMMInstall
     Skip ConnectWise Control agent installation
-
-.PARAMETER UseEmbeddedAgent
-    Use the embedded Base64-encoded ConnectWise Control agent (must be configured in script)
-    This skips URL downloads and uses the pre-encoded MSI installer
     
 .PARAMETER SkipDriverUpdates
     Skip hardware driver updates (Dell DSU/HP SPP)
@@ -60,19 +48,14 @@
     Skip all interactive prompts and use defaults
 
 .EXAMPLE
-    .\Set-ServerBaseline.ps1 -ControlServer "control.yourcompany.com" -AgentToken "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    .\Set-ServerBaseline.ps1
 
-    Full baseline with standard ConnectWise Control agent using custom installer ID.
-
-.EXAMPLE
-    .\Set-ServerBaseline.ps1 -ControlServer "prod.setup.itsupport247.net" -AgentToken "https://prod.setup.itsupport247.net/windows/BareboneAgent/32/Main_-_Vancouver_-_Client_Name_Windows_OS_ITSPlatform_TKNfdcadb17-ba63-4831-b658-68073c697025/MSI/setup"
-
-    Full baseline with IT247.net hosted ConnectWise Control using full installer URL.
+    Full baseline with all defaults. Will prompt for agent token during execution.
 
 .EXAMPLE
-    .\Set-ServerBaseline.ps1 -UseEmbeddedAgent
+    .\Set-ServerBaseline.ps1 -AgentToken "your-agent-token-here"
 
-    Full baseline using embedded Base64-encoded ConnectWise Control agent (no network download required).
+    Full baseline with embedded ConnectWise Control agent using provided token.
 
 .EXAMPLE
     .\Set-ServerBaseline.ps1 -SkipRMMInstall -NTPServer "time.windows.com"
@@ -83,6 +66,7 @@
     .\Set-ServerBaseline.ps1 -Force
 
     Run full baseline with no interactive prompts, using all defaults.
+    Will prompt for agent token if not provided.
 
 .NOTES
     Author:         Yeyland Wutani LLC
@@ -99,26 +83,29 @@
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $false)]
+    [string]$AgentToken,
+
+    [Parameter(Mandatory = $false)]
     [string]$NTPServer = "us.pool.ntp.org",
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$SkipRMMInstall,
 
     [Parameter(Mandatory = $false)]
     [switch]$SkipDriverUpdates,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$SkipServerManager,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$SkipTerminalInstall,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$SkipPowerShell7,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$DisableIESecurity,
-    
+
     [Parameter(Mandatory = $false)]
     [switch]$Force
 )
@@ -142,7 +129,7 @@ $Script:Config = @{
 # Embedded ConnectWise Control Agent (Base64-encoded MSI)
 # To embed your agent: Run .\Encode-MSIToBase64.ps1 and paste the output here
 # This eliminates the need for URL-based downloads
-$Script:EmbeddedAgent = ""
+$Script:EmbeddedAgent = "PLACEHOLDER"
 # If you want to use the embedded agent, set $UseEmbeddedAgent = $true
 # or pass -UseEmbeddedAgent parameter when running the script
 
@@ -289,21 +276,14 @@ function Get-UserInput {
 function Install-ConnectWiseControl {
     <#
     .SYNOPSIS
-        Installs ConnectWise Control (ScreenConnect) agent from embedded Base64 or URL download.
+        Installs ConnectWise Control (ScreenConnect) agent from embedded Base64-encoded MSI.
     .NOTES
-        Supports two installation methods:
-        1. Embedded Base64-encoded MSI (recommended - no network dependency)
-        2. URL-based download (legacy - supports IT247.net and standard ConnectWise Control)
+        Always uses embedded Base64-encoded MSI (no network dependency).
+        Agent token is the only optional install property required.
     #>
     param(
         [Parameter(Mandatory = $false)]
-        [string]$ServerURL,
-
-        [Parameter(Mandatory = $false)]
-        [string]$Token,
-
-        [Parameter(Mandatory = $false)]
-        [switch]$UseEmbedded
+        [string]$Token
     )
 
     Write-YWLog "Installing ConnectWise Control agent..." -Level Info
@@ -311,59 +291,173 @@ function Install-ConnectWiseControl {
     $tempPath = "$env:TEMP\CWControl"
     New-Item -Path $tempPath -ItemType Directory -Force | Out-Null
     $installerPath = "$tempPath\ConnectWiseControl.msi"
+    $logPath = "$tempPath\install.log"
 
     try {
-        # METHOD 1: Use embedded Base64-encoded MSI (preferred)
-        if ($true) {
-            Write-YWLog "Using embedded Base64-encoded agent installer" -Level Info
-
-            if ([string]::IsNullOrWhiteSpace($Script:EmbeddedAgent)) {
-                Write-YWLog "ERROR: Embedded agent is not configured!" -Level Error
-                Write-Host ""
-                Write-Host "  To use embedded agent installation:" -ForegroundColor Yellow
-                Write-Host "  1. Run: .\Encode-MSIToBase64.ps1 -MSIPath 'path\to\Agent.msi'" -ForegroundColor Gray
-                Write-Host "  2. Copy the Base64 string from EmbeddedAgent.txt" -ForegroundColor Gray
-                Write-Host "  3. Paste it into the `$Script:EmbeddedAgent variable in this script" -ForegroundColor Gray
-                Write-Host ""
-                return $false
-            }
-
-            Write-YWLog "Decoding embedded agent..." -Level Info
-            try {
-                $bytes = [System.Convert]::FromBase64String($Script:EmbeddedAgent)
-                $sizeMB = [math]::Round($bytes.Length / 1MB, 2)
-                Write-YWLog "Decoded $sizeMB MB MSI installer" -Level Success
-
-                Write-YWLog "Writing installer to disk..." -Level Info
-                [System.IO.File]::WriteAllBytes($installerPath, $bytes)
-                Write-YWLog "Installer ready at: $installerPath" -Level Success
-
-                # Skip to installation
-                $downloadSuccess = $true
-            }
-            catch {
-                Write-YWLog "Failed to decode embedded agent: $($_.Exception.Message)" -Level Error
-                return $false
-            }
+        # Check if embedded agent is configured
+        if ([string]::IsNullOrWhiteSpace($Script:EmbeddedAgent)) {
+            Write-YWLog "ERROR: Embedded agent is not configured!" -Level Error
+            Write-Host ""
+            Write-Host "  To use embedded agent installation:" -ForegroundColor Yellow
+            Write-Host "  1. Run: .\Encode-MSIToBase64.ps1 -MSIPath 'path\to\Agent.msi'" -ForegroundColor Gray
+            Write-Host "  2. Copy the Base64 string from EmbeddedAgent.txt" -ForegroundColor Gray
+            Write-Host "  3. Paste it into the `$Script:EmbeddedAgent variable in this script" -ForegroundColor Gray
+            Write-Host ""
+            return $false
         }
 
-        # Install the MSI (common for both embedded and downloaded)
-        Write-YWLog "Installing ConnectWise Control agent..." -Level Info
+        # Decode embedded agent
+        Write-YWLog "Decoding embedded agent..." -Level Info
+        try {
+            $bytes = [System.Convert]::FromBase64String($Script:EmbeddedAgent)
+            $sizeMB = [math]::Round($bytes.Length / 1MB, 2)
+            Write-YWLog "Decoded $sizeMB MB MSI installer" -Level Success
+
+            Write-YWLog "Writing installer to disk..." -Level Info
+            [System.IO.File]::WriteAllBytes($installerPath, $bytes)
+            Write-YWLog "Installer ready at: $installerPath" -Level Success
+        }
+        catch {
+            Write-YWLog "Failed to decode embedded agent: $($_.Exception.Message)" -Level Error
+            return $false
+        }
 
         # Build MSI installation arguments
         $msiArgs = @(
             "/i"
             "`"$installerPath`""
-            "/quiet"
+            "/qn"
             "/norestart"
             "/l*v"
-            "`"$tempPath\install.log`""
+            "`"$logPath`""
         )
+
+        # Add agent token if provided
+        # Per ConnectWise documentation: If installer doesn't have token embedded,
+        # pass it as a parameter for silent installation
+        if (-not [string]::IsNullOrWhiteSpace($Token)) {
+            Write-YWLog "Using provided agent token for installation" -Level Info
+            # ConnectWise Control/ASIO uses TOKEN parameter for installers without embedded token
+            $msiArgs += "TOKEN=`"$Token`""
+        }
+        else {
+            Write-YWLog "No token provided - attempting installation (token may be embedded in MSI)" -Level Info
+        }
 
         $argString = $msiArgs -join " "
 
+        # Attempt installation
+        Write-YWLog "Installing ConnectWise Control agent..." -Level Info
         $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argString -Wait -PassThru
 
+        # Handle exit code 1638 (another version already installed)
+        if ($process.ExitCode -eq 1638) {
+            Write-YWLog "Another version of ConnectWise Control is already installed (exit code 1638)" -Level Warning
+            Write-YWLog "Attempting to uninstall existing version..." -Level Info
+
+            # Step 1: Stop all related services first
+            $serviceNames = @("ScreenConnect Client*", "ConnectWise Control Client*", "screenconnect*", "connectwise*", "ITSPlatform*")
+            foreach ($serviceName in $serviceNames) {
+                $services = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+                foreach ($service in $services) {
+                    if ($service.Status -eq 'Running') {
+                        Write-YWLog "Stopping service: $($service.DisplayName)" -Level Info
+                        try {
+                            Stop-Service -Name $service.Name -Force -ErrorAction Stop
+                            Write-YWLog "Service stopped: $($service.DisplayName)" -Level Success
+                        }
+                        catch {
+                            Write-YWLog "Could not stop service: $($_.Exception.Message)" -Level Warning
+                        }
+                    }
+                }
+            }
+
+            Start-Sleep -Seconds 3
+
+            # Step 2: Kill any related processes
+            $processNames = @("ScreenConnect.ClientService", "ScreenConnect.WindowsClient", "ConnectWiseControl.Client")
+            foreach ($processName in $processNames) {
+                $processes = Get-Process -Name $processName -ErrorAction SilentlyContinue
+                foreach ($proc in $processes) {
+                    Write-YWLog "Killing process: $($proc.Name) (PID: $($proc.Id))" -Level Info
+                    try {
+                        Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                    }
+                    catch {
+                        Write-YWLog "Could not kill process: $($_.Exception.Message)" -Level Warning
+                    }
+                }
+            }
+
+            Start-Sleep -Seconds 2
+
+            # Step 3: Find and uninstall installed products
+            $products = Get-CimInstance -ClassName Win32_Product -Filter "Name LIKE '%ConnectWise%' OR Name LIKE '%ScreenConnect%' OR Name LIKE '%ITSPlatform%'"
+
+            if ($products) {
+                foreach ($product in $products) {
+                    Write-YWLog "Found installed product: $($product.Name)" -Level Info
+                    Write-YWLog "Uninstalling $($product.Name)..." -Level Info
+
+                    # Uninstall using product code
+                    $uninstallArgs = @(
+                        "/x"
+                        $product.IdentifyingNumber
+                        "/quiet"
+                        "/norestart"
+                        "/l*v"
+                        "`"$tempPath\uninstall.log`""
+                    )
+
+                    $uninstallProcess = Start-Process -FilePath "msiexec.exe" -ArgumentList ($uninstallArgs -join " ") -Wait -PassThru
+
+                    if ($uninstallProcess.ExitCode -eq 0 -or $uninstallProcess.ExitCode -eq 3010) {
+                        Write-YWLog "Successfully uninstalled $($product.Name)" -Level Success
+                    }
+                    else {
+                        Write-YWLog "Uninstall completed with exit code: $($uninstallProcess.ExitCode)" -Level Warning
+                    }
+                }
+
+                # Step 4: Wait longer for uninstall to fully complete
+                Write-YWLog "Waiting for cleanup to complete..." -Level Info
+                Start-Sleep -Seconds 10
+
+                # Step 5: Clean up leftover directories
+                $cleanupPaths = @(
+                    "$env:ProgramFiles\ScreenConnect Client*",
+                    "$env:ProgramFiles (x86)\ScreenConnect Client*",
+                    "$env:ProgramFiles\ConnectWise Control*",
+                    "$env:ProgramFiles (x86)\ConnectWise Control*"
+                )
+
+                foreach ($path in $cleanupPaths) {
+                    $dirs = Get-Item -Path $path -ErrorAction SilentlyContinue
+                    foreach ($dir in $dirs) {
+                        Write-YWLog "Removing leftover directory: $($dir.FullName)" -Level Info
+                        try {
+                            Remove-Item -Path $dir.FullName -Recurse -Force -ErrorAction Stop
+                            Write-YWLog "Directory removed successfully" -Level Success
+                        }
+                        catch {
+                            Write-YWLog "Could not remove directory: $($_.Exception.Message)" -Level Warning
+                        }
+                    }
+                }
+
+                # Step 6: Retry installation
+                Write-YWLog "Retrying installation after cleanup..." -Level Info
+                $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argString -Wait -PassThru
+            }
+            else {
+                Write-YWLog "Could not find existing ConnectWise Control installation to remove" -Level Warning
+                Write-YWLog "Manual uninstall may be required" -Level Warning
+                return $false
+            }
+        }
+
+        # Check installation result
         if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
             Write-YWLog "ConnectWise Control agent installed successfully" -Level Success
 
@@ -375,7 +469,8 @@ function Install-ConnectWiseControl {
                 "ScreenConnect Client*",
                 "ConnectWise Control Client*",
                 "screenconnect*",
-                "connectwise*"
+                "connectwise*",
+                "ITSPlatform*"
             )
 
             $serviceFound = $false
@@ -415,7 +510,6 @@ function Install-ConnectWiseControl {
             Write-YWLog "Agent installation failed with exit code: $($process.ExitCode)" -Level Error
 
             # Show log excerpt for troubleshooting
-            $logPath = "$tempPath\install.log"
             if (Test-Path $logPath) {
                 Write-YWLog "Installation log (last 30 lines):" -Level Info
                 $logLines = Get-Content $logPath -Tail 30
@@ -427,6 +521,7 @@ function Install-ConnectWiseControl {
             Write-Host "    1603 - Fatal error during installation" -ForegroundColor Gray
             Write-Host "    1618 - Another installation is in progress" -ForegroundColor Gray
             Write-Host "    1619 - Package could not be opened" -ForegroundColor Gray
+            Write-Host "    1638 - Another version is already installed" -ForegroundColor Gray
             Write-Host ""
 
             return $false
@@ -580,14 +675,89 @@ function Prompt-HPDriverUpdates {
 #endregion
 
 #region Application Installation
+function Install-Winget {
+    <#
+    .SYNOPSIS
+        Installs winget (Windows Package Manager) if not present.
+    .NOTES
+        Uses the winget-install script from PowerShell Gallery.
+        Tested and working on Windows Server 2022 and Windows 10+.
+    #>
+
+    Write-YWLog "Checking for winget..." -Level Info
+
+    # Check if winget is already available
+    $winget = Get-Command winget -ErrorAction SilentlyContinue
+    if ($winget) {
+        Write-YWLog "Winget is already installed" -Level Success
+        return $true
+    }
+
+    Write-YWLog "Winget not found - installing via PowerShell Gallery..." -Level Info
+
+    try {
+        # Enable TLS 1.2 for PowerShell Gallery
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        # Install NuGet provider if not present (required for Install-Script)
+        $nuget = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
+        if (-not $nuget) {
+            Write-YWLog "Installing NuGet package provider..." -Level Info
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+            Write-YWLog "NuGet package provider installed" -Level Success
+        }
+
+        # Set PSGallery as trusted to avoid prompts
+        $gallery = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+        if ($gallery -and $gallery.InstallationPolicy -ne 'Trusted') {
+            Write-YWLog "Setting PSGallery as trusted repository..." -Level Info
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        }
+
+        # Install the winget-install script from PowerShell Gallery
+        Write-YWLog "Installing winget-install script from PowerShell Gallery..." -Level Info
+        Install-Script -Name winget-install -Force -Scope CurrentUser -ErrorAction Stop
+
+        # Run the winget-install script
+        Write-YWLog "Running winget-install script..." -Level Info
+        & winget-install -Force
+
+        # Refresh PATH and verify winget is now available
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
+
+        Start-Sleep -Seconds 3
+
+        $winget = Get-Command winget -ErrorAction SilentlyContinue
+        if ($winget) {
+            Write-YWLog "Winget installed successfully" -Level Success
+            return $true
+        }
+        else {
+            Write-YWLog "Winget installed but not yet in PATH - restart may be required" -Level Warning
+            return $false
+        }
+    }
+    catch {
+        Write-YWLog "Error installing winget: $($_.Exception.Message)" -Level Warning
+        Write-YWLog "Winget is not available on this system - will use direct downloads" -Level Info
+        Write-Host ""
+        Write-Host "  Note: Winget installation failed" -ForegroundColor Yellow
+        Write-Host "  Installations will use direct MSI downloads instead" -ForegroundColor Gray
+        Write-Host ""
+        return $false
+    }
+}
+
 function Install-WindowsTerminal {
     <#
     .SYNOPSIS
-        Installs Windows Terminal using winget or Microsoft Store.
+        Installs Windows Terminal using winget (automatic, no user interaction).
+    .NOTES
+        Works on Windows 10/11 and Windows Server (Server 2019+).
     #>
-    
+
     Write-YWLog "Installing Windows Terminal..." -Level Info
-    
+
     try {
         # Check if already installed
         $terminal = Get-AppxPackage -Name "Microsoft.WindowsTerminal*" -ErrorAction SilentlyContinue
@@ -595,43 +765,60 @@ function Install-WindowsTerminal {
             Write-YWLog "Windows Terminal already installed (version: $($terminal.Version))" -Level Success
             return $true
         }
-        
-        # Try winget first (Windows 11 / Server 2022+)
+
+        # Check if winget is available, install if not
         $winget = Get-Command winget -ErrorAction SilentlyContinue
-        
+        if (-not $winget) {
+            Write-YWLog "Winget not available - attempting to install..." -Level Info
+            if (Install-Winget) {
+                $winget = Get-Command winget -ErrorAction SilentlyContinue
+            }
+        }
+
         if ($winget) {
             Write-YWLog "Using winget to install Windows Terminal..." -Level Info
+
+            # Try using the Store product ID first (more reliable on Server)
             $process = Start-Process -FilePath "winget" `
-                -ArgumentList "install --id Microsoft.WindowsTerminal --silent --accept-package-agreements --accept-source-agreements" `
+                -ArgumentList "install --id 9N0DX20HK701 --source msstore --accept-package-agreements --accept-source-agreements" `
                 -Wait -PassThru -NoNewWindow
-            
+
             if ($process.ExitCode -eq 0) {
                 Write-YWLog "Windows Terminal installed successfully" -Level Success
                 return $true
             }
             else {
-                Write-YWLog "Winget installation failed with code: $($process.ExitCode)" -Level Warning
+                Write-YWLog "Store installation failed (code: $($process.ExitCode)), trying alternate package ID..." -Level Warning
+
+                # Fallback to standard package ID
+                $process = Start-Process -FilePath "winget" `
+                    -ArgumentList "install --id Microsoft.WindowsTerminal --silent --accept-package-agreements --accept-source-agreements" `
+                    -Wait -PassThru -NoNewWindow
+
+                if ($process.ExitCode -eq 0) {
+                    Write-YWLog "Windows Terminal installed successfully" -Level Success
+                    return $true
+                }
+                else {
+                    Write-YWLog "Winget installation failed with code: $($process.ExitCode)" -Level Warning
+                }
             }
         }
-        
-        # Fallback to Microsoft Store URL
-        Write-YWLog "Opening Microsoft Store for Windows Terminal installation..." -Level Info
-        Write-Host "  Complete installation from Microsoft Store" -ForegroundColor Yellow
-        Start-Process "ms-windows-store://pdp/?ProductId=9N0DX20HK701"
-        
-        # Wait for user
-        $null = Read-Host "Press Enter once Windows Terminal installation is complete"
-        
-        # Check if installed
-        $terminal = Get-AppxPackage -Name "Microsoft.WindowsTerminal*" -ErrorAction SilentlyContinue
-        if ($terminal) {
-            Write-YWLog "Windows Terminal installed successfully" -Level Success
-            return $true
-        }
         else {
-            Write-YWLog "Windows Terminal installation could not be verified" -Level Warning
-            return $false
+            Write-YWLog "Winget is not available and could not be installed" -Level Warning
         }
+
+        # If winget failed or not available, provide manual instructions
+        Write-YWLog "Windows Terminal could not be installed automatically" -Level Warning
+        Write-Host ""
+        Write-Host "  To install Windows Terminal manually:" -ForegroundColor Yellow
+        Write-Host "  1. Open Microsoft Store" -ForegroundColor Gray
+        Write-Host "  2. Search for 'Windows Terminal'" -ForegroundColor Gray
+        Write-Host "  3. Click 'Get' or 'Install'" -ForegroundColor Gray
+        Write-Host "  OR visit: https://aka.ms/terminal" -ForegroundColor Gray
+        Write-Host ""
+
+        return $false
     }
     catch {
         Write-YWLog "Error installing Windows Terminal: $($_.Exception.Message)" -Level Error
@@ -642,11 +829,11 @@ function Install-WindowsTerminal {
 function Install-PowerShell7 {
     <#
     .SYNOPSIS
-        Installs PowerShell 7 using winget or direct MSI download.
+        Installs PowerShell 7 using winget or direct MSI download with retry logic.
     #>
-    
+
     Write-YWLog "Installing PowerShell 7..." -Level Info
-    
+
     try {
         # Check if already installed
         $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
@@ -655,16 +842,22 @@ function Install-PowerShell7 {
             Write-YWLog "PowerShell 7 already installed (version: $version)" -Level Success
             return $true
         }
-        
-        # Try winget first
+
+        # Check if winget is available, install if not
         $winget = Get-Command winget -ErrorAction SilentlyContinue
-        
+        if (-not $winget) {
+            Write-YWLog "Winget not available - attempting to install..." -Level Info
+            if (Install-Winget) {
+                $winget = Get-Command winget -ErrorAction SilentlyContinue
+            }
+        }
+
         if ($winget) {
             Write-YWLog "Using winget to install PowerShell 7..." -Level Info
             $process = Start-Process -FilePath "winget" `
                 -ArgumentList "install --id Microsoft.PowerShell --silent --accept-package-agreements --accept-source-agreements" `
                 -Wait -PassThru -NoNewWindow
-            
+
             if ($process.ExitCode -eq 0) {
                 Write-YWLog "PowerShell 7 installed successfully" -Level Success
                 return $true
@@ -673,21 +866,84 @@ function Install-PowerShell7 {
                 Write-YWLog "Winget installation failed with code: $($process.ExitCode)" -Level Warning
             }
         }
-        
-        # Fallback to MSI download
+        else {
+            Write-YWLog "Winget is not available, attempting direct download..." -Level Info
+        }
+
+        # Fallback to MSI download with retry logic
         Write-YWLog "Downloading PowerShell 7 MSI installer..." -Level Info
-        
-        # Get latest stable release URL
-        $ps7Url = "https://github.com/PowerShell/PowerShell/releases/latest/download/PowerShell-7-win-x64.msi"
+
+        # Enable TLS 1.2 for downloads
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+
+        # Get the latest release info from GitHub API
         $tempPath = "$env:TEMP\PowerShell7.msi"
-        
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($ps7Url, $tempPath)
-        
-        if (Test-Path $tempPath) {
-            $fileSize = [math]::Round((Get-Item $tempPath).Length / 1MB, 2)
-            Write-YWLog "PowerShell 7 MSI downloaded ($fileSize MB)" -Level Success
-            
+        $ps7Url = $null
+
+        try {
+            Write-YWLog "Querying GitHub API for latest PowerShell release..." -Level Info
+            $apiUrl = "https://api.github.com/repos/PowerShell/PowerShell/releases/latest"
+            $releaseInfo = Invoke-RestMethod -Uri $apiUrl -UseBasicParsing -ErrorAction Stop
+
+            # Find the x64 MSI asset
+            $asset = $releaseInfo.assets | Where-Object { $_.name -like "*win-x64.msi" } | Select-Object -First 1
+
+            if ($asset) {
+                $ps7Url = $asset.browser_download_url
+                Write-YWLog "Found PowerShell $($releaseInfo.tag_name) download URL" -Level Success
+            }
+            else {
+                Write-YWLog "Could not find x64 MSI in latest release" -Level Warning
+            }
+        }
+        catch {
+            Write-YWLog "GitHub API query failed: $($_.Exception.Message)" -Level Warning
+            Write-YWLog "Falling back to direct download URL..." -Level Info
+        }
+
+        # Fallback to known working URL if API failed
+        if (-not $ps7Url) {
+            # Use latest stable version (not preview)
+            $ps7Url = "https://github.com/PowerShell/PowerShell/releases/download/v7.5.0/PowerShell-7.5.0-win-x64.msi"
+            Write-YWLog "Using fallback URL for PowerShell 7.5.0 (stable)" -Level Info
+        }
+
+        # Retry logic: up to 3 attempts with exponential backoff
+        $maxRetries = 3
+        $retryCount = 0
+        $downloadSuccess = $false
+
+        while ($retryCount -lt $maxRetries -and -not $downloadSuccess) {
+            try {
+                if ($retryCount -gt 0) {
+                    $waitSeconds = [Math]::Pow(2, $retryCount)
+                    Write-YWLog "Retry attempt $retryCount of $maxRetries (waiting $waitSeconds seconds)..." -Level Info
+                    Start-Sleep -Seconds $waitSeconds
+                }
+
+                Write-YWLog "Downloading from: $ps7Url" -Level Info
+                $webClient = New-Object System.Net.WebClient
+                $webClient.DownloadFile($ps7Url, $tempPath)
+
+                if (Test-Path $tempPath) {
+                    $fileSize = [math]::Round((Get-Item $tempPath).Length / 1MB, 2)
+                    Write-YWLog "PowerShell 7 MSI downloaded ($fileSize MB)" -Level Success
+                    $downloadSuccess = $true
+                }
+            }
+            catch {
+                $retryCount++
+                if ($retryCount -lt $maxRetries) {
+                    Write-YWLog "Download failed: $($_.Exception.Message)" -Level Warning
+                }
+                else {
+                    Write-YWLog "Download failed after $maxRetries attempts: $($_.Exception.Message)" -Level Error
+                    throw
+                }
+            }
+        }
+
+        if ($downloadSuccess -and (Test-Path $tempPath)) {
             # Install with full features
             $msiArgs = @(
                 "/i"
@@ -699,23 +955,25 @@ function Install-PowerShell7 {
                 "ENABLE_PSREMOTING=1"
                 "REGISTER_MANIFEST=1"
             )
-            
+
             $argString = $msiArgs -join " "
             Write-YWLog "Installing PowerShell 7..." -Level Info
-            
+
             $process = Start-Process -FilePath "msiexec.exe" -ArgumentList $argString -Wait -PassThru
-            
-            if ($process.ExitCode -eq 0) {
+
+            if ($process.ExitCode -eq 0 -or $process.ExitCode -eq 3010) {
                 Write-YWLog "PowerShell 7 installed successfully" -Level Success
                 Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
-                
+
                 # Verify installation
+                # Refresh environment variables to detect pwsh
+                $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
                 $ps7 = Get-Command pwsh -ErrorAction SilentlyContinue
                 if ($ps7) {
                     $version = & pwsh -Command '$PSVersionTable.PSVersion.ToString()'
                     Write-YWLog "Installed version: $version" -Level Success
                 }
-                
+
                 return $true
             }
             else {
@@ -730,7 +988,9 @@ function Install-PowerShell7 {
     }
     catch {
         Write-YWLog "Error installing PowerShell 7: $($_.Exception.Message)" -Level Error
+        Write-Host ""
         Write-Host "  Manual download: https://github.com/PowerShell/PowerShell/releases" -ForegroundColor Yellow
+        Write-Host ""
         return $false
     }
 }
@@ -980,28 +1240,61 @@ function Enable-AuditLogging {
     .SYNOPSIS
         Enables advanced audit logging for security monitoring.
     #>
-    
+
     Write-YWLog "Enabling advanced audit logging..." -Level Info
-    
+
     try {
-        # Enable audit policies
-        $auditPolicies = @(
-            "Audit Account Logon",
-            "Audit Account Management",
-            "Audit Logon Events",
-            "Audit Object Access",
+        # Enable audit subcategories (correct syntax for auditpol)
+        $auditSubcategories = @(
+            "Credential Validation",
+            "Kerberos Authentication Service",
+            "Kerberos Service Ticket Operations",
+            "User Account Management",
+            "Computer Account Management",
+            "Security Group Management",
+            "Logon",
+            "Logoff",
+            "Account Lockout",
+            "Special Logon",
+            "File System",
+            "Registry",
             "Audit Policy Change",
-            "Audit Privilege Use",
-            "Audit Process Tracking",
-            "Audit System Events"
+            "Authentication Policy Change",
+            "Sensitive Privilege Use",
+            "Process Creation",
+            "Security State Change",
+            "Security System Extension",
+            "System Integrity"
         )
-        
-        foreach ($policy in $auditPolicies) {
-            & auditpol /set /category:"$policy" /success:enable /failure:enable | Out-Null
+
+        $successCount = 0
+        $failCount = 0
+
+        foreach ($subcategory in $auditSubcategories) {
+            try {
+                $result = & auditpol /set /subcategory:"$subcategory" /success:enable /failure:enable 2>&1
+                if ($LASTEXITCODE -eq 0) {
+                    $successCount++
+                }
+                else {
+                    $failCount++
+                    Write-YWLog "Failed to enable audit for: $subcategory" -Level Warning
+                }
+            }
+            catch {
+                $failCount++
+                Write-YWLog "Error enabling audit for $subcategory : $($_.Exception.Message)" -Level Warning
+            }
         }
-        
-        Write-YWLog "Advanced audit logging enabled" -Level Success
-        return $true
+
+        if ($successCount -gt 0) {
+            Write-YWLog "Advanced audit logging enabled ($successCount subcategories configured)" -Level Success
+            return $true
+        }
+        else {
+            Write-YWLog "Failed to enable audit logging" -Level Error
+            return $false
+        }
     }
     catch {
         Write-YWLog "Error enabling audit logging: $($_.Exception.Message)" -Level Error
@@ -1035,24 +1328,26 @@ function Start-ServerBaseline {
     #==========================================================================
     if (-not $SkipRMMInstall) {
         Write-Phase "CONNECTWISE CONTROL" "Installing remote monitoring agent..."
-        
-        # Install embedded agent (no parameters needed)
-        $Script:Results.RMMInstalled = Install-ConnectWiseControl
-        
-        
-        if ($UseEmbeddedAgent) {
-            # Use embedded agent (no server/token required)
-            $Script:Results.RMMInstalled = Install-ConnectWiseControl -UseEmbedded
+
+        # Prompt for agent token if not provided
+        if ([string]::IsNullOrWhiteSpace($AgentToken)) {
+            Write-Host ""
+            Write-Host "  ConnectWise Control Agent Installation" -ForegroundColor Cyan
+            Write-Host "  Agent token is REQUIRED for installation." -ForegroundColor Yellow
+            Write-Host ""
+            $AgentToken = Get-UserInput -Prompt "Enter Agent Token (or press Enter to skip agent installation)" -Default ""
         }
-        elseif ($ControlServer -and $AgentToken) {
-            # Use URL-based download
-            $Script:Results.RMMInstalled = Install-ConnectWiseControl -ServerURL $ControlServer -Token $AgentToken
+
+        # Install embedded agent with token (MANDATORY - skip if not provided)
+        if (-not [string]::IsNullOrWhiteSpace($AgentToken)) {
+            $Script:Results.RMMInstalled = Install-ConnectWiseControl -Token $AgentToken
         }
         else {
-            Write-YWLog "Skipping ConnectWise Control - insufficient parameters" -Level Warning
-            Write-Host "  Use -UseEmbeddedAgent or provide -ControlServer and -AgentToken" -ForegroundColor Yellow
+            Write-YWLog "No agent token provided - SKIPPING ConnectWise Control installation" -Level Warning
+            Write-Host "  Agent installation skipped. Run script again with -AgentToken parameter to install." -ForegroundColor Yellow
+            $Script:Results.RMMInstalled = $false
         }
-        
+
         Write-Host ""
     }
     
@@ -1169,9 +1464,9 @@ function Start-ServerBaseline {
     #==========================================================================
     # Summary Report
     #==========================================================================
-    Write-Host "=" * 81 -ForegroundColor $Script:Config.Colors.Secondary
+    Write-Host ("=" * 81) -ForegroundColor $Script:Config.Colors.Secondary
     Write-Host "BASELINE CONFIGURATION SUMMARY" -ForegroundColor $Script:Config.Colors.Primary
-    Write-Host "=" * 81 -ForegroundColor $Script:Config.Colors.Secondary
+    Write-Host ("=" * 81) -ForegroundColor $Script:Config.Colors.Secondary
     Write-Host ""
     
     $statusIcon = @{ $true = '[X]'; $false = '[ ]' }
