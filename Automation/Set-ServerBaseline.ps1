@@ -679,8 +679,8 @@ function Install-Winget {
     .SYNOPSIS
         Installs winget (Windows Package Manager) if not present.
     .NOTES
-        Requires Windows 10 1809+ or Windows Server 2019+.
-        Winget requires Windows App Runtime framework which may not be available on older systems.
+        Uses the winget-install script from PowerShell Gallery.
+        Tested and working on Windows Server 2022 and Windows 10+.
     #>
 
     Write-YWLog "Checking for winget..." -Level Info
@@ -692,83 +692,47 @@ function Install-Winget {
         return $true
     }
 
-    # Check Windows version - winget requires Windows 10 1809+ or Server 2019+
-    $osVersion = [System.Environment]::OSVersion.Version
-    if ($osVersion.Major -lt 10) {
-        Write-YWLog "Winget requires Windows 10 or newer - skipping installation" -Level Warning
-        return $false
-    }
-
-    Write-YWLog "Winget not found - attempting installation..." -Level Info
+    Write-YWLog "Winget not found - installing via PowerShell Gallery..." -Level Info
 
     try {
-        # Enable TLS 1.2
+        # Enable TLS 1.2 for PowerShell Gallery
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-        # Step 1: Install Windows App Runtime (required dependency)
-        Write-YWLog "Installing Windows App Runtime dependency..." -Level Info
-        $appRuntimeUrl = "https://aka.ms/windowsappruntimeinstall"
-        $appRuntimePath = "$env:TEMP\WindowsAppRuntime.exe"
-
-        try {
-            $webClient = New-Object System.Net.WebClient
-            $webClient.DownloadFile($appRuntimeUrl, $appRuntimePath)
-
-            if (Test-Path $appRuntimePath) {
-                $process = Start-Process -FilePath $appRuntimePath -ArgumentList "/quiet" -Wait -PassThru
-                if ($process.ExitCode -eq 0) {
-                    Write-YWLog "Windows App Runtime installed successfully" -Level Success
-                }
-                else {
-                    Write-YWLog "Windows App Runtime installation returned code: $($process.ExitCode)" -Level Warning
-                }
-                Remove-Item -Path $appRuntimePath -Force -ErrorAction SilentlyContinue
-            }
-        }
-        catch {
-            Write-YWLog "Could not install Windows App Runtime: $($_.Exception.Message)" -Level Warning
-            Write-YWLog "Attempting winget install without runtime (may fail)..." -Level Info
+        # Install NuGet provider if not present (required for Install-Script)
+        $nuget = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
+        if (-not $nuget) {
+            Write-YWLog "Installing NuGet package provider..." -Level Info
+            Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope CurrentUser | Out-Null
+            Write-YWLog "NuGet package provider installed" -Level Success
         }
 
-        # Step 2: Download and install App Installer (winget)
-        $appInstallerUrl = "https://aka.ms/getwinget"
-        $tempPath = "$env:TEMP\Microsoft.DesktopAppInstaller.msixbundle"
+        # Set PSGallery as trusted to avoid prompts
+        $gallery = Get-PSRepository -Name PSGallery -ErrorAction SilentlyContinue
+        if ($gallery -and $gallery.InstallationPolicy -ne 'Trusted') {
+            Write-YWLog "Setting PSGallery as trusted repository..." -Level Info
+            Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+        }
 
-        Write-YWLog "Downloading App Installer..." -Level Info
+        # Install the winget-install script from PowerShell Gallery
+        Write-YWLog "Installing winget-install script from PowerShell Gallery..." -Level Info
+        Install-Script -Name winget-install -Force -Scope CurrentUser -ErrorAction Stop
 
-        $webClient = New-Object System.Net.WebClient
-        $webClient.DownloadFile($appInstallerUrl, $tempPath)
+        # Run the winget-install script
+        Write-YWLog "Running winget-install script..." -Level Info
+        & winget-install -Force
 
-        if (Test-Path $tempPath) {
-            $fileSize = [math]::Round((Get-Item $tempPath).Length / 1MB, 2)
-            Write-YWLog "App Installer downloaded ($fileSize MB)" -Level Success
+        # Refresh PATH and verify winget is now available
+        $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
 
-            # Install the package
-            Write-YWLog "Installing App Installer..." -Level Info
-            Add-AppxPackage -Path $tempPath -ErrorAction Stop
+        Start-Sleep -Seconds 3
 
-            Write-YWLog "App Installer installed successfully" -Level Success
-
-            # Cleanup
-            Remove-Item -Path $tempPath -Force -ErrorAction SilentlyContinue
-
-            # Refresh PATH and verify winget is now available
-            $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
-
-            Start-Sleep -Seconds 2
-
-            $winget = Get-Command winget -ErrorAction SilentlyContinue
-            if ($winget) {
-                Write-YWLog "Winget is now available" -Level Success
-                return $true
-            }
-            else {
-                Write-YWLog "Winget installed but not yet in PATH - restart may be required" -Level Warning
-                return $false
-            }
+        $winget = Get-Command winget -ErrorAction SilentlyContinue
+        if ($winget) {
+            Write-YWLog "Winget installed successfully" -Level Success
+            return $true
         }
         else {
-            Write-YWLog "Failed to download App Installer" -Level Error
+            Write-YWLog "Winget installed but not yet in PATH - restart may be required" -Level Warning
             return $false
         }
     }
@@ -776,7 +740,7 @@ function Install-Winget {
         Write-YWLog "Error installing winget: $($_.Exception.Message)" -Level Warning
         Write-YWLog "Winget is not available on this system - will use direct downloads" -Level Info
         Write-Host ""
-        Write-Host "  Note: Winget requires Windows App Runtime framework" -ForegroundColor Yellow
+        Write-Host "  Note: Winget installation failed" -ForegroundColor Yellow
         Write-Host "  Installations will use direct MSI downloads instead" -ForegroundColor Gray
         Write-Host ""
         return $false
