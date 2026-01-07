@@ -11,6 +11,7 @@ PowerShell tools for proactive system monitoring, health checks, and alerting.
 | `Get-SystemHealthReport.ps1` | Comprehensive health assessment: CPU, memory, disk, services, uptime, event logs, network connectivity |
 | `Get-DiskSpaceMonitor.ps1` | Disk capacity monitoring with threshold alerts, growth trending, and days-to-full estimation |
 | `Get-ServiceMonitor.ps1` | Critical service monitoring with auto-restart, dependency checking, and failure tracking |
+| `Invoke-SystemOnlineMonitor.ps1` | Monitor system availability with Microsoft Graph API email alerts, port scanning, and detailed system information |
 
 ---
 
@@ -34,7 +35,42 @@ PowerShell tools for proactive system monitoring, health checks, and alerting.
 
 # Multi-server monitoring
 Get-Content servers.txt | .\Get-SystemHealthReport.ps1 -WarningOnly -ExportPath "C:\Reports\AllServers.html"
+
+# Monitor system availability and send Graph API alerts
+.\Invoke-SystemOnlineMonitor.ps1 -ComputerName "WORKSTATION01","WORKSTATION02" `
+    -TenantId "12345678-1234-1234-1234-123456789012" `
+    -ClientId "abcdef12-3456-7890-abcd-ef1234567890" `
+    -ClientSecret "your_client_secret" `
+    -EmailTo "security@company.com" `
+    -EmailFrom "monitoring@company.com"
+
+# Monitor from file with custom ports and JSON export
+Get-Content "C:\MonitorList.txt" | .\Invoke-SystemOnlineMonitor.ps1 `
+    -TenantId $tenantId -ClientId $clientId -ClientSecret $secret `
+    -EmailTo "alerts@company.com" -EmailFrom "monitor@company.com" `
+    -PortsToScan @(22,80,443,3389,5985) `
+    -ExportPath "C:\Logs\OnlineReport.json"
 ```
+
+---
+
+## Microsoft Graph API Setup
+
+The `Invoke-SystemOnlineMonitor.ps1` script requires Microsoft Graph API authentication for email alerts:
+
+1. **Register Azure App** in Entra ID (Azure AD)
+2. **Add API Permission**: Microsoft Graph > Application > Mail.Send
+3. **Grant admin consent** for the permission
+4. **Create client secret** and note the value
+5. **Note Application ID** (Client ID) and Directory ID (Tenant ID)
+
+### Security Best Practices
+
+- Store credentials in Azure Key Vault or encrypted files
+- Use least-privilege API permissions
+- Restrict script access to authorized personnel
+- Consider Managed Identity for Azure automation
+- Audit email recipients regularly
 
 ---
 
@@ -56,8 +92,10 @@ Get-Content servers.txt | .\Get-SystemHealthReport.ps1 -WarningOnly -ExportPath 
 |-----------|-------------|
 | `-ComputerName` | Target computer (supports pipeline) |
 | `-ExportPath` | Output file (CSV, JSON, HTML, XML) |
-| `-EmailTo` | Alert recipient email |
+| `-EmailTo` | Alert recipient email (Graph API or SMTP) |
 | `-SmtpServer` | SMTP server for alerts |
+| `-PortsToScan` | TCP ports to scan (System Online Monitor) |
+| `-IncludeOfflineSystems` | Include offline systems in reports |
 | `-Quiet` | Suppress console output |
 
 ---
@@ -67,7 +105,9 @@ Get-Content servers.txt | .\Get-SystemHealthReport.ps1 -WarningOnly -ExportPath 
 - PowerShell 5.1+
 - WinRM enabled for remote monitoring
 - SMTP server for email alerts (optional)
+- Microsoft Graph API credentials for Graph-based alerts (Invoke-SystemOnlineMonitor.ps1)
 - Administrative privileges for service restarts
+- Network access to monitored systems
 
 ---
 
