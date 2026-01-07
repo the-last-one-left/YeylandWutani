@@ -27,6 +27,7 @@ testing/
 dev/
 .vscode/
 .vs/
+_WorkDir/
 
 # Operating System
 .DS_Store
