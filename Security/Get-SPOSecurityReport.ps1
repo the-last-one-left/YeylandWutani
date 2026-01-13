@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Comprehensive SharePoint Online Security and Usage Report Tool v3.1
+    Comprehensive SharePoint Online Security and Usage Report Tool v3.2
     
 .DESCRIPTION
     MSP-friendly reporting tool using Microsoft Graph SDK and SPO Management Shell.
@@ -62,12 +62,13 @@
 
 .NOTES
     Author: Yeyland Wutani LLC
-    Version: 3.1
+    Version: 3.2
     Website: https://github.com/YeylandWutani
     
     Key Features:
     - OneDrive excluded by default (use -IncludeOneDrive to include)
-    - Site permissions for ALL site types via Get-SPOUser
+    - Site permissions for ALL site types via Get-SPOSiteGroup
+    - EXPANDS SharePoint groups to show actual members
     - Identifies Site Admins, Owners, Members, and Visitors
     - External user detection and flagging
     - Visual charts for sharing and storage analysis
@@ -478,6 +479,7 @@ function Get-SPOSiteUsers {
     .SYNOPSIS
         Retrieves all users with permissions on a SharePoint site using SPO Management Shell
         Works for ALL site types (Team Sites, Communication Sites, Classic Sites, etc.)
+        Expands SharePoint groups (Owners, Members, Visitors) to show actual members
     #>
     param(
         [Parameter(Mandatory = $true)][string]$SiteUrl,
@@ -488,60 +490,213 @@ function Get-SPOSiteUsers {
     $memberCount = 0
     $visitorCount = 0
     
-    try {
-        # Get all users with access to the site
-        $siteUsers = Get-SPOUser -Site $SiteUrl -Limit All -ErrorAction Stop
+    # Track users we've already added to avoid duplicates
+    $processedUsers = @{}
+    
+    # Helper function to add a user entry
+    function Add-UserEntry {
+        param(
+            [string]$DisplayName,
+            [string]$Email,
+            [string]$Role,
+            [bool]$IsSiteAdmin,
+            [string]$GroupMembership,
+            [bool]$IsExternal,
+            [string]$LoginName
+        )
         
-        foreach ($user in $siteUsers) {
-            # Skip system accounts and empty entries
-            if ([string]::IsNullOrWhiteSpace($user.LoginName)) { continue }
-            if ($user.LoginName -like "*spocrwl*") { continue }  # SharePoint crawler
-            if ($user.LoginName -like "*app@sharepoint*") { continue }  # App accounts
-            if ($user.LoginName -like "SHAREPOINT\*") { continue }  # System accounts
-            if ($user.LoginName -eq "Everyone" -or $user.LoginName -eq "Everyone except external users") { continue }
-            if ($user.LoginName -like "c:0(.s|true") { continue }  # Everyone claim
+        # Create unique key to prevent duplicates
+        $userKey = "$LoginName|$Role".ToLower()
+        if ($processedUsers.ContainsKey($userKey)) { return $false }
+        $processedUsers[$userKey] = $true
+        
+        $Script:Data.SiteMembers.Add([PSCustomObject]@{
+            SiteUrl       = $SiteUrl
+            SiteTitle     = $SiteTitle
+            MemberName    = $DisplayName
+            Email         = $Email
+            Role          = $Role
+            IsSiteAdmin   = $IsSiteAdmin
+            Groups        = $GroupMembership
+            IsExternal    = $IsExternal
+            LoginName     = $LoginName
+        })
+        return $true
+    }
+    
+    # Helper function to extract email from login name
+    function Get-EmailFromLoginName {
+        param([string]$LoginName)
+        
+        if ([string]::IsNullOrWhiteSpace($LoginName)) { return "" }
+        
+        # Check for standard email in claim
+        if ($LoginName -match "\|([^|]+@[^|]+)$") {
+            return $Matches[1]
+        }
+        # External user format
+        elseif ($LoginName -like "*#ext#*") {
+            return $LoginName -replace ".*_", "" -replace "#ext#.*", "" -replace "_", "@"
+        }
+        # Already an email
+        elseif ($LoginName -match "@") {
+            return $LoginName
+        }
+        return $LoginName
+    }
+    
+    # Helper function to check if a user entry is a SharePoint group
+    function Test-IsSharePointGroup {
+        param($User, [string]$SiteName)
+        
+        # Check if the LoginName looks like a group GUID (not an email)
+        if ($User.LoginName -match "^[a-f0-9-]{36}(_o)?$") { return $true }
+        
+        # Check if DisplayName matches site group patterns
+        if ($User.DisplayName -match "^.+ (Owners|Members|Visitors)$") { return $true }
+        
+        # Check specific site name patterns
+        $cleanSiteName = $SiteName -replace "[^a-zA-Z0-9]", ""
+        if ($User.DisplayName -match "^$cleanSiteName (Owners|Members|Visitors)$") { return $true }
+        
+        return $false
+    }
+    
+    try {
+        Write-Log "  Enumerating site groups and members..." -Level Debug
+        
+        # First, get all SharePoint groups for the site and expand their members
+        try {
+            $siteGroups = Get-SPOSiteGroup -Site $SiteUrl -Limit 200 -ErrorAction Stop
             
-            # Determine role based on IsSiteAdmin and Groups
-            $role = "Visitor"
-            if ($user.IsSiteAdmin) {
-                $role = "Site Admin"
-                $ownerCount++
-            } elseif ($user.Groups -match "Owner") {
-                $role = "Owner"
-                $ownerCount++
-            } elseif ($user.Groups -match "Member") {
-                $role = "Member"
-                $memberCount++
-            } else {
-                $visitorCount++
+            foreach ($group in $siteGroups) {
+                # Skip system/empty groups
+                if ([string]::IsNullOrWhiteSpace($group.Title)) { continue }
+                
+                # Determine role based on group name
+                $groupRole = "Visitor"
+                if ($group.Title -match "Owner" -or $group.Roles -contains "Full Control") {
+                    $groupRole = "Owner"
+                } elseif ($group.Title -match "Member" -or $group.Roles -contains "Edit" -or $group.Roles -contains "Contribute") {
+                    $groupRole = "Member"
+                }
+                
+                # Get the actual members of this group
+                try {
+                    $groupDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $group.Title -ErrorAction Stop
+                    $groupUsers = $groupDetail.Users
+                    
+                    if ($groupUsers -and $groupUsers.Count -gt 0) {
+                        foreach ($memberLogin in $groupUsers) {
+                            # Skip system accounts
+                            if ([string]::IsNullOrWhiteSpace($memberLogin)) { continue }
+                            if ($memberLogin -like "*spocrwl*") { continue }
+                            if ($memberLogin -like "*app@sharepoint*") { continue }
+                            if ($memberLogin -like "SHAREPOINT\*") { continue }
+                            if ($memberLogin -eq "Everyone" -or $memberLogin -eq "Everyone except external users") { continue }
+                            if ($memberLogin -like "c:0(.s|true*") { continue }
+                            if ($memberLogin -like "c:0-.f|rolemanager|*") { continue }
+                            
+                            # Extract email and display name from login
+                            $email = Get-EmailFromLoginName -LoginName $memberLogin
+                            
+                            # Create display name from email or login
+                            $displayName = $email
+                            if ($email -match "^([^@]+)@") {
+                                # Try to make a friendly name from email
+                                $namePart = $Matches[1]
+                                if ($namePart -match "^([a-zA-Z]+)\.([a-zA-Z]+)$") {
+                                    $displayName = "$($Matches[1].Substring(0,1).ToUpper())$($Matches[1].Substring(1)) $($Matches[2].Substring(0,1).ToUpper())$($Matches[2].Substring(1))"
+                                } elseif ($namePart -match "^([a-zA-Z]+)([a-zA-Z]+)$" -and $namePart.Length -gt 3) {
+                                    $displayName = $namePart.Substring(0,1).ToUpper() + $namePart.Substring(1)
+                                }
+                            }
+                            
+                            $isExternal = $memberLogin -like "*#ext#*"
+                            
+                            if (Add-UserEntry -DisplayName $displayName -Email $email -Role $groupRole `
+                                -IsSiteAdmin $false -GroupMembership $group.Title `
+                                -IsExternal $isExternal -LoginName $memberLogin) {
+                                
+                                switch ($groupRole) {
+                                    "Owner" { $ownerCount++ }
+                                    "Member" { $memberCount++ }
+                                    default { $visitorCount++ }
+                                }
+                            }
+                        }
+                    }
+                } catch {
+                    Write-Log "    Could not expand group '$($group.Title)': $($_.Exception.Message)" -Level Debug
+                }
             }
+        } catch {
+            Write-Log "  Could not enumerate site groups: $($_.Exception.Message)" -Level Debug
+        }
+        
+        # Also get direct users (Site Admins and users with direct permissions)
+        try {
+            $siteUsers = Get-SPOUser -Site $SiteUrl -Limit All -ErrorAction Stop
             
-            # Get display name - prefer DisplayName, fall back to LoginName
-            $displayName = $user.DisplayName
-            if ([string]::IsNullOrWhiteSpace($displayName)) {
-                $displayName = $user.LoginName -replace "^.*\|", ""  # Strip claim prefix
+            # Get site name for group detection
+            $siteName = Get-CleanSiteName -Url $SiteUrl
+            
+            foreach ($user in $siteUsers) {
+                # Skip system accounts and empty entries
+                if ([string]::IsNullOrWhiteSpace($user.LoginName)) { continue }
+                if ($user.LoginName -like "*spocrwl*") { continue }
+                if ($user.LoginName -like "*app@sharepoint*") { continue }
+                if ($user.LoginName -like "SHAREPOINT\*") { continue }
+                if ($user.LoginName -eq "Everyone" -or $user.LoginName -eq "Everyone except external users") { continue }
+                if ($user.LoginName -like "c:0(.s|true*") { continue }
+                if ($user.LoginName -like "c:0-.f|rolemanager|*") { continue }
+                
+                # Skip if this is a SharePoint group (we already expanded those above)
+                if (Test-IsSharePointGroup -User $user -SiteName $siteName) {
+                    continue
+                }
+                
+                # Also skip entries that look like group GUIDs
+                if ($user.LoginName -match "^[a-f0-9-]{36}(_o)?$") { continue }
+                
+                # Site Admins are important - always include them
+                if ($user.IsSiteAdmin) {
+                    $displayName = $user.DisplayName
+                    if ([string]::IsNullOrWhiteSpace($displayName)) {
+                        $displayName = Get-EmailFromLoginName -LoginName $user.LoginName
+                    }
+                    
+                    $email = Get-EmailFromLoginName -LoginName $user.LoginName
+                    $isExternal = $user.LoginName -like "*#ext#*"
+                    
+                    if (Add-UserEntry -DisplayName $displayName -Email $email -Role "Site Admin" `
+                        -IsSiteAdmin $true -GroupMembership ($user.Groups -join "; ") `
+                        -IsExternal $isExternal -LoginName $user.LoginName) {
+                        $ownerCount++
+                    }
+                }
+                # Include users with direct permissions (not just via groups)
+                elseif (-not $user.Groups -or $user.Groups.Count -eq 0) {
+                    $displayName = $user.DisplayName
+                    if ([string]::IsNullOrWhiteSpace($displayName)) {
+                        $displayName = Get-EmailFromLoginName -LoginName $user.LoginName
+                    }
+                    
+                    $email = Get-EmailFromLoginName -LoginName $user.LoginName
+                    $isExternal = $user.LoginName -like "*#ext#*"
+                    
+                    if (Add-UserEntry -DisplayName $displayName -Email $email -Role "Direct Access" `
+                        -IsSiteAdmin $false -GroupMembership "Direct Permission" `
+                        -IsExternal $isExternal -LoginName $user.LoginName) {
+                        $visitorCount++
+                    }
+                }
             }
-            
-            # Get email
-            $email = $user.LoginName
-            if ($email -match "\|([^|]+@[^|]+)$") {
-                $email = $Matches[1]
-            } elseif ($email -like "*#ext#*") {
-                # External user - extract email
-                $email = $email -replace ".*_", "" -replace "#ext#.*", "" -replace "_", "@"
+        } catch {
+            # Access denied is common for restricted sites
+            if ($_.Exception.Message -notmatch "Access is denied|E_ACCESSDENIED") {
+                Write-Log "  Could not enumerate direct users: $($_.Exception.Message)" -Level Debug
             }
-            
-            $Script:Data.SiteMembers.Add([PSCustomObject]@{
-                SiteUrl       = $SiteUrl
-                SiteTitle     = $SiteTitle
-                MemberName    = $displayName
-                Email         = $email
-                Role          = $role
-                IsSiteAdmin   = $user.IsSiteAdmin
-                Groups        = ($user.Groups -join "; ")
-                IsExternal    = $user.IsGroup -eq $false -and $user.LoginName -like "*#ext#*"
-                LoginName     = $user.LoginName
-            })
         }
         
         Write-Log "  Found $ownerCount owners, $memberCount members, $visitorCount visitors" -Level Debug
@@ -1747,7 +1902,7 @@ $folderCount folders | $librarySize total | $libraryPctOfTotal% of all storage
 </div>
 <div class="footer">
 <div class="tagline">${($Script:Branding.Tagline)}</div>
-<p>Generated by ${($Script:Branding.CompanyName)} SharePoint Security Report v3.1</p>
+<p>Generated by ${($Script:Branding.CompanyName)} SharePoint Security Report v3.2</p>
 <p>${($Script:ReportDate)}</p>
 </div>
 <script>
