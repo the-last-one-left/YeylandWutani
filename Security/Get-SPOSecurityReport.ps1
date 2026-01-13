@@ -564,11 +564,26 @@ function Get-SPOSiteUsers {
     
     try {
         Write-Log "  Enumerating site groups and members..." -Level Debug
-        
+
+        # Get ALL users/groups first (includes nested group objects)
+        $allSiteUsers = Get-SPOUser -Site $SiteUrl -Limit All -ErrorAction Stop
+        Write-Log "  Retrieved $($allSiteUsers.Count) total users/groups from site" -Level Debug
+
+        # Build a lookup map of LoginName -> User object for nested group resolution
+        $userByLoginName = @{}
+        foreach ($u in $allSiteUsers) {
+            if (-not [string]::IsNullOrWhiteSpace($u.LoginName)) {
+                $userByLoginName[$u.LoginName] = $u
+            }
+        }
+        Write-Log "  Built lookup map with $($userByLoginName.Count) entries" -Level Debug
+
         # First, get all SharePoint groups for the site and expand their members
         try {
             $siteGroups = Get-SPOSiteGroup -Site $SiteUrl -Limit 200 -ErrorAction Stop
-            
+
+            Write-Log "  Found $($siteGroups.Count) site groups" -Level Debug
+
             foreach ($group in $siteGroups) {
                 # Skip system/empty groups
                 if ([string]::IsNullOrWhiteSpace($group.Title)) { continue }
@@ -585,7 +600,12 @@ function Get-SPOSiteUsers {
                 try {
                     $groupDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $group.Title -ErrorAction Stop
                     $groupUsers = $groupDetail.Users
-                    
+
+                    Write-Log "    Group '$($group.Title)' has $($groupUsers.Count) direct entries" -Level Info
+                    foreach ($member in $groupUsers) {
+                        Write-Log "      Entry: $member" -Level Info
+                    }
+
                     if ($groupUsers -and $groupUsers.Count -gt 0) {
                         foreach ($memberLogin in $groupUsers) {
                             # Skip system accounts
@@ -593,9 +613,70 @@ function Get-SPOSiteUsers {
                             if ($memberLogin -like "*spocrwl*") { continue }
                             if ($memberLogin -like "*app@sharepoint*") { continue }
                             if ($memberLogin -like "SHAREPOINT\*") { continue }
-                            if ($memberLogin -eq "Everyone" -or $memberLogin -eq "Everyone except external users") { continue }
                             if ($memberLogin -like "c:0(.s|true*") { continue }
                             if ($memberLogin -like "c:0-.f|rolemanager|*") { continue }
+
+                            # Handle nested group GUIDs - look them up in our map and expand them
+                            if ($memberLogin -match "^[a-f0-9-]{36}(_o)?$") {
+                                Write-Log "    Found nested group GUID in '$($group.Title)': $memberLogin" -Level Debug
+                                # Look up this GUID in our user/group map
+                                if ($userByLoginName.ContainsKey($memberLogin)) {
+                                    $nestedGroupObj = $userByLoginName[$memberLogin]
+                                    Write-Log "      Found nested group object: $($nestedGroupObj.DisplayName) (LoginName: $($nestedGroupObj.LoginName))" -Level Info
+                                    Write-Log "      Expanding nested group: $($nestedGroupObj.DisplayName)" -Level Info
+                                    # Now try to get it as a SharePoint group to access its members
+                                    try {
+                                        $nestedDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $nestedGroupObj.DisplayName -ErrorAction Stop
+                                        Write-Log "        Nested group has $($nestedDetail.Users.Count) members" -Level Info
+                                        foreach ($nestedMember in $nestedDetail.Users) {
+                                                if ([string]::IsNullOrWhiteSpace($nestedMember)) { continue }
+                                                if ($nestedMember -like "*spocrwl*" -or $nestedMember -like "*app@sharepoint*" -or
+                                                    $nestedMember -like "SHAREPOINT\*" -or $nestedMember -like "c:0-.f|rolemanager|*") { continue }
+                                                if ($nestedMember -match "^[a-f0-9-]{36}(_o)?$") {
+                                                    Write-Log "        Skipping double-nested GUID: $nestedMember" -Level Debug
+                                                    continue
+                                                }
+                                                if ($nestedMember -eq "Everyone" -or $nestedMember -like "*spo-grid-all-users/*") { continue }
+
+                                                $email = Get-EmailFromLoginName -LoginName $nestedMember
+                                                $displayName = $email
+                                                if ($email -match "^([^@]+)@") {
+                                                    $namePart = $Matches[1]
+                                                    if ($namePart -match "^([a-zA-Z]+)\.([a-zA-Z]+)$") {
+                                                        $displayName = "$($Matches[1].Substring(0,1).ToUpper())$($Matches[1].Substring(1)) $($Matches[2].Substring(0,1).ToUpper())$($Matches[2].Substring(1))"
+                                                    }
+                                                }
+                                                $isExternal = $nestedMember -like "*#ext#*"
+
+                                                if (Add-UserEntry -DisplayName $displayName -Email $email -Role $groupRole `
+                                                    -IsSiteAdmin $false -GroupMembership $group.Title `
+                                                    -IsExternal $isExternal -LoginName $nestedMember) {
+                                                    switch ($groupRole) {
+                                                        "Owner" { $ownerCount++ }
+                                                        "Member" { $memberCount++ }
+                                                        default { $visitorCount++ }
+                                                    }
+                                                }
+                                            }
+                                        } catch {
+                                            Write-Log "        Could not expand nested group '$($nestedGroupObj.DisplayName)': $($_.Exception.Message)" -Level Debug
+                                        }
+                                } else {
+                                    Write-Log "      GUID not found in lookup map: $memberLogin" -Level Warning
+                                }
+                                continue
+                            }
+
+                            # Handle Everyone groups - add as special warning entries
+                            if ($memberLogin -eq "Everyone" -or $memberLogin -eq "Everyone except external users" -or $memberLogin -like "*spo-grid-all-users/*") {
+                                $everyoneLabel = if ($memberLogin -eq "Everyone") { "⚠️ Everyone (All Users Including External)" } else { "⚠️ Everyone Except External Users" }
+                                if (Add-UserEntry -DisplayName $everyoneLabel -Email "All tenant users" -Role "Broad Access" `
+                                    -IsSiteAdmin $false -GroupMembership $group.Title `
+                                    -IsExternal $false -LoginName $memberLogin) {
+                                    $visitorCount++
+                                }
+                                continue
+                            }
                             
                             # Extract email and display name from login
                             $email = Get-EmailFromLoginName -LoginName $memberLogin
@@ -1656,6 +1737,7 @@ a:hover { text-decoration: underline; }
                     "Owner" { "<span class='badge badge-warning'>Owner</span>" }
                     "Member" { "<span class='badge badge-info'>Member</span>" }
                     "Visitor" { "<span class='badge badge-success'>Visitor</span>" }
+                    "Broad Access" { "<span class='badge badge-danger' style='font-weight:700'>⚠️ BROAD ACCESS</span>" }
                     default { "<span class='badge'>" + (Get-HtmlSafeString $member.Role) + "</span>" }
                 }
                 $extHtml = if ($member.IsExternal) { "<span class='badge badge-danger'>Yes</span>" } else { "" }
