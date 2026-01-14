@@ -1777,6 +1777,10 @@ a:hover { text-decoration: underline; }
 <div class="section">
 <div class="section-header" onclick="toggleSection(this)"><h2>Site Permissions</h2><span class="count">$($siteMembers.Count) users across $($grouped.Count) sites$(if ($totalExt -gt 0) { " | $($totalExt) external" })</span><span class="toggle">&#9660;</span></div>
 <div class="section-content" style="max-height:none;padding:15px;">
+<div style="background:#fff3cd;border:1px solid #ffc107;border-radius:4px;padding:10px 15px;margin-bottom:15px;">
+<strong>Note:</strong> Users with multiple roles are displayed with their <strong>highest permission level only</strong>.
+Role hierarchy: Site Admin &gt; Owner &gt; Member &gt; Visitor &gt; Direct Access.
+</div>
 "@
 
         foreach ($group in $grouped) {
@@ -2107,6 +2111,9 @@ function Invoke-SPOSecurityReport {
     Write-Host ""
     Write-Host "  No app registration required - uses delegated authentication" -ForegroundColor Green
     Write-Host "  Scans ALL SharePoint site types for permissions and sharing" -ForegroundColor Green
+    Write-Host ""
+    Write-Host "  NOTE: Users with multiple roles are shown with their HIGHEST permission level" -ForegroundColor Yellow
+    Write-Host "        (Site Admin > Owner > Member > Visitor > Direct Access)" -ForegroundColor Yellow
     Write-Host ""
     if ($IncludeOneDrive) {
         Write-Host "  OneDrive sites: INCLUDED (personal storage will be scanned)" -ForegroundColor Yellow
