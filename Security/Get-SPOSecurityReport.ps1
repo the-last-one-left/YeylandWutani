@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-    Comprehensive SharePoint Online Security and Usage Report Tool v3.2
+    Comprehensive SharePoint Online Security and Usage Report Tool v3.3
     
 .DESCRIPTION
     MSP-friendly reporting tool using Microsoft Graph SDK and SPO Management Shell.
@@ -62,7 +62,7 @@
 
 .NOTES
     Author: Yeyland Wutani LLC
-    Version: 3.2
+    Version: 3.3
     Website: https://github.com/YeylandWutani
     
     Key Features:
@@ -491,7 +491,16 @@ function Get-SPOSiteUsers {
     $visitorCount = 0
     
     # Track users we've already added to avoid duplicates
+    # Store role hierarchy to keep only highest role
     $processedUsers = @{}
+    $roleHierarchy = @{
+        "Site Admin" = 1
+        "Owner" = 2
+        "Member" = 3
+        "Visitor" = 4
+        "Direct Access" = 5
+        "Broad Access" = 6
+    }
     
     # Helper function to add a user entry
     function Add-UserEntry {
@@ -505,10 +514,18 @@ function Get-SPOSiteUsers {
             [string]$LoginName
         )
         
-        # Create unique key to prevent duplicates
-        $userKey = "$LoginName|$Role".ToLower()
-        if ($processedUsers.ContainsKey($userKey)) { return $false }
-        $processedUsers[$userKey] = $true
+        # Create unique key to prevent duplicates - use LoginName only (case-insensitive)
+        # Keep only the highest priority role (Site Admin > Owner > Member > Visitor > Direct Access)
+        $userKey = $LoginName.ToLower()
+        if ($processedUsers.ContainsKey($userKey)) {
+            $existingRole = $processedUsers[$userKey]
+            $existingPriority = $roleHierarchy[$existingRole]
+            $newPriority = $roleHierarchy[$Role]
+
+            # User already exists - keep existing higher priority role
+            return $false
+        }
+        $processedUsers[$userKey] = $Role
         
         $Script:Data.SiteMembers.Add([PSCustomObject]@{
             SiteUrl       = $SiteUrl
@@ -584,6 +601,14 @@ function Get-SPOSiteUsers {
 
             Write-Log "  Found $($siteGroups.Count) site groups" -Level Debug
 
+            # Sort groups by priority: Owners first, then Members, then Visitors
+            # This ensures users get their highest role assigned
+            $siteGroups = $siteGroups | Sort-Object {
+                if ($_.Title -match "Owner") { return 1 }
+                elseif ($_.Title -match "Member") { return 2 }
+                else { return 3 }
+            }
+
             foreach ($group in $siteGroups) {
                 # Skip system/empty groups
                 if ([string]::IsNullOrWhiteSpace($group.Title)) { continue }
@@ -601,11 +626,6 @@ function Get-SPOSiteUsers {
                     $groupDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $group.Title -ErrorAction Stop
                     $groupUsers = $groupDetail.Users
 
-                    Write-Log "    Group '$($group.Title)' has $($groupUsers.Count) direct entries" -Level Info
-                    foreach ($member in $groupUsers) {
-                        Write-Log "      Entry: $member" -Level Info
-                    }
-
                     if ($groupUsers -and $groupUsers.Count -gt 0) {
                         foreach ($memberLogin in $groupUsers) {
                             # Skip system accounts
@@ -616,19 +636,60 @@ function Get-SPOSiteUsers {
                             if ($memberLogin -like "c:0(.s|true*") { continue }
                             if ($memberLogin -like "c:0-.f|rolemanager|*") { continue }
 
-                            # Handle nested group GUIDs - look them up in our map and expand them
+                            # Handle nested group GUIDs - these are likely Entra ID groups
                             if ($memberLogin -match "^[a-f0-9-]{36}(_o)?$") {
                                 Write-Log "    Found nested group GUID in '$($group.Title)': $memberLogin" -Level Debug
-                                # Look up this GUID in our user/group map
-                                if ($userByLoginName.ContainsKey($memberLogin)) {
-                                    $nestedGroupObj = $userByLoginName[$memberLogin]
-                                    Write-Log "      Found nested group object: $($nestedGroupObj.DisplayName) (LoginName: $($nestedGroupObj.LoginName))" -Level Info
-                                    Write-Log "      Expanding nested group: $($nestedGroupObj.DisplayName)" -Level Info
-                                    # Now try to get it as a SharePoint group to access its members
+
+                                # Extract the actual GUID (remove _o suffix if present)
+                                $guidOnly = $memberLogin -replace "_o$", ""
+
+                                # Try to get the group from Microsoft Graph using REST API (more compatible)
+                                try {
+                                    # Use Invoke-MgGraphRequest for better compatibility
+                                    $graphGroup = Invoke-MgGraphRequest -Method GET -Uri "https://graph.microsoft.com/v1.0/groups/$guidOnly" -ErrorAction Stop
+
+                                    # Get transitive members (includes nested group members)
                                     try {
-                                        $nestedDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $nestedGroupObj.DisplayName -ErrorAction Stop
-                                        Write-Log "        Nested group has $($nestedDetail.Users.Count) members" -Level Info
-                                        foreach ($nestedMember in $nestedDetail.Users) {
+                                        $transitiveUri = "https://graph.microsoft.com/v1.0/groups/$guidOnly/transitiveMembers"
+                                        $graphMembers = Invoke-MgGraphRequest -Method GET -Uri $transitiveUri -ErrorAction Stop
+                                        $members = $graphMembers.value
+
+                                        foreach ($member in $members) {
+                                            # Only process users (not nested groups or other types)
+                                            if ($member.'@odata.type' -eq '#microsoft.graph.user') {
+                                                $email = $member.userPrincipalName
+                                                $displayName = $member.displayName
+
+                                                if ([string]::IsNullOrWhiteSpace($displayName)) {
+                                                    $displayName = $email
+                                                }
+
+                                                $isExternal = $email -like "*#EXT#*"
+
+                                                if (Add-UserEntry -DisplayName $displayName -Email $email -Role $groupRole `
+                                                    -IsSiteAdmin $false -GroupMembership $group.Title `
+                                                    -IsExternal $isExternal -LoginName $email) {
+                                                    switch ($groupRole) {
+                                                        "Owner" { $ownerCount++ }
+                                                        "Member" { $memberCount++ }
+                                                        default { $visitorCount++ }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    } catch {
+                                        Write-Log "        Could not get members of Entra ID group: $($_.Exception.Message)" -Level Debug
+                                    }
+                                } catch {
+                                    Write-Log "      Could not resolve GUID as Entra ID group: $($_.Exception.Message)" -Level Debug
+
+                                    # Fallback: Try SPO method
+                                    if ($userByLoginName.ContainsKey($memberLogin)) {
+                                        $nestedGroupObj = $userByLoginName[$memberLogin]
+                                        Write-Log "      Fallback: Found in SPO as '$($nestedGroupObj.DisplayName)'" -Level Debug
+                                        try {
+                                            $nestedDetail = Get-SPOSiteGroup -Site $SiteUrl -Group $nestedGroupObj.DisplayName -ErrorAction Stop
+                                            foreach ($nestedMember in $nestedDetail.Users) {
                                                 if ([string]::IsNullOrWhiteSpace($nestedMember)) { continue }
                                                 if ($nestedMember -like "*spocrwl*" -or $nestedMember -like "*app@sharepoint*" -or
                                                     $nestedMember -like "SHAREPOINT\*" -or $nestedMember -like "c:0-.f|rolemanager|*") { continue }
@@ -661,15 +722,16 @@ function Get-SPOSiteUsers {
                                         } catch {
                                             Write-Log "        Could not expand nested group '$($nestedGroupObj.DisplayName)': $($_.Exception.Message)" -Level Debug
                                         }
-                                } else {
-                                    Write-Log "      GUID not found in lookup map: $memberLogin" -Level Warning
+                                    } else {
+                                        Write-Log "      GUID not found in lookup map: $memberLogin" -Level Warning
+                                    }
                                 }
                                 continue
                             }
 
                             # Handle Everyone groups - add as special warning entries
                             if ($memberLogin -eq "Everyone" -or $memberLogin -eq "Everyone except external users" -or $memberLogin -like "*spo-grid-all-users/*") {
-                                $everyoneLabel = if ($memberLogin -eq "Everyone") { "⚠️ Everyone (All Users Including External)" } else { "⚠️ Everyone Except External Users" }
+                                $everyoneLabel = if ($memberLogin -eq "Everyone") { "[!] Everyone (All Users Including External)" } else { "[!] Everyone Except External Users" }
                                 if (Add-UserEntry -DisplayName $everyoneLabel -Email "All tenant users" -Role "Broad Access" `
                                     -IsSiteAdmin $false -GroupMembership $group.Title `
                                     -IsExternal $false -LoginName $memberLogin) {
@@ -728,10 +790,10 @@ function Get-SPOSiteUsers {
                 if ($user.LoginName -like "*spocrwl*") { continue }
                 if ($user.LoginName -like "*app@sharepoint*") { continue }
                 if ($user.LoginName -like "SHAREPOINT\*") { continue }
-                if ($user.LoginName -eq "Everyone" -or $user.LoginName -eq "Everyone except external users") { continue }
-                if ($user.LoginName -like "c:0(.s|true*") { continue }
-                if ($user.LoginName -like "c:0-.f|rolemanager|*") { continue }
-                
+                if ($user.LoginName -like "*\spsearch") { continue }
+                if ($user.LoginName -like "NT Service\*") { continue }
+                if ($user.LoginName -like "NT AUTHORITY\*") { continue }
+
                 # Skip if this is a SharePoint group (we already expanded those above)
                 if (Test-IsSharePointGroup -User $user -SiteName $siteName) {
                     continue
@@ -756,20 +818,41 @@ function Get-SPOSiteUsers {
                         $ownerCount++
                     }
                 }
-                # Include users with direct permissions (not just via groups)
-                elseif (-not $user.Groups -or $user.Groups.Count -eq 0) {
+                # Include users with direct permissions who weren't already added via groups
+                # The Add-UserEntry function will automatically skip users we already processed
+                else {
                     $displayName = $user.DisplayName
                     if ([string]::IsNullOrWhiteSpace($displayName)) {
                         $displayName = Get-EmailFromLoginName -LoginName $user.LoginName
                     }
-                    
+
                     $email = Get-EmailFromLoginName -LoginName $user.LoginName
                     $isExternal = $user.LoginName -like "*#ext#*"
-                    
-                    if (Add-UserEntry -DisplayName $displayName -Email $email -Role "Direct Access" `
-                        -IsSiteAdmin $false -GroupMembership "Direct Permission" `
-                        -IsExternal $isExternal -LoginName $user.LoginName) {
-                        $visitorCount++
+
+                    # Check if this is an "Everyone" group by DisplayName or LoginName
+                    if ($displayName -eq "Everyone" -or $user.LoginName -eq "Everyone" -or $user.LoginName -like "c:0(.s|true*") {
+                        # Add as Broad Access warning instead of Direct Access
+                        if (Add-UserEntry -DisplayName "[!] Everyone (All Users Including External)" -Email "All tenant users" -Role "Broad Access" `
+                            -IsSiteAdmin $false -GroupMembership "Direct Permission" `
+                            -IsExternal $false -LoginName $user.LoginName) {
+                            $visitorCount++
+                        }
+                    }
+                    elseif ($displayName -eq "Everyone except external users" -or $user.LoginName -eq "Everyone except external users" -or $user.LoginName -like "c:0-.f|rolemanager|spo-grid-all-users/*") {
+                        # Add as Broad Access warning instead of Direct Access
+                        if (Add-UserEntry -DisplayName "[!] Everyone Except External Users" -Email "All internal users" -Role "Broad Access" `
+                            -IsSiteAdmin $false -GroupMembership "Direct Permission" `
+                            -IsExternal $false -LoginName $user.LoginName) {
+                            $visitorCount++
+                        }
+                    }
+                    else {
+                        # Try to add as Direct Access - will be skipped if already added via group
+                        if (Add-UserEntry -DisplayName $displayName -Email $email -Role "Direct Access" `
+                            -IsSiteAdmin $false -GroupMembership "Direct Permission" `
+                            -IsExternal $isExternal -LoginName $user.LoginName) {
+                            $visitorCount++
+                        }
                     }
                 }
             }
@@ -1737,7 +1820,7 @@ a:hover { text-decoration: underline; }
                     "Owner" { "<span class='badge badge-warning'>Owner</span>" }
                     "Member" { "<span class='badge badge-info'>Member</span>" }
                     "Visitor" { "<span class='badge badge-success'>Visitor</span>" }
-                    "Broad Access" { "<span class='badge badge-danger' style='font-weight:700'>⚠️ BROAD ACCESS</span>" }
+                    "Broad Access" { "<span class='badge badge-danger' style='font-weight:700'>[!] BROAD ACCESS</span>" }
                     default { "<span class='badge'>" + (Get-HtmlSafeString $member.Role) + "</span>" }
                 }
                 $extHtml = if ($member.IsExternal) { "<span class='badge badge-danger'>Yes</span>" } else { "" }
@@ -1984,7 +2067,7 @@ $folderCount folders | $librarySize total | $libraryPctOfTotal% of all storage
 </div>
 <div class="footer">
 <div class="tagline">${($Script:Branding.Tagline)}</div>
-<p>Generated by ${($Script:Branding.CompanyName)} SharePoint Security Report v3.2</p>
+<p>Generated by ${($Script:Branding.CompanyName)} SharePoint Security Report v3.3</p>
 <p>${($Script:ReportDate)}</p>
 </div>
 <script>
@@ -2018,7 +2101,7 @@ function Invoke-SPOSecurityReport {
     
     Write-Host ""
     Write-Host "======================================================================" -ForegroundColor DarkYellow
-    Write-Host "     SharePoint Online Security & Usage Report Tool v3.1             " -ForegroundColor DarkYellow
+    Write-Host "     SharePoint Online Security & Usage Report Tool v3.3             " -ForegroundColor DarkYellow
     Write-Host "     $($Script:Branding.CompanyName) - $($Script:Branding.Tagline)                      " -ForegroundColor DarkYellow
     Write-Host "======================================================================" -ForegroundColor DarkYellow
     Write-Host ""
