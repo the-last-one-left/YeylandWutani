@@ -1,5 +1,5 @@
 # Automation
-PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, profile management, and file management automation.
+PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, profile management, email infrastructure, and file management automation.
 
 ---
 
@@ -10,6 +10,12 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 | Script | Description |
 |--------|-------------|
 | `Set-ServerBaseline.ps1` | Comprehensive server baseline automation for MSP deployments. Configures ConnectWise Control agent, hardware drivers (Dell DSU/HP SPP), Windows Terminal, PowerShell 7, NTP, power management, Windows Update, Remote Desktop, security logging, and event logs. Supports IT247.net hosted Control and embedded agent deployment. |
+
+### Email Infrastructure
+
+| Script | Description |
+|--------|-------------|
+| `Install-SMTPRelay.ps1` | Single-file SMTP relay installer for forwarding email from devices to Microsoft 365 via Graph API. Supports legacy devices (printers, scanners, LOB apps) that can't use modern auth. Optionally creates Entra ID app registration, configures SMTP authentication, IP-based access control, and client secret expiry reminders. Runs as Windows service via NSSM. |
 
 ### Software Deployment
 
@@ -48,6 +54,240 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 |--------|-------------|
 | `Convert-LegacyExcel.ps1` | Batch converts .xls files to .xlsx format |
 | `Convert-LegacyWord.ps1` | Batch converts .doc files to .docx format |
+
+---
+
+## SMTP Relay Installation (Install-SMTPRelay.ps1)
+
+Single-file installer that deploys an SMTP relay service for forwarding email from legacy devices to Microsoft 365 via Graph API. Ideal for printers, scanners, multifunction devices, and line-of-business applications that can't use modern authentication.
+
+### Architecture
+
+```
+Device (Scanner/Printer/App)
+    ↓ SMTP (plaintext, port 25)
+Windows Server Running Relay
+    ↓ HTTPS/OAuth2 (Graph API)
+Microsoft 365
+```
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Single-File Deployment** | All components embedded (relay script, uninstaller, service manager) |
+| **Entra ID Integration** | Optionally creates app registration with Mail.Send permission |
+| **SMTP Authentication** | Optional username/password auth for additional security |
+| **IP Access Control** | Restrict relay access by IP address or CIDR range |
+| **Secret Expiry Alerts** | Email reminder 1 month before client secret expires |
+| **Windows Service** | Runs as service via NSSM with auto-restart on failure |
+| **No TLS Required** | Accepts plaintext SMTP from devices (relay-to-M365 uses HTTPS) |
+| **Upgrade Support** | Preserves configuration when upgrading to newer versions |
+
+### Installation Modes
+
+| Mode | Use Case | Configuration |
+|------|----------|---------------|
+| **Fresh Install** | New deployment | Creates service, app registration (optional), configuration |
+| **Upgrade** | Update existing installation | Preserves config, updates scripts, restarts service |
+| **Uninstall** | Complete removal | Removes service, firewall rules, optionally preserves logs/config |
+
+### Usage Examples
+
+```powershell
+# Standard installation (creates Entra app automatically)
+.\Install-SMTPRelay.ps1
+
+# Custom service name and install path
+.\Install-SMTPRelay.ps1 -ServiceName "Company SMTP Relay" -InstallPath "D:\Services\SMTPRelay"
+
+# Custom SMTP port (non-standard)
+.\Install-SMTPRelay.ps1 -SmtpPort 2525
+
+# Skip app registration (use existing Entra app)
+.\Install-SMTPRelay.ps1 -SkipAppRegistration
+
+# Upgrade existing installation
+# Installer detects existing install and offers upgrade option automatically
+.\Install-SMTPRelay.ps1
+```
+
+### Installation Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-ServiceName` | Windows service display name | `SMTP Relay` |
+| `-AppName` | Entra ID application name | Same as ServiceName |
+| `-InstallPath` | Installation directory | `C:\SMTPRelay` |
+| `-SmtpPort` | SMTP listen port | `25` |
+| `-SkipAppRegistration` | Use existing Entra app (manual config) | False |
+
+### Entra ID App Registration
+
+The installer can automatically create an Entra ID app registration with the required permissions:
+
+| Permission | Type | Purpose |
+|------------|------|---------|
+| `Mail.Send` | Application | Send email as any user in the organization |
+
+**Automatic Creation Requirements:**
+- Global Administrator or Application Administrator account
+- Microsoft.Graph PowerShell module (auto-installed if missing)
+
+**Manual Configuration:**
+1. Azure Portal > Entra ID > App registrations > New registration
+2. Add API permission: Microsoft Graph > Application > Mail.Send
+3. Grant admin consent
+4. Create client secret (save the value)
+5. Use `-SkipAppRegistration` and provide tenant ID, client ID, and secret when prompted
+
+### Configuration Options
+
+The installer prompts for the following settings during installation:
+
+| Setting | Description | Security Impact |
+|---------|-------------|-----------------|
+| **Send-As Address** | Email address for outbound messages (user, shared mailbox, or distribution list) | None |
+| **Force Send-As** | Override device From address with configured address | Recommended |
+| **SMTP Authentication** | Require username/password from devices | Optional additional security layer |
+| **IP Access Control** | Whitelist of allowed IP addresses or CIDR ranges | Primary security mechanism |
+| **Secret Expiry Reminder** | Email alert 1 month before client secret expires | Prevents service disruption |
+
+### Device Configuration
+
+Configure devices to use the relay with these settings:
+
+| Setting | Value | Notes |
+|---------|-------|-------|
+| **SMTP Server** | Server hostname or IP address | Use FQDN for DNS resolution |
+| **SMTP Port** | 25 (or custom port) | Must match relay configuration |
+| **Authentication** | Username/password if enabled | Optional, disabled by default |
+| **Encryption** | None / Disabled | TLS/STARTTLS not supported |
+| **From Address** | Any valid email address | Overridden if Force Send-As enabled |
+
+**Important:** The relay accepts plaintext SMTP from devices. Relay-to-M365 communication uses HTTPS (Graph API) and is always encrypted. Deploy the relay on a trusted internal network only.
+
+### Security Recommendations
+
+| Recommendation | Implementation |
+|----------------|----------------|
+| **Restrict Access** | Configure IP ACL to allow only known device IPs |
+| **Enable SMTP Auth** | Add username/password requirement for extra security |
+| **Limit Send-As Scope** | Use Application Access Policy to restrict app to specific mailbox |
+| **Monitor Logs** | Review relay logs regularly for unauthorized attempts |
+| **Internal Network** | Never expose relay directly to the Internet |
+| **Firewall Rules** | Restrict port 25 to internal network only |
+
+### Application Access Policy (Recommended)
+
+By default, the app can send email as any mailbox in the tenant. Restrict it to the relay mailbox only:
+
+```powershell
+# Connect to Exchange Online PowerShell
+Connect-ExchangeOnline
+
+# Restrict app to relay mailbox only
+New-ApplicationAccessPolicy `
+    -AppId "YOUR-CLIENT-ID" `
+    -PolicyScopeGroupId "relay@contoso.com" `
+    -AccessRight RestrictAccess `
+    -Description "Restrict SMTP Relay to relay mailbox only"
+
+# Test the policy
+Test-ApplicationAccessPolicy `
+    -Identity "relay@contoso.com" `
+    -AppId "YOUR-CLIENT-ID"
+```
+
+### Post-Installation Management
+
+| Task | Command |
+|------|---------|
+| **Check Service Status** | `Get-Service "SMTP Relay"` |
+| **Restart Service** | `Restart-Service "SMTP Relay"` |
+| **View Today's Log** | `Get-Content "C:\SMTPRelay\Logs\SMTPRelay_YYYYMMDD.log" -Tail 50` |
+| **Edit Configuration** | `notepad "C:\SMTPRelay\config.json"` |
+| **Test Relay** | `Send-MailMessage -SmtpServer localhost -Port 25 -From "test@test.com" -To "you@contoso.com" -Subject "Test" -Body "Test message"` |
+| **Uninstall** | `C:\SMTPRelay\Uninstall-SMTPRelay.ps1` |
+
+### Configuration File (config.json)
+
+After installation, edit `C:\SMTPRelay\config.json` to modify settings:
+
+| Setting | Description | Default |
+|---------|-------------|---------|
+| `TenantId` | Entra ID tenant ID | From installation |
+| `ClientId` | Entra app client ID | From installation |
+| `ClientSecret` | Client secret value | From installation |
+| `SendAsAddress` | Relay sender address | From installation |
+| `ForceSendAs` | Override device From address | `true` |
+| `SmtpPort` | SMTP listen port | `25` |
+| `SmtpAuthEnabled` | Require SMTP authentication | `false` |
+| `SmtpAuthUsername` | SMTP auth username | Empty |
+| `SmtpAuthPassword` | SMTP auth password | Empty |
+| `AllowedClients` | IP whitelist (array) | Private ranges |
+| `LogLevel` | Logging verbosity | `INFO` |
+| `LogRetentionDays` | Days to keep logs | `30` |
+| `ClientSecretExpiry` | Secret expiration date | From installation |
+| `ReminderEmail` | Alert destination | From installation |
+
+**Note:** Restart the service after modifying the configuration file.
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| **Service won't start** | Check logs in `C:\SMTPRelay\Logs`, verify Entra credentials in config.json |
+| **Port 25 in use** | Stop conflicting service (IIS SMTP) or use different port with `-SmtpPort` |
+| **Device can't connect** | Verify IP in AllowedClients list, check firewall rules |
+| **Messages not delivered** | Check Graph API token in logs, verify Mail.Send permission granted |
+| **SMTP auth failures** | Enable DEBUG logging: set `LogLevel` to `DEBUG` in config.json and restart service |
+| **Secret expired** | Create new secret in Azure Portal, update config.json, restart service |
+
+### Upgrade Process
+
+When running the installer on a system with an existing installation:
+
+1. Installer detects existing service and configuration
+2. Offers three options: **Upgrade**, **Uninstall**, or **Fresh Install**
+3. **Upgrade mode:**
+   - Stops service
+   - Preserves existing config.json
+   - Updates relay script and uninstaller
+   - Restarts service with new scripts
+   - Retains all logs and settings
+
+### Client Secret Expiry Reminder
+
+The relay can send an email reminder when the client secret is approaching expiration:
+
+| Setting | Behavior |
+|---------|----------|
+| **Trigger** | Checked at service startup |
+| **Timing** | One-time alert sent when <30 days until expiry |
+| **Recipients** | Email address configured during installation |
+| **Delivery** | Sent via Graph API using relay credentials |
+| **Persistence** | Flag saved to config.json to prevent duplicate alerts |
+
+### Embedded Components
+
+The installer is completely self-contained with these embedded components:
+
+| Component | Purpose | Source |
+|-----------|---------|--------|
+| **Relay Script** | Core SMTP-to-Graph relay logic | Embedded PowerShell |
+| **Uninstaller** | Service removal script | Embedded PowerShell |
+| **NSSM** | Service manager (Non-Sucking Service Manager) | Downloaded from nssm.cc |
+
+### Supported Scenarios
+
+| Scenario | Configuration |
+|----------|---------------|
+| **Printer/Scanner Email** | Default settings, no SMTP auth required |
+| **LOB Application** | Enable SMTP auth for credential-based security |
+| **Monitoring Alerts** | IP ACL + Force Send-As for consistent sender |
+| **Multi-Site Relay** | Install on each site with local IP ranges in ACL |
+| **High Security** | SMTP auth + strict IP ACL + Application Access Policy |
 
 ---
 
@@ -440,6 +680,7 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 
 | Script | Requirements |
 |--------|--------------|
+| `Install-SMTPRelay.ps1` | PowerShell 5.1+, Administrator rights, Internet access (NSSM download), Microsoft.Graph module (for auto app creation) |
 | `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module (for AD query), PSExec.exe, Admin rights on targets |
 | `Reset-UserProfile.ps1` | PowerShell 5.1+, Local Administrator rights, User must be logged off |
 | `Get-SPOMigrationReadiness.ps1` | PowerShell 5.1+, Read access to source paths |
