@@ -1,0 +1,33 @@
+[Unit]
+Description=Yeyland Wutani Network Discovery Pi - Full Network Discovery
+Documentation=https://github.com/the-last-one-left/YeylandWutani
+After=network-online.target initial-checkin.service
+Wants=network-online.target
+# Wait for initial check-in to succeed first
+Requires=initial-checkin.service
+
+[Service]
+Type=simple
+User=network-discovery
+Group=network-discovery
+WorkingDirectory=/opt/network-discovery
+ExecStart=/opt/network-discovery/venv/bin/python3 /opt/network-discovery/bin/discovery-main.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nd-discovery
+TimeoutStartSec=1200
+Restart=no
+
+# Grant raw socket access for nmap/arp-scan
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/network-discovery/logs /opt/network-discovery/data
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

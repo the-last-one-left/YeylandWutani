@@ -1,0 +1,56 @@
+{
+  "graph_api": {
+    "tenant_id": "YOUR_TENANT_ID",
+    "client_id": "YOUR_CLIENT_ID",
+    "client_secret": "YOUR_CLIENT_SECRET",
+    "from_email": "sales-discovery@yourcompany.com",
+    "to_email": "sales-team@yourcompany.com",
+    "cc_emails": []
+  },
+  "network_discovery": {
+    "scan_timeout": 600,
+    "max_threads": 50,
+    "port_scan_top_ports": 100,
+    "enable_dns_enumeration": true,
+    "enable_dhcp_detection": true,
+    "enable_arp_scan": true,
+    "enable_traceroute": true,
+
+    "enable_service_versions": true,
+    "enable_os_detection": true,
+    "enable_nse_scripts": true,
+    "nse_script_timeout": "15s",
+
+    "enable_snmp_enhanced": true,
+    "snmp_community_strings": ["public", "private", "community", "admin", "cisco", "snmp"],
+    "snmp_timeout": 2,
+    "snmp_retries": 1,
+
+    "enable_banner_grab": true,
+    "banner_grab_timeout": 3,
+    "banner_grab_bytes": 256,
+
+    "enable_multi_subnet": true,
+    "multi_subnet_candidates": [
+      "192.168.0.1", "192.168.1.1", "192.168.2.1",
+      "10.0.0.1", "10.0.0.254", "10.0.1.1", "10.1.0.1",
+      "172.16.0.1", "172.16.1.1"
+    ],
+
+    "enable_public_ip_lookup": true,
+    "enable_gateway_fingerprint": true,
+    "enable_ad_probing": true,
+    "ad_probe_timeout": 10
+  },
+  "reporting": {
+    "company_name": "Pacific Office Automation Inc.",
+    "company_color": "#00A0D9",
+    "tagline": "Problem Solved.",
+    "include_raw_data": false
+  },
+  "system": {
+    "device_name": "NetDiscovery-Pi",
+    "log_level": "INFO",
+    "cleanup_old_scans_days": 7
+  }
+}

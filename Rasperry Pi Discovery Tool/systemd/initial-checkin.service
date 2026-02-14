@@ -1,0 +1,32 @@
+[Unit]
+Description=Yeyland Wutani Network Discovery Pi - Initial Check-In
+Documentation=https://github.com/the-last-one-left/YeylandWutani
+# Run after network is fully up with a valid IP/route
+After=network-online.target
+Wants=network-online.target
+# Must run before the full discovery service
+Before=network-discovery.service
+ConditionPathExists=!/opt/network-discovery/data/.checkin_complete
+
+[Service]
+Type=oneshot
+User=network-discovery
+Group=network-discovery
+WorkingDirectory=/opt/network-discovery
+ExecStart=/opt/network-discovery/venv/bin/python3 /opt/network-discovery/bin/initial-checkin.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nd-checkin
+TimeoutStartSec=300
+RemainAfterExit=yes
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/network-discovery/logs /opt/network-discovery/data
+ProtectHome=yes
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+[Install]
+WantedBy=multi-user.target

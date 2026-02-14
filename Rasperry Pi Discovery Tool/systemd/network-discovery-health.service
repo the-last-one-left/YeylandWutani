@@ -1,0 +1,26 @@
+[Unit]
+Description=Yeyland Wutani Network Discovery Pi - Weekly Health Check
+Documentation=https://github.com/the-last-one-left/YeylandWutani
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=network-discovery
+Group=network-discovery
+WorkingDirectory=/opt/network-discovery
+ExecStart=/opt/network-discovery/venv/bin/python3 /opt/network-discovery/bin/health-check.py
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=nd-healthcheck
+TimeoutStartSec=120
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/network-discovery/logs /opt/network-discovery/data
+ProtectHome=yes
+
+[Install]
+WantedBy=multi-user.target

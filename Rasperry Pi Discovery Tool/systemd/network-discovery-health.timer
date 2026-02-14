@@ -1,0 +1,15 @@
+[Unit]
+Description=Yeyland Wutani Network Discovery Pi - Weekly Health Check Timer
+Documentation=https://github.com/the-last-one-left/YeylandWutani
+
+[Timer]
+# Run every Monday at 08:00 local time
+OnCalendar=Mon 08:00:00
+# If the Pi was off at the scheduled time, run it on next boot
+Persistent=true
+# Randomize start within 10 minutes to avoid thundering herd if multiple Pis run together
+RandomizedDelaySec=600
+Unit=network-discovery-health.service
+
+[Install]
+WantedBy=timers.target

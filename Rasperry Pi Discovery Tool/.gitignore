@@ -1,0 +1,56 @@
+# Yeyland Wutani - Network Discovery Pi
+# .gitignore
+
+# Credentials - NEVER commit these
+config/config.json
+config/.env
+*.env
+.env.*
+!.env.template
+
+# Token cache
+data/.token_cache.json
+data/*.json
+data/*.csv
+data/*.gz
+
+# Logs
+logs/*.log
+logs/*.log.*
+!logs/.gitkeep
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environment (if created locally for testing)
+venv/
+.venv/
+env/
+
+# OS artifacts (Windows)
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# OS artifacts (macOS)
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor artifacts
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Installer generated files
+*.log
+nohup.out

@@ -1,0 +1,37 @@
+# Yeyland Wutani - Network Discovery Pi
+# Force LF line endings for all shell scripts and Python files
+# This ensures the Pi can execute scripts checked out from Windows
+
+* text=auto
+
+# Shell scripts must have LF - CRLF will break bash on Linux/Pi
+*.sh text eol=lf
+*.bash text eol=lf
+
+# Python files - LF
+*.py text eol=lf
+
+# Service files - LF
+*.service text eol=lf
+
+# Config/template files - LF
+*.json text eol=lf
+*.template text eol=lf
+*.env text eol=lf
+*.conf text eol=lf
+
+# Markdown - allow platform native (CRLF on Windows is fine for reading)
+*.md text eol=lf
+
+# YAML
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Keep binary files as-is
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.gz binary
+*.zip binary
