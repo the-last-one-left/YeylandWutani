@@ -104,7 +104,7 @@ fi
 echo ""
 echo -e "${COLOR_YELLOW}The following system packages were installed for Network Discovery Pi:${COLOR_RESET}"
 echo "  nmap arp-scan fping traceroute dnsutils net-tools snmp ldap-utils"
-echo "  iw wireless-tools avahi-utils logrotate"
+echo "  iw wireless-tools avahi-utils whois logrotate"
 echo ""
 echo -n "Remove these packages? (yes/no): "
 read -r REMOVE_PKGS
@@ -112,7 +112,7 @@ if [[ "${REMOVE_PKGS}" == "yes" ]]; then
     echo "Removing packages..."
     apt-get remove -y --purge \
         nmap arp-scan fping traceroute dnsutils net-tools snmp ldap-utils \
-        iw wireless-tools avahi-utils 2>/dev/null || true
+        iw wireless-tools avahi-utils whois 2>/dev/null || true
     apt-get autoremove -y 2>/dev/null || true
     echo -e "  ${COLOR_GREEN}Packages removed.${COLOR_RESET}"
 else

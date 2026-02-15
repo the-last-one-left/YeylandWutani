@@ -13,8 +13,8 @@ A headless Raspberry Pi tool for MSP sales engineers. Deploy on a customer LAN, 
 | Phase | Description |
 |-------|-------------|
 | **Check-In** | Emails the Pi's IP, MAC, subnet, gateway, and DNS within minutes of connecting |
-| **Scan** | Full 13-phase network discovery: reconnaissance → host discovery → port scan → service enum → topology → security → WiFi → mDNS → UPnP/SSDP → DHCP → NTP → 802.1X/NAC |
-| **Report** | Professional HTML email report with Pacific Office Automation branding, device table, WiFi analysis, DHCP/NTP infrastructure, security observations, and compressed CSV + JSON attachments (up to 25 MB) |
+| **Scan** | Full 14-phase network discovery: reconnaissance → host discovery → port scan → service enum → topology → security → WiFi → mDNS → UPnP/SSDP → DHCP → NTP → 802.1X/NAC → OSINT |
+| **Report** | Professional HTML email report with Pacific Office Automation branding, device table, WiFi analysis, DHCP/NTP infrastructure, external attack surface, email security posture, and compressed CSV + JSON attachments (up to 25 MB) |
 
 ---
 
@@ -67,14 +67,15 @@ Boot
       └─▶ discovery-main.py
            ├─ Validate Graph API credentials
            ├─ Send "Scan Starting" notification
-           ├─ Run network-scanner.py (13 phases)
+           ├─ Run network-scanner.py (14 phases)
            │   ├─ Phases 1–6: Host discovery, ports, services, security
            │   ├─ Phase 7:    WiFi enumeration + channel analysis
            │   ├─ Phase 8:    mDNS / Bonjour service discovery
            │   ├─ Phase 9:    UPnP / SSDP device discovery
            │   ├─ Phase 10:   DHCP scope analysis (rogue detection)
            │   ├─ Phase 11:   NTP server detection
-           │   └─ Phase 12:   802.1X / NAC detection
+           │   ├─ Phase 12:   802.1X / NAC detection
+           │   └─ Phase 13:   OSINT / external reconnaissance
            ├─ Build HTML report + compressed CSV/JSON (.gz)
            └─ Send report email via Graph API (up to 25 MB)
 ```
@@ -140,6 +141,12 @@ All settings live in `/opt/network-discovery/config/config.json`.
 | `network_discovery.enable_dhcp_analysis` | true | DHCP scope analysis + rogue detection |
 | `network_discovery.enable_ntp_detection` | true | NTP server detection |
 | `network_discovery.enable_nac_detection` | true | 802.1X / NAC detection |
+| `network_discovery.enable_osint` | true | OSINT / external reconnaissance (WHOIS, Shodan, DNS, crt.sh) |
+| `network_discovery.osint_timeout` | 8 | Per-query HTTP timeout for OSINT lookups (seconds) |
+| `network_discovery.enable_shodan_internetdb` | true | Shodan InternetDB external attack surface (free, no API key) |
+| `network_discovery.enable_crtsh_lookup` | true | crt.sh certificate transparency subdomain discovery |
+| `network_discovery.enable_dns_security` | true | MX / SPF / DKIM / DMARC email security analysis |
+| `network_discovery.enable_whois_lookup` | true | WHOIS / RDAP lookup on public IP |
 | `reporting.company_name` | Pacific Office Automation Inc. | Report branding |
 | `reporting.company_color` | #00A0D9 | Report accent color |
 | `system.device_name` | NetDiscovery-Pi | Device identifier in emails |
@@ -204,8 +211,12 @@ sudo systemctl start initial-checkin.service
 - DHCP analysis sends a single DISCOVER packet—does not disrupt existing leases
 - Report attachments are gzip-compressed to reduce email size
 - Email delivery supports up to 25 MB via Graph API chunked upload session
+- OSINT lookups use only **free, public APIs** (Shodan InternetDB, RDAP, crt.sh)—no API keys stored or required
+- OSINT queries are limited to the organization's own public IP and derived domains—no third-party reconnaissance
+- DNS security checks query only public DNS records (MX, TXT for SPF/DKIM/DMARC)
 - Reports include a disclaimer noting authorized use
 - All Graph API communication is over TLS
+- All external OSINT queries are over HTTPS
 
 ---
 

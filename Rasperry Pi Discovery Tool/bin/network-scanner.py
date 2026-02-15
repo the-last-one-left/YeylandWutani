@@ -3,7 +3,7 @@
 Yeyland Wutani - Network Discovery Pi
 network-scanner.py - Comprehensive Network Discovery Engine
 
-Thirteen-phase discovery:
+Fourteen-phase discovery:
   Phase 1:   Network Reconnaissance
   Phase 1b:  Alternate Subnet Detection (probe common gateways)
   Phase 2:   Host Discovery (ARP + ping sweep, including additional subnets)
@@ -17,6 +17,7 @@ Thirteen-phase discovery:
   Phase 10:  DHCP Scope Analysis (rogue server detection)
   Phase 11:  NTP Server Detection
   Phase 12:  802.1X / NAC Detection
+  Phase 13:  OSINT / External Reconnaissance
 """
 
 import concurrent.futures
@@ -117,6 +118,13 @@ DEFAULT_CONFIG = {
     "ntp_timeout": 3,
     # 802.1X / NAC detection
     "enable_nac_detection": True,
+    # ── OSINT / External Reconnaissance ───────────────────────────────────
+    "enable_osint": True,
+    "osint_timeout": 8,          # per-query HTTP timeout
+    "enable_shodan_internetdb": True,  # free, no API key
+    "enable_crtsh_lookup": True,       # certificate transparency
+    "enable_dns_security": True,       # MX, SPF, DKIM, DMARC analysis
+    "enable_whois_lookup": True,       # WHOIS via RDAP / whois CLI
 }
 
 
@@ -2460,6 +2468,498 @@ def phase12_nac_detection(config: dict) -> dict:
     }
 
 
+# ── Phase 13: OSINT / External Reconnaissance ──────────────────────────────
+
+
+def _derive_domains(recon: dict, hosts: list, dhcp_results: dict) -> list:
+    """Derive likely company domain names from scan data.
+
+    Sources (in priority order):
+      1. AD domain names from LDAP probes (e.g. corp.contoso.com → contoso.com)
+      2. DHCP domain name (e.g. office.local → skip, but office.acme.com → acme.com)
+      3. Public IP reverse hostname from ipinfo.io
+      4. SSL certificate common names / SANs from HTTPS services
+    Returns a deduplicated list of domain strings.
+    """
+    domains = set()
+    internal_tlds = {".local", ".internal", ".lan", ".home", ".corp", ".localdomain", ".test"}
+
+    def _is_public(d: str) -> bool:
+        return d and not any(d.endswith(tld) for tld in internal_tlds)
+
+    def _extract_registrable(fqdn: str) -> str:
+        """Best-effort extraction of the registrable domain.
+        e.g. 'mail.corp.contoso.com' → 'contoso.com'."""
+        parts = fqdn.strip(".").split(".")
+        if len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return fqdn
+
+    # 1. AD domain names
+    for host in hosts:
+        ad = host.get("ad_info") or {}
+        dn = ad.get("domain_name", "")
+        if dn and _is_public(dn):
+            domains.add(_extract_registrable(dn))
+
+    # 2. DHCP domain
+    for srv in (dhcp_results or {}).get("dhcp_servers", []):
+        dn = srv.get("domain_name", "")
+        if dn and _is_public(dn):
+            domains.add(_extract_registrable(dn))
+
+    # 3. Reverse hostname from public IP
+    pub = recon.get("public_ip_info", {})
+    rhost = pub.get("hostname", "")
+    if rhost and _is_public(rhost):
+        domains.add(_extract_registrable(rhost))
+
+    # 4. SSL cert common names (harvested during service enum)
+    for host in hosts:
+        for svc in host.get("services", {}).values():
+            ssl_cn = svc.get("ssl_cn", "")
+            if ssl_cn and _is_public(ssl_cn) and not ssl_cn.startswith("*"):
+                domains.add(_extract_registrable(ssl_cn))
+            for san in svc.get("ssl_sans", []):
+                if san and _is_public(san) and not san.startswith("*"):
+                    domains.add(_extract_registrable(san))
+
+    return sorted(domains)
+
+
+def _whois_rdap(ip: str, timeout: int = 8) -> dict:
+    """Query RDAP (Registration Data Access Protocol) for IP WHOIS data.
+    Falls back to whois CLI if RDAP fails.
+    Returns dict with org, netname, cidr, country, etc."""
+    result = {
+        "ip": ip,
+        "organization": "",
+        "net_name": "",
+        "cidr": "",
+        "country": "",
+        "description": "",
+    }
+
+    # Try RDAP first (JSON, no parsing headaches)
+    try:
+        url = f"https://rdap.arin.net/registry/ip/{ip}"
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/rdap+json",
+                          "User-Agent": "YeylandWutani-NetworkDiscovery/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+
+        result["net_name"] = data.get("name", "")
+        result["cidr"] = data.get("handle", "")
+
+        # Walk entities for org / registrant
+        for entity in data.get("entities", []):
+            vcard = entity.get("vcardArray", [None, []])
+            if isinstance(vcard, list) and len(vcard) > 1:
+                for item in vcard[1]:
+                    if isinstance(item, list) and len(item) >= 4:
+                        if item[0] == "fn":
+                            result["organization"] = str(item[3])
+                            break
+            roles = entity.get("roles", [])
+            if "registrant" in roles or "abuse" in roles:
+                # Prefer registrant org
+                inner_vcard = entity.get("vcardArray", [None, []])
+                if isinstance(inner_vcard, list) and len(inner_vcard) > 1:
+                    for item in inner_vcard[1]:
+                        if isinstance(item, list) and len(item) >= 4:
+                            if item[0] == "fn":
+                                result["organization"] = str(item[3])
+                                break
+
+        # Country from links or events
+        for link in data.get("links", []):
+            href = link.get("href", "")
+            if "ripe.net" in href:
+                result["country"] = "EU (RIPE NCC)"
+            elif "apnic.net" in href:
+                result["country"] = "APNIC"
+            elif "arin.net" in href:
+                result["country"] = "US (ARIN)"
+            elif "lacnic.net" in href:
+                result["country"] = "LACNIC"
+            elif "afrinic.net" in href:
+                result["country"] = "AFRINIC"
+
+        if result["organization"]:
+            return result
+
+    except Exception as e:
+        logger.debug(f"RDAP lookup failed for {ip}: {e}")
+
+    # Fallback: whois CLI
+    try:
+        out = subprocess.run(
+            ["whois", ip], capture_output=True, text=True, timeout=timeout,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                lower = line.lower()
+                if lower.startswith("orgname:") or lower.startswith("org-name:"):
+                    result["organization"] = line.split(":", 1)[1].strip()
+                elif lower.startswith("netname:"):
+                    result["net_name"] = line.split(":", 1)[1].strip()
+                elif lower.startswith("cidr:"):
+                    result["cidr"] = line.split(":", 1)[1].strip()
+                elif lower.startswith("country:"):
+                    result["country"] = line.split(":", 1)[1].strip()
+                elif lower.startswith("descr:") and not result["description"]:
+                    result["description"] = line.split(":", 1)[1].strip()
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        logger.debug("whois CLI not available")
+
+    return result
+
+
+def _shodan_internetdb(ip: str, timeout: int = 8) -> dict:
+    """Query Shodan InternetDB (free, no API key) for external attack surface.
+    Returns open ports, vulns, hostnames, tags, CPEs visible from outside."""
+    result = {
+        "ip": ip,
+        "ports": [],
+        "vulns": [],
+        "hostnames": [],
+        "tags": [],
+        "cpes": [],
+    }
+    try:
+        url = f"https://internetdb.shodan.io/{ip}"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "YeylandWutani-NetworkDiscovery/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+
+        if "detail" in data and "not found" in str(data["detail"]).lower():
+            # IP not indexed by Shodan
+            return result
+
+        result["ports"] = data.get("ports", [])
+        result["vulns"] = data.get("vulns", [])
+        result["hostnames"] = data.get("hostnames", [])
+        result["tags"] = data.get("tags", [])
+        result["cpes"] = data.get("cpes", [])
+
+    except Exception as e:
+        logger.debug(f"Shodan InternetDB lookup failed for {ip}: {e}")
+
+    return result
+
+
+def _crtsh_lookup(domain: str, timeout: int = 10) -> list:
+    """Query crt.sh certificate transparency logs for subdomains.
+    Returns list of unique domain names found in certificates."""
+    subdomains = set()
+    try:
+        url = f"https://crt.sh/?q=%.{domain}&output=json"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "YeylandWutani-NetworkDiscovery/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+
+        for entry in data:
+            name_value = entry.get("name_value", "")
+            for name in name_value.split("\n"):
+                name = name.strip().lower()
+                if name and not name.startswith("*"):
+                    subdomains.add(name)
+
+        # Cap at 100 to avoid enormous results
+        return sorted(subdomains)[:100]
+
+    except Exception as e:
+        logger.debug(f"crt.sh lookup failed for {domain}: {e}")
+        return []
+
+
+def _dns_security_check(domain: str, timeout: int = 5) -> dict:
+    """Analyze MX, SPF, DKIM, DMARC records for an email domain.
+    Returns dict with email infrastructure assessment."""
+    result = {
+        "domain": domain,
+        "mx_records": [],
+        "has_spf": False,
+        "spf_record": "",
+        "has_dmarc": False,
+        "dmarc_record": "",
+        "dmarc_policy": "",
+        "has_dkim": False,
+        "email_provider": "",
+        "observations": [],
+    }
+
+    # MX records
+    try:
+        import subprocess as sp
+        out = sp.run(
+            ["dig", "+short", "MX", domain],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.strip().splitlines():
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    priority = parts[0]
+                    server = parts[1].rstrip(".")
+                    result["mx_records"].append({
+                        "priority": int(priority) if priority.isdigit() else 0,
+                        "server": server,
+                    })
+            # Detect email provider
+            mx_hosts = " ".join(m["server"].lower() for m in result["mx_records"])
+            if "protection.outlook.com" in mx_hosts or "mail.protection" in mx_hosts:
+                result["email_provider"] = "Microsoft 365"
+            elif "google.com" in mx_hosts or "googlemail.com" in mx_hosts:
+                result["email_provider"] = "Google Workspace"
+            elif "pphosted.com" in mx_hosts or "proofpoint" in mx_hosts:
+                result["email_provider"] = "Proofpoint"
+            elif "mimecast" in mx_hosts:
+                result["email_provider"] = "Mimecast"
+            elif "barracuda" in mx_hosts:
+                result["email_provider"] = "Barracuda"
+            elif result["mx_records"]:
+                result["email_provider"] = "Self-hosted / Other"
+    except Exception as e:
+        logger.debug(f"MX lookup failed for {domain}: {e}")
+
+    # SPF record (TXT)
+    try:
+        out = subprocess.run(
+            ["dig", "+short", "TXT", domain],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                cleaned = line.strip().strip('"')
+                if "v=spf1" in cleaned.lower():
+                    result["has_spf"] = True
+                    result["spf_record"] = cleaned
+                    if "-all" in cleaned:
+                        result["observations"].append("SPF: Hard fail (-all) — good")
+                    elif "~all" in cleaned:
+                        result["observations"].append("SPF: Soft fail (~all) — acceptable")
+                    elif "?all" in cleaned:
+                        result["observations"].append(
+                            "SPF: Neutral (?all) — weak, consider -all or ~all"
+                        )
+                    elif "+all" in cleaned:
+                        result["observations"].append(
+                            "SPF: Pass all (+all) — DANGEROUS, allows any sender"
+                        )
+                    break
+            if not result["has_spf"]:
+                result["observations"].append("No SPF record — email spoofing risk")
+    except Exception as e:
+        logger.debug(f"SPF lookup failed for {domain}: {e}")
+
+    # DMARC record
+    try:
+        out = subprocess.run(
+            ["dig", "+short", "TXT", f"_dmarc.{domain}"],
+            capture_output=True, text=True, timeout=timeout,
+        )
+        if out.returncode == 0:
+            for line in out.stdout.splitlines():
+                cleaned = line.strip().strip('"')
+                if "v=dmarc1" in cleaned.lower():
+                    result["has_dmarc"] = True
+                    result["dmarc_record"] = cleaned
+                    # Extract policy
+                    for part in cleaned.split(";"):
+                        part = part.strip()
+                        if part.lower().startswith("p="):
+                            result["dmarc_policy"] = part.split("=", 1)[1].strip()
+                    if result["dmarc_policy"] == "none":
+                        result["observations"].append(
+                            "DMARC: Policy 'none' — monitoring only, no enforcement"
+                        )
+                    elif result["dmarc_policy"] == "quarantine":
+                        result["observations"].append(
+                            "DMARC: Policy 'quarantine' — suspicious emails quarantined"
+                        )
+                    elif result["dmarc_policy"] == "reject":
+                        result["observations"].append(
+                            "DMARC: Policy 'reject' — strongest protection"
+                        )
+                    break
+            if not result["has_dmarc"]:
+                result["observations"].append("No DMARC record — email authentication gap")
+    except Exception as e:
+        logger.debug(f"DMARC lookup failed for {domain}: {e}")
+
+    # DKIM — check common selectors
+    dkim_selectors = ["google", "selector1", "selector2", "default", "dkim", "mail", "k1"]
+    for selector in dkim_selectors:
+        try:
+            out = subprocess.run(
+                ["dig", "+short", "TXT", f"{selector}._domainkey.{domain}"],
+                capture_output=True, text=True, timeout=timeout,
+            )
+            if out.returncode == 0 and "v=dkim1" in out.stdout.lower():
+                result["has_dkim"] = True
+                result["observations"].append(
+                    f"DKIM: Found (selector: {selector})"
+                )
+                break
+        except Exception:
+            pass
+
+    if not result["has_dkim"]:
+        result["observations"].append(
+            "DKIM: Not found on common selectors — may use custom selector"
+        )
+
+    return result
+
+
+def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
+                  config: dict) -> dict:
+    """Phase 13: OSINT / External Reconnaissance.
+
+    Leverages the public IP from Phase 1 and derived domain names to perform:
+      - WHOIS / RDAP lookup on public IP (organization, netblock)
+      - Shodan InternetDB query (external attack surface, CVEs)
+      - DNS security assessment (MX, SPF, DKIM, DMARC)
+      - crt.sh certificate transparency (subdomain discovery)
+    All lookups are free and require no API keys.
+    """
+    logger.info("[Phase 13] OSINT / External Reconnaissance...")
+    osint_timeout = config.get("osint_timeout", 8)
+
+    result = {
+        "public_ip": "",
+        "whois": {},
+        "shodan": {},
+        "domains_discovered": [],
+        "dns_security": [],
+        "crtsh_subdomains": {},
+        "company_identification": {},
+        "summary": {
+            "domains_found": 0,
+            "external_ports": 0,
+            "external_vulns": 0,
+            "subdomains_found": 0,
+            "email_provider": "",
+            "email_security_score": "",
+        },
+    }
+
+    pub_ip = recon.get("public_ip_info", {}).get("public_ip", "")
+    result["public_ip"] = pub_ip
+
+    # Derive company domains from scan data
+    domains = _derive_domains(recon, hosts, dhcp_results)
+    result["domains_discovered"] = domains
+    result["summary"]["domains_found"] = len(domains)
+    logger.info(f"  Derived {len(domains)} domain(s): {domains}")
+
+    # Compile company identification from public IP info
+    pub_info = recon.get("public_ip_info", {})
+    result["company_identification"] = {
+        "public_ip": pub_ip,
+        "isp": pub_info.get("isp", ""),
+        "city": pub_info.get("city", ""),
+        "region": pub_info.get("region", ""),
+        "country": pub_info.get("country", ""),
+        "reverse_hostname": pub_info.get("hostname", ""),
+        "domains": domains,
+    }
+
+    # WHOIS / RDAP
+    if pub_ip and config.get("enable_whois_lookup", True):
+        logger.info(f"  WHOIS/RDAP lookup for {pub_ip}...")
+        try:
+            result["whois"] = _whois_rdap(pub_ip, timeout=osint_timeout)
+            org = result["whois"].get("organization", "")
+            if org:
+                result["company_identification"]["whois_org"] = org
+                logger.info(f"  WHOIS org: {org}")
+        except Exception as e:
+            logger.error(f"  WHOIS lookup failed: {e}")
+
+    # Shodan InternetDB (free, no API key)
+    if pub_ip and config.get("enable_shodan_internetdb", True):
+        logger.info(f"  Shodan InternetDB lookup for {pub_ip}...")
+        try:
+            result["shodan"] = _shodan_internetdb(pub_ip, timeout=osint_timeout)
+            ext_ports = result["shodan"].get("ports", [])
+            ext_vulns = result["shodan"].get("vulns", [])
+            result["summary"]["external_ports"] = len(ext_ports)
+            result["summary"]["external_vulns"] = len(ext_vulns)
+            if ext_ports:
+                logger.info(f"  Shodan: {len(ext_ports)} external port(s), "
+                            f"{len(ext_vulns)} CVE(s)")
+            # Merge Shodan hostnames into domain list
+            for hostname in result["shodan"].get("hostnames", []):
+                parts = hostname.split(".")
+                if len(parts) >= 2:
+                    reg_domain = ".".join(parts[-2:])
+                    if reg_domain not in domains:
+                        domains.append(reg_domain)
+                        result["domains_discovered"] = domains
+                        result["summary"]["domains_found"] = len(domains)
+        except Exception as e:
+            logger.error(f"  Shodan lookup failed: {e}")
+
+    # DNS security assessment for each discovered domain
+    if domains and config.get("enable_dns_security", True):
+        for domain in domains[:5]:  # cap at 5 domains to avoid slow scans
+            logger.info(f"  DNS security check for {domain}...")
+            try:
+                dns_result = _dns_security_check(domain, timeout=osint_timeout)
+                result["dns_security"].append(dns_result)
+                if dns_result.get("email_provider"):
+                    result["summary"]["email_provider"] = dns_result["email_provider"]
+            except Exception as e:
+                logger.error(f"  DNS security check failed for {domain}: {e}")
+
+    # Email security score (for first domain)
+    if result["dns_security"]:
+        first = result["dns_security"][0]
+        score_parts = []
+        if first.get("has_spf"):
+            score_parts.append("SPF")
+        if first.get("has_dkim"):
+            score_parts.append("DKIM")
+        if first.get("has_dmarc"):
+            score_parts.append("DMARC")
+        if len(score_parts) == 3:
+            result["summary"]["email_security_score"] = "Strong"
+        elif len(score_parts) == 2:
+            result["summary"]["email_security_score"] = "Moderate"
+        elif len(score_parts) == 1:
+            result["summary"]["email_security_score"] = "Weak"
+        else:
+            result["summary"]["email_security_score"] = "None"
+
+    # crt.sh certificate transparency
+    total_subs = 0
+    if domains and config.get("enable_crtsh_lookup", True):
+        for domain in domains[:3]:  # cap at 3 domains
+            logger.info(f"  crt.sh lookup for {domain}...")
+            try:
+                subs = _crtsh_lookup(domain, timeout=osint_timeout + 2)
+                if subs:
+                    result["crtsh_subdomains"][domain] = subs
+                    total_subs += len(subs)
+                    logger.info(f"  crt.sh: {len(subs)} subdomain(s) for {domain}")
+            except Exception as e:
+                logger.error(f"  crt.sh lookup failed for {domain}: {e}")
+    result["summary"]["subdomains_found"] = total_subs
+
+    logger.info(f"  OSINT complete: {len(domains)} domain(s), "
+                f"{result['summary']['external_ports']} external port(s), "
+                f"{total_subs} subdomain(s)")
+    return result
+
+
 # ── Summary Statistics ─────────────────────────────────────────────────────
 
 def build_summary(recon: dict, hosts: list) -> dict:
@@ -2604,6 +3104,15 @@ def run_discovery(progress_callback=None) -> dict:
         except Exception as e:
             logger.error(f"Phase 12 (NAC) failed: {e}", exc_info=True)
 
+    # Phase 13: OSINT / External Reconnaissance
+    osint_results = {}
+    if config.get("enable_osint", True):
+        try:
+            progress("Phase 13: OSINT / External reconnaissance...")
+            osint_results = phase13_osint(recon, hosts, dhcp_results, config)
+        except Exception as e:
+            logger.error(f"Phase 13 (OSINT) failed: {e}", exc_info=True)
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
@@ -2637,6 +3146,7 @@ def run_discovery(progress_callback=None) -> dict:
         "dhcp_analysis": dhcp_results,
         "ntp": ntp_results,
         "nac": nac_results,
+        "osint": osint_results,
     }
 
     timestamp_str = start_time.strftime("%Y%m%d_%H%M%S")

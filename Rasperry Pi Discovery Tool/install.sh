@@ -130,7 +130,8 @@ install_packages() {
         ldap-utils \
         iw \
         wireless-tools \
-        avahi-utils
+        avahi-utils \
+        whois
     success "System packages installed."
 }
 
@@ -396,7 +397,13 @@ run_config_wizard() {
     "dhcp_timeout": 10,
     "enable_ntp_detection": true,
     "ntp_timeout": 3,
-    "enable_nac_detection": true
+    "enable_nac_detection": true,
+    "enable_osint": true,
+    "osint_timeout": 8,
+    "enable_shodan_internetdb": true,
+    "enable_crtsh_lookup": true,
+    "enable_dns_security": true,
+    "enable_whois_lookup": true
   },
   "reporting": {
     "company_name": "${COMPANY_NAME}",

@@ -1124,6 +1124,341 @@ def _build_infrastructure_section(
   </tr>"""
 
 
+def _build_osint_section(osint_results: dict, company_color: str) -> str:
+    """Build OSINT / External Reconnaissance report section."""
+    if not osint_results:
+        return ""
+
+    summary = osint_results.get("summary", {})
+    company = osint_results.get("company_identification", {})
+    whois = osint_results.get("whois", {})
+    shodan = osint_results.get("shodan", {})
+    dns_security = osint_results.get("dns_security", [])
+    crtsh = osint_results.get("crtsh_subdomains", {})
+
+    # Quick check: if we have essentially no data, skip the section
+    has_data = (
+        company.get("public_ip")
+        or whois.get("organization")
+        or shodan.get("ports")
+        or dns_security
+        or crtsh
+    )
+    if not has_data:
+        return ""
+
+    # ── Company Identification card ──
+    company_html = ""
+    if company.get("public_ip") or whois.get("organization"):
+        org_name = whois.get("organization") or company.get("isp", "")
+        rows = ""
+        if company.get("public_ip"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555; width:140px;">'
+                f'Public IP</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
+                f'{company["public_ip"]}</td></tr>'
+            )
+        if org_name:
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Organization (WHOIS)</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-weight:bold;">'
+                f'{org_name}</td></tr>'
+            )
+        if whois.get("net_name"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Network Name</td>'
+                f'<td style="padding:3px 8px; font-size:12px;">'
+                f'{whois["net_name"]}</td></tr>'
+            )
+        if whois.get("cidr"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Netblock (CIDR)</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
+                f'{whois["cidr"]}</td></tr>'
+            )
+        if company.get("isp"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'ISP / ASN</td>'
+                f'<td style="padding:3px 8px; font-size:12px;">'
+                f'{company["isp"]}</td></tr>'
+            )
+        loc_parts = [p for p in [company.get("city"), company.get("region"),
+                                  company.get("country")] if p]
+        if loc_parts:
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Location</td>'
+                f'<td style="padding:3px 8px; font-size:12px;">'
+                f'{", ".join(loc_parts)}</td></tr>'
+            )
+        if company.get("reverse_hostname"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Reverse DNS</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
+                f'{company["reverse_hostname"]}</td></tr>'
+            )
+        domains = company.get("domains", [])
+        if domains:
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Derived Domains</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
+                f'{", ".join(domains)}</td></tr>'
+            )
+
+        company_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Company Identification
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:16px; background:#f8f9fb;
+                      border:1px solid #e5e9ef; border-radius:3px;">
+          {rows}
+        </table>"""
+
+    # ── Shodan External Attack Surface ──
+    shodan_html = ""
+    ext_ports = shodan.get("ports", [])
+    ext_vulns = shodan.get("vulns", [])
+    ext_hosts = shodan.get("hostnames", [])
+    ext_tags = shodan.get("tags", [])
+
+    if ext_ports or ext_vulns:
+        # Severity banner
+        if ext_vulns:
+            sev_bg = "#fff5f5"
+            sev_border = "#dc3545"
+            sev_icon = "&#9888;"
+            sev_text = (
+                f"<strong>{len(ext_vulns)} known CVE(s)</strong> and "
+                f"<strong>{len(ext_ports)} externally visible port(s)</strong> "
+                f"detected on public IP"
+            )
+        else:
+            sev_bg = "#fff8f0"
+            sev_border = "#fd7e14"
+            sev_icon = "&#9432;"
+            sev_text = (
+                f"<strong>{len(ext_ports)} externally visible port(s)</strong> "
+                f"detected on public IP"
+            )
+
+        port_list = ", ".join(str(p) for p in sorted(ext_ports)[:30])
+        vuln_badges = ""
+        for v in ext_vulns[:15]:
+            vuln_badges += (
+                f'<span style="display:inline-block; background:#dc3545; color:#fff; '
+                f'font-size:10px; padding:1px 6px; border-radius:2px; margin:1px 2px;">'
+                f'{v}</span>'
+            )
+        if len(ext_vulns) > 15:
+            vuln_badges += (
+                f'<span style="font-size:10px; color:#888;">... and '
+                f'{len(ext_vulns) - 15} more</span>'
+            )
+
+        hostname_text = ""
+        if ext_hosts:
+            hostname_text = (
+                f'<div style="font-size:11px; color:#555; margin-top:4px;">'
+                f'<strong>Hostnames:</strong> {", ".join(ext_hosts[:10])}</div>'
+            )
+
+        tag_text = ""
+        if ext_tags:
+            tag_badges = ""
+            for t in ext_tags:
+                tag_badges += (
+                    f'<span style="display:inline-block; background:#6c757d; color:#fff; '
+                    f'font-size:10px; padding:1px 5px; border-radius:2px; margin:1px 2px;">'
+                    f'{t}</span>'
+                )
+            tag_text = (
+                f'<div style="font-size:11px; color:#555; margin-top:4px;">'
+                f'<strong>Tags:</strong> {tag_badges}</div>'
+            )
+
+        shodan_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          External Attack Surface (Shodan InternetDB)
+        </div>
+        <div style="background:{sev_bg}; border:1px solid {sev_border}44;
+                    border-left:4px solid {sev_border}; border-radius:3px;
+                    padding:10px 14px; margin-bottom:14px;">
+          <div style="font-size:12px; color:#333;">{sev_icon} {sev_text}</div>
+          <div style="font-size:11px; color:#555; margin-top:6px;">
+            <strong>Ports:</strong> {port_list}
+          </div>
+          {"" if not vuln_badges else f'''
+          <div style="margin-top:6px;">
+            <strong style="font-size:11px; color:#555;">CVEs:</strong><br>
+            {vuln_badges}
+          </div>'''}
+          {hostname_text}
+          {tag_text}
+        </div>"""
+    elif company.get("public_ip"):
+        # IP exists but nothing in Shodan — that's actually good
+        shodan_html = """
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          External Attack Surface (Shodan InternetDB)
+        </div>
+        <div style="background:#d4edda; border:1px solid #28a74544;
+                    border-left:4px solid #28a745; border-radius:3px;
+                    padding:10px 14px; margin-bottom:14px; font-size:12px; color:#155724;">
+          &#10004; No externally visible ports or known vulnerabilities detected on public IP.
+        </div>"""
+
+    # ── DNS / Email Security ──
+    dns_html = ""
+    if dns_security:
+        dns_rows = ""
+        for ds in dns_security:
+            domain = ds.get("domain", "")
+            mx_text = ", ".join(m.get("server", "") for m in ds.get("mx_records", [])[:3])
+            if not mx_text:
+                mx_text = "None"
+            provider = ds.get("email_provider", "")
+
+            def _check_badge(has_it, label):
+                if has_it:
+                    return (
+                        f'<span style="background:#28a745; color:#fff; font-size:10px; '
+                        f'padding:1px 5px; border-radius:2px;">{label} &#10004;</span>'
+                    )
+                return (
+                    f'<span style="background:#dc3545; color:#fff; font-size:10px; '
+                    f'padding:1px 5px; border-radius:2px;">{label} &#10008;</span>'
+                )
+
+            spf_badge = _check_badge(ds.get("has_spf"), "SPF")
+            dkim_badge = _check_badge(ds.get("has_dkim"), "DKIM")
+            dmarc_badge = _check_badge(ds.get("has_dmarc"), "DMARC")
+
+            dmarc_policy = ds.get("dmarc_policy", "")
+            policy_text = ""
+            if dmarc_policy:
+                policy_color = {"reject": "#28a745", "quarantine": "#fd7e14",
+                                "none": "#ffc107"}.get(dmarc_policy, "#6c757d")
+                policy_text = (
+                    f' <span style="font-size:10px; color:{policy_color}; '
+                    f'font-weight:bold;">(p={dmarc_policy})</span>'
+                )
+
+            dns_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:5px 8px; font-size:12px; font-family:monospace;
+                         font-weight:bold;">{domain}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#555;">{mx_text}</td>
+              <td style="padding:5px 8px; font-size:11px;">{provider}</td>
+              <td style="padding:5px 8px;">{spf_badge} {dkim_badge} {dmarc_badge}{policy_text}</td>
+            </tr>"""
+
+        # Email security score summary
+        score = summary.get("email_security_score", "")
+        score_colors = {"Strong": "#28a745", "Moderate": "#fd7e14",
+                        "Weak": "#dc3545", "None": "#dc3545"}
+        score_color = score_colors.get(score, "#6c757d")
+        score_badge = (
+            f'<span style="background:{score_color}; color:#fff; font-size:11px; '
+            f'font-weight:bold; padding:2px 8px; border-radius:3px;">'
+            f'Email Security: {score}</span>'
+        ) if score else ""
+
+        dns_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Email &amp; DNS Security {score_badge}
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:6px;">
+          <tr style="background:#e8f4fb; color:#00628a;">
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Domain</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">MX Records</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Provider</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Auth</th>
+          </tr>
+          {dns_rows}
+        </table>"""
+
+        # Add observations as bullet list
+        all_obs = []
+        for ds in dns_security:
+            for obs in ds.get("observations", []):
+                all_obs.append(obs)
+        if all_obs:
+            obs_items = "".join(
+                f'<li style="margin-bottom:2px; color:#555;">{o}</li>'
+                for o in all_obs
+            )
+            dns_html += f"""
+        <ul style="font-size:11px; margin:4px 0 14px 16px; padding:0;">
+          {obs_items}
+        </ul>"""
+        else:
+            dns_html += '<div style="margin-bottom:14px;"></div>'
+
+    # ── Certificate Transparency (crt.sh) ──
+    crtsh_html = ""
+    if crtsh:
+        total_subs = sum(len(v) for v in crtsh.values())
+        crtsh_rows = ""
+        for domain, subs in crtsh.items():
+            # Show first 20, note if more
+            shown = subs[:20]
+            sub_text = ", ".join(
+                f'<span style="font-family:monospace; font-size:11px;">{s}</span>'
+                for s in shown
+            )
+            if len(subs) > 20:
+                sub_text += (
+                    f' <span style="font-size:10px; color:#888;">... and '
+                    f'{len(subs) - 20} more</span>'
+                )
+            crtsh_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:5px 8px; font-size:12px; font-family:monospace;
+                         font-weight:bold; vertical-align:top; width:140px;">
+                {domain}
+                <div style="font-size:10px; color:#888; font-weight:normal;">
+                  {len(subs)} subdomain(s)
+                </div>
+              </td>
+              <td style="padding:5px 8px; font-size:11px; line-height:1.6;">
+                {sub_text}
+              </td>
+            </tr>"""
+
+        crtsh_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Certificate Transparency (crt.sh) &mdash; {total_subs} Subdomain(s)
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:14px;">
+          {crtsh_rows}
+        </table>"""
+
+    return f"""
+  <!-- ═══ OSINT / EXTERNAL RECONNAISSANCE ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#127760; External Reconnaissance (OSINT)
+      </h2>
+      {company_html}
+      {shodan_html}
+      {dns_html}
+      {crtsh_html}
+    </td>
+  </tr>"""
+
+
 # ── Main report builder ────────────────────────────────────────────────────
 
 def build_discovery_report(scan_results: dict, config: dict) -> tuple:
@@ -1204,11 +1539,13 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     dhcp_results = scan_results.get("dhcp_analysis", {})
     ntp_results = scan_results.get("ntp", {})
     nac_results = scan_results.get("nac", {})
+    osint_results = scan_results.get("osint", {})
 
     wifi_section = _build_wifi_section(wifi_results, company_color)
     protocol_section = _build_protocol_discovery_section(mdns_results, ssdp_results, company_color)
     dhcp_section = _build_dhcp_section(dhcp_results, company_color)
     infra_section = _build_infrastructure_section(ntp_results, nac_results, company_color)
+    osint_section = _build_osint_section(osint_results, company_color)
 
     critical_count = len(summary.get("critical_hosts", []))
     security_color = "#dc3545" if critical_count > 0 else ("#fd7e14" if security_obs > 5 else "#2d6a4f")
@@ -1361,6 +1698,8 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
   {dhcp_section}
 
   {infra_section}
+
+  {osint_section}
 
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
