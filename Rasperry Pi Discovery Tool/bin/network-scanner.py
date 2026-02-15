@@ -3514,92 +3514,73 @@ def phase15_backup_posture(hosts: list, config: dict) -> dict:
 
 # ── Phase 16: End-of-Life / End-of-Support Detection ───────────────────────
 
-# EOL database: (regex, category, product_label, eol_date, severity, notes)
-# category: "os" matches os_guess + smb_os; "firmware" matches snmp sysDescr +
-#           gateway_info; "service" matches service version strings + banners
-_EOL_DATABASE = [
-    # ── Windows Server ─────────────────────────────────────────────────
-    (r"Windows Server 2003",  "os", "Windows Server 2003",  "2015-07-14", "CRITICAL", "Unsupported since 2015"),
+# Path to the external EOL database (auto-updated via self-update.sh from
+# the GitHub repo).  Falls back to a minimal embedded list if the file
+# cannot be loaded.
+_EOL_DB_FILE = Path(__file__).parent.parent / "data" / "eol-database.json"
+_EOL_DB_INSTALLED = DATA_DIR / "eol-database.json"   # install-dir copy
+
+# Minimal embedded fallback (used only if the JSON file is missing/corrupt)
+_EOL_DATABASE_FALLBACK = [
     (r"Windows Server 2008",  "os", "Windows Server 2008/R2", "2020-01-14", "CRITICAL", "No patches since Jan 2020"),
     (r"Windows Server 2012",  "os", "Windows Server 2012/R2", "2023-10-10", "CRITICAL", "Extended support ended Oct 2023"),
-    (r"Windows Server 2016",  "os", "Windows Server 2016",  "2027-01-12", "INFO", "Extended support until Jan 2027"),
-    (r"Windows Server 2019",  "os", "Windows Server 2019",  "2029-01-09", "INFO", "Extended support until Jan 2029"),
-    # ── Windows Desktop ────────────────────────────────────────────────
-    (r"Windows XP",           "os", "Windows XP",           "2014-04-08", "CRITICAL", "Unsupported since 2014"),
-    (r"Windows Vista",        "os", "Windows Vista",        "2017-04-11", "CRITICAL", "Unsupported since 2017"),
-    (r"Windows 7",            "os", "Windows 7",            "2020-01-14", "CRITICAL", ""),
-    (r"Windows 8(?:\.0)?(?!\.\d)", "os", "Windows 8",      "2016-01-12", "CRITICAL", ""),
-    (r"Windows 8\.1",         "os", "Windows 8.1",          "2023-01-10", "CRITICAL", ""),
-    (r"Windows 10.*\b(?:1507|1511|1607|1703|1709|1803|1809)\b",
-     "os", "Windows 10 (EOL build)", "varies", "HIGH", "Build no longer receives updates"),
-    (r"Windows 10.*\b(?:1903|1909|2004|20H2|21H1|21H2)\b",
-     "os", "Windows 10 (EOL build)", "varies", "HIGH", "Build no longer receives updates"),
-    # ── Linux ──────────────────────────────────────────────────────────
-    (r"Ubuntu 14\.04",        "os", "Ubuntu 14.04 LTS",    "2019-04-30", "CRITICAL", ""),
-    (r"Ubuntu 16\.04",        "os", "Ubuntu 16.04 LTS",    "2021-04-30", "CRITICAL", ""),
-    (r"Ubuntu 18\.04",        "os", "Ubuntu 18.04 LTS",    "2023-05-31", "HIGH", "Standard support ended"),
-    (r"Ubuntu 20\.04",        "os", "Ubuntu 20.04 LTS",    "2025-04-30", "MEDIUM", "Approaching EOL Apr 2025"),
-    (r"CentOS (?:Linux )?[56](?:\.|\s|$)", "os", "CentOS 5/6", "2020-11-30", "CRITICAL", ""),
-    (r"CentOS (?:Linux )?7",  "os", "CentOS 7",            "2024-06-30", "HIGH", "EOL June 2024"),
-    (r"CentOS (?:Linux )?8(?:\.|\s|$)", "os", "CentOS 8",  "2021-12-31", "CRITICAL", "Upstream dropped; use Stream or alternative"),
-    (r"Red Hat.*(?:Enterprise|RHEL).*[56](?:\.|\s|$)", "os", "RHEL 5/6", "2024-06-30", "HIGH", ""),
-    (r"Debian.*(?:wheezy|7\.)",  "os", "Debian 7 Wheezy",  "2018-05-31", "CRITICAL", ""),
-    (r"Debian.*(?:jessie|8\.)",  "os", "Debian 8 Jessie",  "2020-06-30", "CRITICAL", ""),
-    (r"Debian.*(?:stretch|9\.)", "os", "Debian 9 Stretch",  "2022-06-30", "CRITICAL", ""),
-    (r"Debian.*(?:buster|10\.)", "os", "Debian 10 Buster",  "2024-06-30", "HIGH", ""),
-    (r"Amazon Linux AMI(?!\s*2)", "os", "Amazon Linux AMI", "2023-12-31", "HIGH", ""),
-    (r"SUSE.*1[12](?:\.|\s|$)", "os", "SLES 11/12",        "2024-10-31", "HIGH", ""),
-    (r"FreeBSD\s*(?:1[012]|[0-9])(?:\.|\s|$)", "os", "FreeBSD (old)", "varies", "HIGH", "Out of support"),
-    # ── Firewalls & Network ────────────────────────────────────────────
-    (r"FortiOS[^\d]*5\.",     "firmware", "FortiOS 5.x",    "2020-09-30", "CRITICAL", ""),
-    (r"FortiOS[^\d]*6\.[02]", "firmware", "FortiOS 6.0/6.2", "2023-09-29", "CRITICAL", ""),
-    (r"FortiOS[^\d]*6\.4",   "firmware", "FortiOS 6.4",     "2025-03-31", "MEDIUM", "Approaching EOL"),
-    (r"SonicOS[^\d]*[56]\.",  "firmware", "SonicOS 5.x/6.x", "2024-01-31", "CRITICAL", ""),
-    (r"pfSense.*2\.[0-4](?:\.|\s|$)", "firmware", "pfSense (old)", "varies", "HIGH", "Upgrade recommended"),
-    (r"ASA.*(?:8\.|9\.[0-8](?:\.|\s|$))", "firmware", "Cisco ASA (old firmware)", "varies", "HIGH", ""),
-    (r"IOS\s*(?:12|15\.0|15\.1)\.", "firmware", "Cisco IOS (old)", "varies", "HIGH", ""),
-    (r"MikroTik.*(?:5\.|6\.[0-3])", "firmware", "RouterOS (old)", "varies", "MEDIUM", ""),
-    (r"Meraki.*(?:MR|MS|MX)\s*\d.*(?:unsupported|eol)", "firmware", "Meraki (EOL model)", "varies", "HIGH", ""),
-    # ── Hypervisors ────────────────────────────────────────────────────
-    (r"(?:ESXi|vSphere)[^\d]*5\.", "firmware", "VMware ESXi 5.x", "2020-09-19", "CRITICAL", ""),
-    (r"(?:ESXi|vSphere)[^\d]*6\.[057]", "firmware", "VMware ESXi 6.x", "2022-10-15", "CRITICAL", "General support ended"),
-    (r"(?:ESXi|vSphere)[^\d]*7\.0", "firmware", "VMware ESXi 7.0", "2025-04-02", "MEDIUM", "General support ending"),
-    (r"Hyper-V.*2012",        "firmware", "Hyper-V 2012/R2",  "2023-10-10", "CRITICAL", ""),
-    (r"Hyper-V.*2016",        "firmware", "Hyper-V 2016",     "2027-01-12", "INFO", ""),
-    (r"XenServer\s*[67]\.",   "firmware", "XenServer 6/7",    "varies", "HIGH", ""),
-    # ── Web Servers ────────────────────────────────────────────────────
-    (r"Apache/2\.0\.",        "service", "Apache 2.0",       "2013-07-10", "CRITICAL", ""),
-    (r"Apache/2\.2\.",        "service", "Apache 2.2",       "2017-07-11", "CRITICAL", ""),
-    (r"nginx/0\.",            "service", "nginx 0.x",        "varies", "CRITICAL", "Extremely outdated"),
-    (r"nginx/1\.[0-9](?:\.|\s)", "service", "nginx 1.0–1.9", "varies", "HIGH", "Old stable branch"),
-    (r"nginx/1\.1[0-7]\.",    "service", "nginx 1.10–1.17",  "varies", "MEDIUM", "Consider upgrade"),
-    (r"Microsoft-IIS/[56]\.",  "service", "IIS 5/6",         "varies", "CRITICAL", "Tied to Server 2003"),
-    (r"Microsoft-IIS/7\.",    "service", "IIS 7.x",          "varies", "CRITICAL", "Tied to Server 2008"),
-    (r"Microsoft-IIS/8\.",    "service", "IIS 8.x",          "varies", "HIGH", "Tied to Server 2012"),
-    # ── SSH ────────────────────────────────────────────────────────────
+    (r"Windows 7",            "os", "Windows 7",               "2020-01-14", "CRITICAL", ""),
+    (r"Ubuntu 18\.04",        "os", "Ubuntu 18.04 LTS",       "2023-05-31", "HIGH",     "Standard support ended"),
+    (r"CentOS (?:Linux )?7",  "os", "CentOS 7",               "2024-06-30", "HIGH",     ""),
+    (r"(?:ESXi|vSphere)[^\d]*6\.[057]", "firmware", "VMware ESXi 6.x", "2022-10-15", "CRITICAL", ""),
+    (r"FortiOS[^\d]*6\.[02]", "firmware", "FortiOS 6.0/6.2",  "2023-09-29", "CRITICAL", ""),
+    (r"Apache/2\.2\.",        "service", "Apache 2.2",         "2017-07-11", "CRITICAL", ""),
     (r"OpenSSH[_ ](?:[1-5]\.|6\.[0-6])", "service", "OpenSSH (very old)", "varies", "CRITICAL", "Known CVEs"),
-    (r"OpenSSH[_ ](?:6\.[7-9]|7\.[0-3])", "service", "OpenSSH (old)", "varies", "HIGH", "Known vulnerabilities"),
-    (r"OpenSSH[_ ]7\.[4-9]", "service", "OpenSSH 7.4–7.9", "varies", "MEDIUM", "Consider upgrade"),
-    # ── Programming / Runtime ──────────────────────────────────────────
-    (r"PHP/5\.",              "service", "PHP 5.x",          "2018-12-31", "CRITICAL", "No security fixes"),
-    (r"PHP/7\.[0-3]",        "service", "PHP 7.0–7.3",      "2021-12-06", "HIGH", "No security fixes"),
-    (r"PHP/7\.4",            "service", "PHP 7.4",           "2022-11-28", "HIGH", ""),
-    (r"PHP/8\.0",            "service", "PHP 8.0",           "2023-11-26", "MEDIUM", ""),
-    # ── Databases ──────────────────────────────────────────────────────
-    (r"MySQL\s*5\.[0-6]",    "service", "MySQL 5.0–5.6",    "2021-02-01", "HIGH", ""),
-    (r"MariaDB.*5\.",        "service", "MariaDB 5.x",       "varies", "HIGH", ""),
-    (r"PostgreSQL\s*(?:[0-9]|1[01])(?:\.|\s)", "service", "PostgreSQL ≤11", "varies", "MEDIUM", ""),
-    (r"Microsoft SQL Server 20(?:00|05|08)", "service", "SQL Server 2000/2005/2008", "varies", "CRITICAL", ""),
-    (r"Microsoft SQL Server 2012", "service", "SQL Server 2012", "2022-07-12", "CRITICAL", ""),
-    (r"Microsoft SQL Server 2014", "service", "SQL Server 2014", "2024-07-09", "HIGH", ""),
-    # ── Email ──────────────────────────────────────────────────────────
-    (r"Exchange Server 20(?:03|07|10)", "service", "Exchange 2003/2007/2010", "varies", "CRITICAL", ""),
-    (r"Exchange Server 2013", "service", "Exchange 2013",    "2023-04-11", "CRITICAL", ""),
-    (r"Exchange Server 2016", "service", "Exchange 2016",    "2025-10-14", "MEDIUM", "Approaching EOL"),
-    (r"Postfix.*2\.",        "service", "Postfix 2.x",       "varies", "MEDIUM", ""),
-    # ── Printers / IoT ────────────────────────────────────────────────
-    (r"JetDirect",           "firmware", "HP JetDirect (legacy)", "varies", "LOW", "Often unpatched"),
+    (r"PHP/5\.",              "service", "PHP 5.x",            "2018-12-31", "CRITICAL", "No security fixes"),
 ]
+
+
+def _load_eol_database() -> list:
+    """Load EOL database from JSON file, falling back to embedded list.
+
+    Searches for the file at two paths:
+      1. Relative to the script (repo checkout / dev)
+      2. Installed path under DATA_DIR (/opt/network-discovery/data/)
+    Returns a list of (regex, category, product, eol_date, severity, notes).
+    """
+    for path in (_EOL_DB_FILE, _EOL_DB_INSTALLED):
+        try:
+            if path.exists():
+                with open(path) as f:
+                    data = json.load(f)
+
+                entries = data.get("entries", [])
+                if not entries:
+                    continue
+
+                db = []
+                for entry in entries:
+                    if isinstance(entry, list) and len(entry) >= 6:
+                        db.append(tuple(entry[:6]))
+                    elif isinstance(entry, dict):
+                        db.append((
+                            entry.get("pattern", ""),
+                            entry.get("category", ""),
+                            entry.get("product", ""),
+                            entry.get("eol_date", ""),
+                            entry.get("severity", ""),
+                            entry.get("notes", ""),
+                        ))
+
+                if db:
+                    version = data.get("_meta", {}).get("version", "?")
+                    updated = data.get("_meta", {}).get("updated", "?")
+                    logger.info(
+                        f"  Loaded EOL database from {path} "
+                        f"(v{version}, updated {updated}, {len(db)} entries)"
+                    )
+                    return db
+
+        except (json.JSONDecodeError, IOError, OSError) as e:
+            logger.warning(f"  Failed to load EOL database from {path}: {e}")
+
+    logger.warning("  Using minimal embedded EOL fallback database")
+    return list(_EOL_DATABASE_FALLBACK)
 
 
 def _collect_matchable_strings(host: dict) -> dict:
@@ -3668,6 +3649,9 @@ def phase16_eol_detection(hosts: list, config: dict) -> dict:
     """
     logger.info("[Phase 16] End-of-Life / End-of-Support Detection...")
 
+    eol_db = _load_eol_database()
+    logger.info(f"  Loaded {len(eol_db)} EOL database entries")
+
     eol_devices = []   # CRITICAL/HIGH: already past EOL
     approaching = []   # MEDIUM/INFO: approaching EOL
     eol_services = []  # Service-level (per port)
@@ -3678,7 +3662,7 @@ def phase16_eol_detection(hosts: list, config: dict) -> dict:
         hostname = host.get("hostname", "N/A")
         matchable = _collect_matchable_strings(host)
 
-        for pattern, category, product_label, eol_date, severity, notes in _EOL_DATABASE:
+        for pattern, category, product_label, eol_date, severity, notes in eol_db:
             if (ip, product_label) in seen:
                 continue
 
