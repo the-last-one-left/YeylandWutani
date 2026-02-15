@@ -51,6 +51,6 @@
   "system": {
     "device_name": "NetDiscovery-Pi",
     "log_level": "INFO",
-    "cleanup_old_scans_days": 7
+    "min_free_disk_mb": 200
   }
 }

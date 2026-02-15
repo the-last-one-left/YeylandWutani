@@ -5,18 +5,20 @@ discovery-main.py - Main Orchestration Script
 
 Orchestrates the full discovery workflow:
   1. Validate config + Graph API credentials
-  2. Send "Discovery Starting" notification
-  3. Run network scanner
-  4. Generate HTML report
-  5. Send report via Graph API (with CSV attachment)
-  6. Clean up old scan data
-  7. Exit with appropriate status code
+  2. Manage disk space — prune oldest scan archives if SD card is low
+  3. Send "Discovery Starting" notification
+  4. Run network scanner
+  5. Generate HTML report
+  6. Send report via Graph API (with CSV attachment)
+  7. Archive scan data — remove uncompressed intermediaries after send
+  8. Exit with appropriate status code
 """
 
 import gzip
 import json
 import logging
 import os
+import shutil
 import signal
 import sys
 import tempfile
@@ -118,22 +120,91 @@ def release_lock():
     LOCK_FILE.unlink(missing_ok=True)
 
 
-# ── Cleanup old scans ──────────────────────────────────────────────────────
+# ── Scan Archive Management ────────────────────────────────────────────────
 
-def cleanup_old_scans(config: dict):
-    days = config.get("system", {}).get("cleanup_old_scans_days", 7)
-    cutoff = datetime.now() - timedelta(days=days)
+def cleanup_after_send(timestamp_str: str):
+    """Remove uncompressed intermediary files after a successful email send.
+
+    The compressed .gz archives are retained for local reference.  The raw
+    .csv and .json are only needed to build the email — once the email
+    is confirmed sent we can safely delete them.
+    """
     removed = 0
-    for pattern in ("scan_*.json", "scan_*.csv", "scan_*.json.gz", "scan_*.csv.gz"):
-        for f in DATA_DIR.glob(pattern):
-            try:
-                if datetime.fromtimestamp(f.stat().st_mtime) < cutoff:
-                    f.unlink()
-                    removed += 1
-            except Exception:
-                pass
+    for suffix in (".csv", ".json"):
+        path = DATA_DIR / f"scan_{timestamp_str}{suffix}"
+        try:
+            if path.exists():
+                path.unlink()
+                removed += 1
+        except Exception as e:
+            logger.warning(f"Could not remove intermediary {path.name}: {e}")
     if removed:
-        logger.info(f"Cleaned up {removed} old scan file(s) (>{days} days old).")
+        logger.info(f"Removed {removed} uncompressed intermediary file(s).")
+
+
+def manage_disk_space(config: dict):
+    """Check available disk space and prune oldest scan archives if low.
+
+    Called early in startup to ensure there is enough room for the next
+    scan.  Deletes the oldest .gz / .csv / .json scan files first, one
+    at a time, until the free-space threshold is met or no files remain.
+    """
+    sys_cfg = config.get("system", {})
+    min_free_mb = sys_cfg.get("min_free_disk_mb", 200)
+
+    try:
+        usage = shutil.disk_usage(str(DATA_DIR))
+        free_mb = usage.free / (1024 * 1024)
+    except Exception as e:
+        logger.warning(f"Could not check disk space: {e}")
+        return
+
+    if free_mb >= min_free_mb:
+        logger.info(f"Disk space OK: {free_mb:.0f} MB free (threshold: {min_free_mb} MB).")
+        return
+
+    logger.warning(
+        f"Low disk space: {free_mb:.0f} MB free (threshold: {min_free_mb} MB). "
+        "Pruning oldest scan archives..."
+    )
+
+    # Gather ALL scan artefacts, sort oldest first by modification time
+    scan_files = sorted(
+        [
+            f
+            for pattern in ("scan_*.json.gz", "scan_*.csv.gz", "scan_*.json", "scan_*.csv")
+            for f in DATA_DIR.glob(pattern)
+            if f.is_file()
+        ],
+        key=lambda f: f.stat().st_mtime,
+    )
+
+    removed = 0
+    freed_bytes = 0
+    for f in scan_files:
+        try:
+            size = f.stat().st_size
+            f.unlink()
+            freed_bytes += size
+            removed += 1
+            logger.info(f"  Pruned: {f.name} ({size / 1024:.0f} KB)")
+        except Exception as e:
+            logger.warning(f"  Could not remove {f.name}: {e}")
+
+        # Re-check after each deletion
+        try:
+            usage = shutil.disk_usage(str(DATA_DIR))
+            if usage.free / (1024 * 1024) >= min_free_mb:
+                break
+        except Exception:
+            break
+
+    if removed:
+        logger.info(
+            f"Pruned {removed} scan file(s), freed {freed_bytes / (1024 * 1024):.1f} MB."
+        )
+    else:
+        logger.warning("No scan files available to prune. Disk may remain low.")
 
 
 # ── Starting notification email ────────────────────────────────────────────
@@ -210,6 +281,9 @@ def main():
 
     config = load_config()
     apply_log_level(config)
+
+    # Prune oldest archives if disk space is low (before we generate new data)
+    manage_disk_space(config)
 
     mailer = None
     scan_results = None
@@ -298,12 +372,13 @@ def main():
                 attachment_paths=attachment_paths,
             )
             logger.info("Discovery report email sent successfully.")
+            # Email confirmed sent — remove uncompressed intermediaries,
+            # keep the .gz archives for local reference
+            cleanup_after_send(timestamp_str)
         except GraphMailerError as e:
             logger.error(f"Failed to send report email: {e}")
+            logger.info("Keeping uncompressed files since email send failed.")
             exit_code = 1
-
-        # Cleanup old data
-        cleanup_old_scans(config)
 
         summary = scan_results.get("summary", {})
         logger.info(

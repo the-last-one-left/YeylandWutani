@@ -421,7 +421,7 @@ run_config_wizard() {
   "system": {
     "device_name": "${DEVICE_NAME}",
     "log_level": "INFO",
-    "cleanup_old_scans_days": 7
+    "min_free_disk_mb": 200
   }
 }
 EOF

@@ -160,7 +160,7 @@ All settings live in `/opt/network-discovery/config/config.json`.
 | `reporting.company_name` | Pacific Office Automation Inc. | Report branding |
 | `reporting.company_color` | #00A0D9 | Report accent color |
 | `system.device_name` | NetDiscovery-Pi | Device identifier in emails |
-| `system.cleanup_old_scans_days` | 7 | Auto-delete scan data after N days |
+| `system.min_free_disk_mb` | 200 | Prune oldest scan archives when free disk drops below N MB |
 
 To update configuration: `sudo /opt/network-discovery/bin/update-config.sh`
 
