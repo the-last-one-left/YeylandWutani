@@ -1459,6 +1459,464 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
   </tr>"""
 
 
+def _build_ssl_audit_section(ssl_results: dict, company_color: str) -> str:
+    """Build SSL/TLS Certificate Health Audit report section."""
+    if not ssl_results:
+        return ""
+
+    certs = ssl_results.get("certificates", [])
+    summary = ssl_results.get("summary", {})
+    internal_cas = ssl_results.get("internal_cas", [])
+
+    if not certs:
+        return ""
+
+    total = summary.get("total_certs", len(certs))
+    expired = summary.get("expired", 0)
+    expiring = summary.get("expiring_30d", 0)
+    self_signed = summary.get("self_signed", 0)
+    weak_key = summary.get("weak_key", 0)
+    sha1 = summary.get("sha1_signature", 0)
+
+    # Summary banner
+    healthy = total - expired - expiring - self_signed
+    if healthy < 0:
+        healthy = 0
+
+    if expired > 0:
+        banner_bg = "#fff5f5"
+        banner_border = "#dc3545"
+        banner_icon = "&#9888;"
+    elif expiring > 0:
+        banner_bg = "#fff8f0"
+        banner_border = "#fd7e14"
+        banner_icon = "&#9432;"
+    else:
+        banner_bg = "#d4edda"
+        banner_border = "#28a745"
+        banner_icon = "&#10004;"
+
+    parts = []
+    if expired:
+        parts.append(f'<span style="color:#dc3545; font-weight:bold;">{expired} expired</span>')
+    if expiring:
+        parts.append(f'<span style="color:#fd7e14; font-weight:bold;">{expiring} expiring soon</span>')
+    if self_signed:
+        parts.append(f'{self_signed} self-signed')
+    if weak_key:
+        parts.append(f'{weak_key} weak key')
+    if sha1:
+        parts.append(f'{sha1} SHA-1')
+    summary_text = ", ".join(parts) if parts else "All certificates healthy"
+
+    banner_html = f"""
+    <div style="background:{banner_bg}; border:1px solid {banner_border}44;
+                border-left:4px solid {banner_border}; border-radius:3px;
+                padding:10px 14px; margin-bottom:14px; font-size:12px;">
+      {banner_icon} <strong>{total} certificate(s) scanned</strong> &mdash; {summary_text}
+    </div>"""
+
+    # Certificate table (limit to 30 inline)
+    MAX_INLINE_CERTS = 30
+    display_certs = sorted(certs, key=lambda c: (
+        0 if (c.get("days_remaining") or 999) < 0 else
+        1 if (c.get("days_remaining") or 999) <= 30 else
+        2 if c.get("is_self_signed") else 3,
+        c.get("days_remaining") or 999,
+    ))[:MAX_INLINE_CERTS]
+
+    cert_rows = ""
+    for i, c in enumerate(display_certs):
+        bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+        days = c.get("days_remaining")
+        if days is not None and days < 0:
+            exp_badge = (
+                f'<span style="background:#dc3545; color:#fff; font-size:10px; '
+                f'padding:1px 5px; border-radius:2px;">Expired</span>'
+            )
+        elif days is not None and days <= 7:
+            exp_badge = (
+                f'<span style="background:#dc3545; color:#fff; font-size:10px; '
+                f'padding:1px 5px; border-radius:2px;">{days}d</span>'
+            )
+        elif days is not None and days <= 30:
+            exp_badge = (
+                f'<span style="background:#fd7e14; color:#fff; font-size:10px; '
+                f'padding:1px 5px; border-radius:2px;">{days}d</span>'
+            )
+        elif days is not None:
+            exp_badge = (
+                f'<span style="background:#28a745; color:#fff; font-size:10px; '
+                f'padding:1px 5px; border-radius:2px;">{days}d</span>'
+            )
+        else:
+            exp_badge = '<span style="font-size:10px; color:#888;">?</span>'
+
+        issue_badges = ""
+        for iss in c.get("issues", []):
+            iss_color = "#dc3545" if "EXPIRED" in iss or "CRITICAL" in iss else (
+                "#fd7e14" if "Expires" in iss or "Self-signed" in iss else
+                "#6c757d"
+            )
+            issue_badges += (
+                f'<span style="display:inline-block; background:{iss_color}22; '
+                f'color:{iss_color}; font-size:9px; padding:0px 4px; '
+                f'border-radius:2px; margin:1px 1px;">{iss[:50]}</span> '
+            )
+
+        key_text = f'{c.get("key_size", "?")}b' if c.get("key_size") else "?"
+
+        cert_rows += f"""
+        <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+          <td style="padding:4px 6px; font-size:11px; font-family:monospace;">{c.get('ip','')}</td>
+          <td style="padding:4px 6px; font-size:11px; text-align:center;">{c.get('port','')}</td>
+          <td style="padding:4px 6px; font-size:11px; font-weight:bold;">{c.get('subject_cn','')[:30]}</td>
+          <td style="padding:4px 6px; font-size:11px; color:#555;">{c.get('issuer_cn','')[:25]}</td>
+          <td style="padding:4px 6px; font-size:11px; text-align:center;">{exp_badge}</td>
+          <td style="padding:4px 6px; font-size:11px; text-align:center;">{key_text}</td>
+          <td style="padding:4px 6px; font-size:11px;">{issue_badges}</td>
+        </tr>"""
+
+    overflow_note = ""
+    if len(certs) > MAX_INLINE_CERTS:
+        overflow_note = (
+            f'<div style="font-size:11px; color:#888; margin-top:4px; font-style:italic;">'
+            f'Showing {MAX_INLINE_CERTS} of {len(certs)} certificates. '
+            f'See attached CSV for full inventory.</div>'
+        )
+
+    # Internal CA note
+    ca_note = ""
+    if internal_cas:
+        ca_list = ", ".join(internal_cas[:5])
+        ca_note = f"""
+        <div style="background:#e8f4fb; border:1px solid #b8daff; border-left:4px solid {company_color};
+                    border-radius:3px; padding:8px 12px; margin-top:10px; font-size:11px; color:#004085;">
+          <strong>&#9432; Internal CA(s) Detected:</strong> {ca_list}
+          {f' — and {len(internal_cas)-5} more' if len(internal_cas) > 5 else ''}
+        </div>"""
+
+    return f"""
+  <!-- ═══ SSL/TLS CERTIFICATE HEALTH ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#128274; SSL/TLS Certificate Health
+      </h2>
+      {banner_html}
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; margin-bottom:6px;">
+        <tr style="background:#e8f4fb; color:#00628a;">
+          <th style="padding:5px 6px; text-align:left; font-size:10px; width:90px;">IP</th>
+          <th style="padding:5px 6px; text-align:center; font-size:10px; width:40px;">Port</th>
+          <th style="padding:5px 6px; text-align:left; font-size:10px;">Subject CN</th>
+          <th style="padding:5px 6px; text-align:left; font-size:10px;">Issuer</th>
+          <th style="padding:5px 6px; text-align:center; font-size:10px; width:50px;">Expiry</th>
+          <th style="padding:5px 6px; text-align:center; font-size:10px; width:40px;">Key</th>
+          <th style="padding:5px 6px; text-align:left; font-size:10px;">Issues</th>
+        </tr>
+        {cert_rows}
+      </table>
+      {overflow_note}
+      {ca_note}
+    </td>
+  </tr>"""
+
+
+def _build_backup_section(backup_results: dict, company_color: str) -> str:
+    """Build Backup & DR Posture Inference report section."""
+    if not backup_results:
+        return ""
+
+    summary = backup_results.get("summary", {})
+    backup_sw = backup_results.get("backup_software", [])
+    storage = backup_results.get("storage_targets", [])
+    hypers = backup_results.get("hypervisors", [])
+    replication = backup_results.get("replication_indicators", [])
+    observations = backup_results.get("observations", [])
+
+    # Coverage badge
+    coverage = summary.get("estimated_coverage", "None")
+    cov_colors = {"Good": "#28a745", "Partial": "#fd7e14", "None": "#dc3545"}
+    cov_color = cov_colors.get(coverage, "#6c757d")
+    cov_badge = (
+        f'<span style="background:{cov_color}; color:#fff; font-size:11px; '
+        f'font-weight:bold; padding:2px 8px; border-radius:3px;">'
+        f'Coverage: {coverage}</span>'
+    )
+
+    offsite_badge = ""
+    if summary.get("has_offsite_replication"):
+        offsite_badge = (
+            ' <span style="background:#28a745; color:#fff; font-size:10px; '
+            'padding:1px 6px; border-radius:2px;">Offsite &#10004;</span>'
+        )
+    else:
+        offsite_badge = (
+            ' <span style="background:#dc3545; color:#fff; font-size:10px; '
+            'padding:1px 6px; border-radius:2px;">No Offsite &#10008;</span>'
+        )
+
+    # Backup software table
+    sw_html = ""
+    if backup_sw:
+        sw_rows = ""
+        for i, b in enumerate(backup_sw):
+            bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+            sw_rows += f"""
+            <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-family:monospace;">{b.get('ip','')}</td>
+              <td style="padding:4px 8px; font-size:12px;">{b.get('hostname','')}</td>
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold;">{b.get('product','')}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{b.get('evidence','')}</td>
+            </tr>"""
+        sw_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Backup Software ({len(backup_sw)})
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:14px;">
+          <tr style="background:#e8f4fb; color:#00628a;">
+            <th style="padding:5px 8px; text-align:left; font-size:11px; width:100px;">IP</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Hostname</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Product</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Evidence</th>
+          </tr>
+          {sw_rows}
+        </table>"""
+
+    # Storage targets table
+    stor_html = ""
+    if storage:
+        stor_rows = ""
+        for i, s in enumerate(storage):
+            bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+            role_badge = (
+                f'<span style="background:#17a2b8; color:#fff; font-size:9px; '
+                f'padding:1px 4px; border-radius:2px;">{s.get("role","")}</span>'
+            )
+            stor_rows += f"""
+            <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-family:monospace;">{s.get('ip','')}</td>
+              <td style="padding:4px 8px; font-size:12px;">{s.get('hostname','')}</td>
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold;">{s.get('product','')}</td>
+              <td style="padding:4px 8px; font-size:11px;">{role_badge}</td>
+            </tr>"""
+        stor_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Storage Targets ({len(storage)})
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:14px;">
+          <tr style="background:#e8f4fb; color:#00628a;">
+            <th style="padding:5px 8px; text-align:left; font-size:11px; width:100px;">IP</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Hostname</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Product</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px; width:70px;">Role</th>
+          </tr>
+          {stor_rows}
+        </table>"""
+
+    # Hypervisors table
+    hyp_html = ""
+    if hypers:
+        hyp_rows = ""
+        for i, h in enumerate(hypers):
+            bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+            hyp_rows += f"""
+            <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-family:monospace;">{h.get('ip','')}</td>
+              <td style="padding:4px 8px; font-size:12px;">{h.get('hostname','')}</td>
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold;">{h.get('product','')[:50]}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{h.get('evidence','')[:60]}</td>
+            </tr>"""
+        hyp_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">
+          Hypervisors ({len(hypers)})
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; margin-bottom:14px;">
+          <tr style="background:#e8f4fb; color:#00628a;">
+            <th style="padding:5px 8px; text-align:left; font-size:11px; width:100px;">IP</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Hostname</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Product</th>
+            <th style="padding:5px 8px; text-align:left; font-size:11px;">Evidence</th>
+          </tr>
+          {hyp_rows}
+        </table>"""
+
+    # Observations
+    obs_html = ""
+    if observations:
+        obs_items = "".join(
+            f'<li style="margin-bottom:3px; color:#555;">{o}</li>'
+            for o in observations
+        )
+        obs_html = f"""
+        <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:4px;">
+          Observations
+        </div>
+        <ul style="font-size:11px; margin:0 0 8px 16px; padding:0;">
+          {obs_items}
+        </ul>"""
+
+    return f"""
+  <!-- ═══ BACKUP & DR POSTURE ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#128190; Backup &amp; Disaster Recovery Posture
+      </h2>
+      <div style="margin-bottom:12px;">{cov_badge} {offsite_badge}</div>
+      {sw_html}
+      {stor_html}
+      {hyp_html}
+      {obs_html}
+    </td>
+  </tr>"""
+
+
+def _build_eol_section(eol_results: dict, company_color: str) -> str:
+    """Build End-of-Life / End-of-Support Detection report section."""
+    if not eol_results:
+        return ""
+
+    eol_devices = eol_results.get("eol_devices", [])
+    approaching = eol_results.get("approaching_eol", [])
+    eol_services = eol_results.get("eol_services", [])
+    summary = eol_results.get("summary", {})
+
+    all_entries = eol_devices + approaching + eol_services
+    if not all_entries:
+        return ""
+
+    crit = summary.get("critical_eol_count", 0)
+    high = summary.get("high_eol_count", 0)
+    med = summary.get("medium_eol_count", 0)
+    top_risk = summary.get("top_risk", "")
+
+    # Summary banner
+    if crit > 0:
+        banner_bg = "#fff5f5"
+        banner_border = "#dc3545"
+        banner_icon = "&#9888;"
+    elif high > 0:
+        banner_bg = "#fff8f0"
+        banner_border = "#fd7e14"
+        banner_icon = "&#9888;"
+    else:
+        banner_bg = "#fff8f0"
+        banner_border = "#ffc107"
+        banner_icon = "&#9432;"
+
+    count_parts = []
+    if crit:
+        count_parts.append(
+            f'<span style="color:#dc3545; font-weight:bold;">{crit} CRITICAL</span>'
+        )
+    if high:
+        count_parts.append(
+            f'<span style="color:#fd7e14; font-weight:bold;">{high} HIGH</span>'
+        )
+    if med:
+        count_parts.append(f'{med} MEDIUM')
+    count_text = ", ".join(count_parts)
+
+    risk_text = ""
+    if top_risk:
+        risk_text = f'<div style="font-size:11px; color:#555; margin-top:4px;">Top risk: <strong>{top_risk}</strong></div>'
+
+    banner_html = f"""
+    <div style="background:{banner_bg}; border:1px solid {banner_border}44;
+                border-left:4px solid {banner_border}; border-radius:3px;
+                padding:10px 14px; margin-bottom:14px; font-size:12px;">
+      {banner_icon} <strong>{len(all_entries)} end-of-life product(s) detected</strong>
+      &mdash; {count_text}
+      {risk_text}
+    </div>"""
+
+    # Aggregate by product for cleaner display
+    product_agg = {}
+    for e in all_entries:
+        key = (e["product"], e["severity"], e["eol_date"])
+        if key not in product_agg:
+            product_agg[key] = {
+                "product": e["product"],
+                "severity": e["severity"],
+                "eol_date": e["eol_date"],
+                "notes": e.get("notes", ""),
+                "ips": [],
+                "match_source": e.get("match_source", ""),
+                "version_sample": e.get("version_detected", ""),
+            }
+        product_agg[key]["ips"].append(e["ip"])
+
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+    sorted_products = sorted(
+        product_agg.values(),
+        key=lambda p: (severity_order.get(p["severity"], 9), p["product"]),
+    )
+
+    rows = ""
+    for i, p in enumerate(sorted_products):
+        bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+        sev = p["severity"]
+        sev_colors = {
+            "CRITICAL": "#dc3545", "HIGH": "#fd7e14",
+            "MEDIUM": "#ffc107", "LOW": "#6c757d", "INFO": "#17a2b8",
+        }
+        sev_color = sev_colors.get(sev, "#6c757d")
+        sev_text_color = "#fff" if sev in ("CRITICAL", "HIGH") else "#333"
+        sev_badge = (
+            f'<span style="background:{sev_color}; color:{sev_text_color}; '
+            f'font-size:10px; padding:1px 5px; border-radius:2px;">{sev}</span>'
+        )
+
+        ips_display = ", ".join(p["ips"][:4])
+        if len(p["ips"]) > 4:
+            ips_display += f" +{len(p['ips']) - 4} more"
+
+        rows += f"""
+        <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+          <td style="padding:5px 8px; font-size:11px;">{sev_badge}</td>
+          <td style="padding:5px 8px; font-size:12px; font-weight:bold;">{p['product']}</td>
+          <td style="padding:5px 8px; font-size:11px; color:#555;">{p['eol_date']}</td>
+          <td style="padding:5px 8px; font-size:11px; text-align:center; font-weight:bold;">{len(p['ips'])}</td>
+          <td style="padding:5px 8px; font-size:11px; font-family:monospace; color:#555;">{ips_display}</td>
+          <td style="padding:5px 8px; font-size:10px; color:#888;">{p['notes'][:60]}</td>
+        </tr>"""
+
+    return f"""
+  <!-- ═══ END-OF-LIFE DETECTION ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#9200; End-of-Life / End-of-Support
+      </h2>
+      {banner_html}
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; margin-bottom:8px;">
+        <tr style="background:#e8f4fb; color:#00628a;">
+          <th style="padding:5px 8px; text-align:left; font-size:10px; width:65px;">Severity</th>
+          <th style="padding:5px 8px; text-align:left; font-size:10px;">Product</th>
+          <th style="padding:5px 8px; text-align:left; font-size:10px; width:80px;">EOL Date</th>
+          <th style="padding:5px 8px; text-align:center; font-size:10px; width:50px;">Count</th>
+          <th style="padding:5px 8px; text-align:left; font-size:10px;">Affected Devices</th>
+          <th style="padding:5px 8px; text-align:left; font-size:10px;">Notes</th>
+        </tr>
+        {rows}
+      </table>
+      <p style="color:#888; font-size:11px; margin:4px 0 0 0; font-style:italic;">
+        EOL dates sourced from vendor lifecycle documentation. Products past end-of-support
+        no longer receive security patches and represent elevated risk.
+      </p>
+    </td>
+  </tr>"""
+
+
 # ── Main report builder ────────────────────────────────────────────────────
 
 def build_discovery_report(scan_results: dict, config: dict) -> tuple:
@@ -1540,12 +1998,18 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     ntp_results = scan_results.get("ntp", {})
     nac_results = scan_results.get("nac", {})
     osint_results = scan_results.get("osint", {})
+    ssl_audit_results = scan_results.get("ssl_audit", {})
+    backup_results = scan_results.get("backup_posture", {})
+    eol_results = scan_results.get("eol_detection", {})
 
     wifi_section = _build_wifi_section(wifi_results, company_color)
     protocol_section = _build_protocol_discovery_section(mdns_results, ssdp_results, company_color)
     dhcp_section = _build_dhcp_section(dhcp_results, company_color)
     infra_section = _build_infrastructure_section(ntp_results, nac_results, company_color)
     osint_section = _build_osint_section(osint_results, company_color)
+    ssl_audit_section = _build_ssl_audit_section(ssl_audit_results, company_color)
+    backup_section = _build_backup_section(backup_results, company_color)
+    eol_section = _build_eol_section(eol_results, company_color)
 
     critical_count = len(summary.get("critical_hosts", []))
     security_color = "#dc3545" if critical_count > 0 else ("#fd7e14" if security_obs > 5 else "#2d6a4f")
@@ -1701,6 +2165,12 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
 
   {osint_section}
 
+  {ssl_audit_section}
+
+  {backup_section}
+
+  {eol_section}
+
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -1825,6 +2295,9 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
     # Pre-build IP -> mDNS/SSDP lookup maps
     mdns_by_ip: dict = {}
     ssdp_by_ip: dict = {}
+    ssl_by_ip: dict = {}
+    eol_by_ip: dict = {}
+    backup_role_by_ip: dict = {}
     if scan_results:
         for svc in (scan_results.get("mdns", {}) or {}).get("services", []):
             ip = svc.get("ip", "")
@@ -1837,6 +2310,28 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
             if ip:
                 name = dev.get("friendly_name", "") or dev.get("service_type", "")
                 ssdp_by_ip.setdefault(ip, []).append(name)
+        # SSL audit data by IP
+        for cert in (scan_results.get("ssl_audit", {}) or {}).get("certificates", []):
+            ip = cert.get("ip", "")
+            if ip:
+                ssl_by_ip.setdefault(ip, []).append(cert)
+        # EOL data by IP
+        for entry in (
+            (scan_results.get("eol_detection", {}) or {}).get("eol_devices", [])
+            + (scan_results.get("eol_detection", {}) or {}).get("approaching_eol", [])
+            + (scan_results.get("eol_detection", {}) or {}).get("eol_services", [])
+        ):
+            ip = entry.get("ip", "")
+            if ip:
+                eol_by_ip.setdefault(ip, []).append(entry.get("product", ""))
+        # Backup role by IP
+        bp = scan_results.get("backup_posture", {}) or {}
+        for sw in bp.get("backup_software", []):
+            backup_role_by_ip[sw.get("ip", "")] = f'Backup: {sw.get("product", "")}'
+        for st in bp.get("storage_targets", []):
+            backup_role_by_ip.setdefault(st.get("ip", ""), f'Storage: {st.get("product", "")}')
+        for hv in bp.get("hypervisors", []):
+            backup_role_by_ip.setdefault(hv.get("ip", ""), f'Hypervisor: {hv.get("product", "")}')
 
     output = io.StringIO()
     writer = csv.writer(output)
@@ -1849,6 +2344,8 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
         "SSL Cert Expires", "SSH Banner", "FTP Banner", "Service Versions",
         "Subnet Source", "Subnet Label", "Gateway Info", "SNMP Interfaces",
         "mDNS Services", "SSDP / UPnP Devices",
+        "SSL Cert Issuer", "SSL Cert Days Left", "SSL Issues",
+        "EOL Products", "Backup/DR Role",
     ])
     for host in hosts:
         ports = sorted(host.get("open_ports", []))
@@ -1930,6 +2427,19 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
             " | ".join(mdns_by_ip.get(ip, [])),
             # SSDP/UPnP devices for this IP
             " | ".join(ssdp_by_ip.get(ip, [])),
+            # SSL cert issuer (first cert for this IP)
+            (ssl_by_ip.get(ip, [{}])[0].get("issuer_cn", "")
+             if ssl_by_ip.get(ip) else ""),
+            # SSL cert days remaining
+            (str(ssl_by_ip.get(ip, [{}])[0].get("days_remaining", ""))
+             if ssl_by_ip.get(ip) else ""),
+            # SSL issues
+            (" | ".join(ssl_by_ip.get(ip, [{}])[0].get("issues", []))
+             if ssl_by_ip.get(ip) else ""),
+            # EOL products
+            " | ".join(sorted(set(eol_by_ip.get(ip, [])))),
+            # Backup/DR role
+            backup_role_by_ip.get(ip, ""),
         ])
 
     return output.getvalue().encode("utf-8")

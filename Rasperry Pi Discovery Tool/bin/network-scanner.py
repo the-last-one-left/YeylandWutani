@@ -3,7 +3,7 @@
 Yeyland Wutani - Network Discovery Pi
 network-scanner.py - Comprehensive Network Discovery Engine
 
-Fourteen-phase discovery:
+Seventeen-phase discovery:
   Phase 1:   Network Reconnaissance
   Phase 1b:  Alternate Subnet Detection (probe common gateways)
   Phase 2:   Host Discovery (ARP + ping sweep, including additional subnets)
@@ -18,22 +18,27 @@ Fourteen-phase discovery:
   Phase 11:  NTP Server Detection
   Phase 12:  802.1X / NAC Detection
   Phase 13:  OSINT / External Reconnaissance
+  Phase 14:  SSL/TLS Certificate Health Audit
+  Phase 15:  Backup & DR Posture Inference
+  Phase 16:  End-of-Life / End-of-Support Detection
 """
 
 import concurrent.futures
+import hashlib
 import ipaddress
 import json
 import logging
 import os
 import re
 import socket
+import ssl
 import struct
 import subprocess
 import sys
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -125,6 +130,16 @@ DEFAULT_CONFIG = {
     "enable_crtsh_lookup": True,       # certificate transparency
     "enable_dns_security": True,       # MX, SPF, DKIM, DMARC analysis
     "enable_whois_lookup": True,       # WHOIS via RDAP / whois CLI
+    # ── SSL/TLS Certificate Health Audit ──────────────────────────────────
+    "enable_ssl_audit": True,
+    "ssl_audit_timeout": 5,
+    "ssl_cert_warning_days": 30,
+    "ssl_cert_critical_days": 7,
+    # ── Backup & DR Posture Inference ─────────────────────────────────────
+    "enable_backup_posture": True,
+    # ── End-of-Life / End-of-Support Detection ────────────────────────────
+    "enable_eol_detection": True,
+    "eol_warning_months": 12,
 }
 
 
@@ -2960,6 +2975,779 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
     return result
 
 
+# ── Phase 14: SSL/TLS Certificate Health Audit ─────────────────────────────
+
+# Ports commonly serving TLS
+_TLS_PORTS = {443, 8443, 636, 993, 995, 465, 587, 8080, 8444, 9443, 4443}
+
+# Well-known public CA org keywords (for self-signed / internal CA detection)
+_PUBLIC_CA_KEYWORDS = {
+    "digicert", "let's encrypt", "letsencrypt", "comodo", "sectigo",
+    "globalsign", "godaddy", "entrust", "verisign", "thawte",
+    "geotrust", "rapidssl", "amazon", "starfield", "microsoft",
+    "google trust", "isrg", "baltimore", "cybertrust", "usertrust",
+    "buypass", "certum", "actalis", "affirmtrust", "quovadis",
+    "ssl.com", "zerossl",
+}
+
+
+def _ssl_connect_and_inspect(ip: str, port: int, timeout: int = 5) -> dict:
+    """Connect to an SSL/TLS service and extract full certificate details.
+
+    Uses Python's ssl module to get richer data than nmap's ssl-cert script:
+    signature algorithm, key size, SANs, issuer chain, serial.
+    """
+    result = {
+        "ip": ip, "port": port, "subject_cn": "", "issuer_cn": "",
+        "issuer_org": "", "sans": [], "not_before": "", "not_after": "",
+        "days_remaining": None, "signature_algorithm": "",
+        "key_size": 0, "is_self_signed": False, "serial": "",
+        "protocol_version": "", "error": "",
+    }
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            with ctx.wrap_socket(sock, server_hostname=ip) as ssock:
+                result["protocol_version"] = ssock.version() or ""
+
+                # Binary DER cert for algorithm + key size
+                der_cert = ssock.getpeercert(binary_form=True)
+
+                # Parsed cert dict (only available with CERT_NONE via binary)
+                # We'll parse manually from DER using hashlib for serial
+                # and ssl helpers for the rest
+                cert = ssock.getpeercert()
+
+                # If getpeercert() returns empty with CERT_NONE, re-parse
+                if not cert and der_cert:
+                    # Use openssl-style parsing from the binary cert
+                    import subprocess as sp
+                    proc = sp.run(
+                        ["openssl", "x509", "-inform", "DER", "-noout",
+                         "-subject", "-issuer", "-dates", "-serial",
+                         "-ext", "subjectAltName",
+                         "-text"],
+                        input=der_cert, capture_output=True, timeout=timeout,
+                    )
+                    if proc.returncode == 0:
+                        text = proc.stdout.decode("utf-8", errors="replace")
+                        for line in text.splitlines():
+                            line = line.strip()
+                            if line.startswith("Subject:"):
+                                cn_m = re.search(r"CN\s*=\s*([^,/]+)", line)
+                                if cn_m:
+                                    result["subject_cn"] = cn_m.group(1).strip()
+                            elif line.startswith("Issuer:"):
+                                cn_m = re.search(r"CN\s*=\s*([^,/]+)", line)
+                                if cn_m:
+                                    result["issuer_cn"] = cn_m.group(1).strip()
+                                org_m = re.search(r"O\s*=\s*([^,/]+)", line)
+                                if org_m:
+                                    result["issuer_org"] = org_m.group(1).strip()
+                            elif "Not Before" in line or "notBefore" in line:
+                                result["not_before"] = line.split(":", 1)[1].strip()[:40] if ":" in line else ""
+                            elif "Not After" in line or "notAfter" in line:
+                                result["not_after"] = line.split(":", 1)[1].strip()[:40] if ":" in line else ""
+                            elif line.startswith("serial="):
+                                result["serial"] = line.split("=", 1)[1].strip()[:60]
+                            elif "DNS:" in line:
+                                for san_m in re.finditer(r"DNS:([^\s,]+)", line):
+                                    result["sans"].append(san_m.group(1))
+
+                        # Key size + algorithm
+                        key_m = re.search(r"Public-Key:\s*\((\d+)\s*bit\)", text)
+                        if key_m:
+                            result["key_size"] = int(key_m.group(1))
+                        sig_m = re.search(r"Signature Algorithm:\s*(\S+)", text)
+                        if sig_m:
+                            result["signature_algorithm"] = sig_m.group(1)
+
+                else:
+                    # Parse from Python cert dict
+                    subject = dict(x[0] for x in cert.get("subject", ()))
+                    issuer = dict(x[0] for x in cert.get("issuer", ()))
+                    result["subject_cn"] = subject.get("commonName", "")
+                    result["issuer_cn"] = issuer.get("commonName", "")
+                    result["issuer_org"] = issuer.get("organizationName", "")
+                    result["not_before"] = cert.get("notBefore", "")
+                    result["not_after"] = cert.get("notAfter", "")
+                    result["serial"] = cert.get("serialNumber", "")
+
+                    for san_type, san_val in cert.get("subjectAltName", ()):
+                        if san_type == "DNS":
+                            result["sans"].append(san_val)
+
+                # Self-signed check
+                subj_cn = result["subject_cn"].lower()
+                iss_cn = result["issuer_cn"].lower()
+                if subj_cn and iss_cn and subj_cn == iss_cn:
+                    result["is_self_signed"] = True
+
+                # Days remaining
+                for fmt in ("%b %d %H:%M:%S %Y %Z", "%Y-%m-%dT%H:%M:%S",
+                            "%Y-%m-%d", "%b %d %H:%M:%S %Y"):
+                    try:
+                        exp = datetime.strptime(result["not_after"].strip(), fmt)
+                        result["days_remaining"] = (exp - datetime.now()).days
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+    except (socket.timeout, ConnectionRefusedError, ConnectionResetError,
+            OSError, ssl.SSLError) as e:
+        result["error"] = str(e)[:80]
+    except Exception as e:
+        result["error"] = str(e)[:80]
+
+    return result
+
+
+def _assess_cert_health(cert: dict, config: dict) -> list:
+    """Evaluate a certificate and return list of issue strings."""
+    issues = []
+    warn_days = config.get("ssl_cert_warning_days", 30)
+    crit_days = config.get("ssl_cert_critical_days", 7)
+
+    days = cert.get("days_remaining")
+    if days is not None:
+        if days < 0:
+            issues.append(f"EXPIRED ({abs(days)} days ago)")
+        elif days <= crit_days:
+            issues.append(f"Expires in {days} day(s) — CRITICAL")
+        elif days <= warn_days:
+            issues.append(f"Expires in {days} day(s)")
+
+    if cert.get("is_self_signed"):
+        issues.append("Self-signed certificate")
+
+    sig = (cert.get("signature_algorithm") or "").lower()
+    if "md5" in sig:
+        issues.append("Weak signature: MD5")
+    elif "sha1" in sig and "sha1with" in sig:
+        issues.append("Deprecated signature: SHA-1")
+
+    key_size = cert.get("key_size", 0)
+    if 0 < key_size < 2048:
+        issues.append(f"Weak key: {key_size}-bit (min 2048)")
+
+    # Check if issuer is internal (not a well-known public CA)
+    issuer_lower = (cert.get("issuer_org") or cert.get("issuer_cn") or "").lower()
+    if issuer_lower and not cert.get("is_self_signed"):
+        is_public = any(kw in issuer_lower for kw in _PUBLIC_CA_KEYWORDS)
+        if not is_public:
+            issues.append(f"Internal/private CA: {cert.get('issuer_cn', 'Unknown')}")
+
+    return issues
+
+
+def phase14_ssl_audit(hosts: list, config: dict) -> dict:
+    """Phase 14: SSL/TLS Certificate Health Audit.
+
+    Two-pass approach:
+      Pass 1: Analyse certs already captured by Phase 4 (nmap ssl-cert)
+      Pass 2: Connect to every TLS-capable port with Python ssl to get
+              richer data (signature algorithm, key size, SANs, issuer chain)
+    """
+    logger.info("[Phase 14] SSL/TLS Certificate Health Audit...")
+    timeout = config.get("ssl_audit_timeout", 5)
+
+    certificates = []
+    seen = set()  # (ip, port) dedup
+    internal_cas = set()
+
+    for host in hosts:
+        ip = host.get("ip", "")
+        hostname = host.get("hostname", "N/A")
+        ports_set = set(host.get("open_ports", []))
+        tls_ports = sorted(ports_set & _TLS_PORTS)
+
+        if not tls_ports:
+            continue
+
+        for port in tls_ports:
+            if (ip, port) in seen:
+                continue
+            seen.add((ip, port))
+
+            cert = _ssl_connect_and_inspect(ip, port, timeout=timeout)
+            if cert.get("error") and not cert.get("subject_cn"):
+                # Could not connect / no cert — skip
+                continue
+
+            cert["hostname"] = hostname
+            cert["issues"] = _assess_cert_health(cert, config)
+
+            # Track internal CAs
+            issuer_lower = (cert.get("issuer_org") or cert.get("issuer_cn") or "").lower()
+            if issuer_lower and not cert.get("is_self_signed"):
+                is_public = any(kw in issuer_lower for kw in _PUBLIC_CA_KEYWORDS)
+                if not is_public:
+                    ca_name = cert.get("issuer_cn") or cert.get("issuer_org", "")
+                    if ca_name:
+                        internal_cas.add(ca_name)
+
+            certificates.append(cert)
+
+    # Summary counts
+    expired = sum(1 for c in certificates if (c.get("days_remaining") or 999) < 0)
+    warn_days = config.get("ssl_cert_warning_days", 30)
+    crit_days = config.get("ssl_cert_critical_days", 7)
+    expiring_30d = sum(
+        1 for c in certificates
+        if 0 <= (c.get("days_remaining") or 999) <= warn_days
+    )
+    expiring_7d = sum(
+        1 for c in certificates
+        if 0 <= (c.get("days_remaining") or 999) <= crit_days
+    )
+    self_signed = sum(1 for c in certificates if c.get("is_self_signed"))
+    weak_key = sum(
+        1 for c in certificates
+        if 0 < (c.get("key_size") or 9999) < 2048
+    )
+    sha1_sig = sum(
+        1 for c in certificates
+        if "sha1" in (c.get("signature_algorithm") or "").lower()
+    )
+
+    logger.info(
+        f"  SSL audit: {len(certificates)} cert(s) — {expired} expired, "
+        f"{expiring_30d} expiring ≤{warn_days}d, {self_signed} self-signed, "
+        f"{len(internal_cas)} internal CA(s)"
+    )
+
+    return {
+        "certificates": certificates,
+        "internal_cas": sorted(internal_cas),
+        "summary": {
+            "total_certs": len(certificates),
+            "expired": expired,
+            "expiring_30d": expiring_30d,
+            "expiring_7d": expiring_7d,
+            "self_signed": self_signed,
+            "weak_key": weak_key,
+            "sha1_signature": sha1_sig,
+            "internal_ca_count": len(internal_cas),
+        },
+    }
+
+
+# ── Phase 15: Backup & DR Posture Inference ─────────────────────────────────
+
+# Backup software detection rules: (product, port_set, keyword_list)
+_BACKUP_PORT_SIGNATURES = [
+    ("Veeam Backup & Replication", {9392, 6160, 6162}, ["veeam"]),
+    ("Veeam Cloud Connect", {6180}, ["veeam", "cloud connect"]),
+    ("Commvault", {8400, 8402, 8403}, ["commvault"]),
+    ("Acronis Cyber Protect", {9876, 30443}, ["acronis"]),
+    ("Datto / Kaseya BCDR", {5000, 7726}, ["datto", "kaseya"]),
+    ("Nakivo Backup", {4443}, ["nakivo"]),
+    ("Rubrik", set(), ["rubrik"]),
+    ("Cohesity DataProtect", set(), ["cohesity"]),
+    ("Unitrends", {1743, 1744}, ["unitrends"]),
+    ("Veritas Backup Exec", {10000}, ["backup exec", "backupexec"]),
+    ("Arcserve", {8014, 8015}, ["arcserve"]),
+    ("NAKIVO", {4443}, ["nakivo"]),
+    ("StorageCraft / Arcserve ShadowProtect", set(), ["shadowprotect", "storagecraft"]),
+]
+
+# Replication / offsite indicators
+_REPLICATION_PORTS = {
+    873: "rsync",
+    9669: "Zerto ZVM",
+    9779: "Zerto ZVRA",
+    6180: "Veeam Cloud Connect",
+    2500: "Veeam Cloud Gateway",
+}
+
+# NAS / storage SNMP keywords
+_NAS_SNMP_KEYWORDS = [
+    ("synology", "Synology DiskStation"),
+    ("qnap", "QNAP NAS"),
+    ("truenas", "TrueNAS"),
+    ("freenas", "FreeNAS"),
+    ("netapp", "NetApp"),
+    ("emc", "Dell EMC"),
+    ("isilon", "Dell Isilon"),
+    ("drobo", "Drobo"),
+    ("buffalo", "Buffalo NAS"),
+    ("readynas", "NETGEAR ReadyNAS"),
+    ("wd.*my.*cloud", "Western Digital My Cloud"),
+]
+
+
+def phase15_backup_posture(hosts: list, config: dict) -> dict:
+    """Phase 15: Backup & DR Posture Inference.
+
+    Pure analysis of existing Phase 3/4 data — no new network traffic.
+    Detects backup software, NAS/SAN storage, hypervisors, and replication
+    indicators from ports, banners, SNMP, and device classifications.
+    """
+    logger.info("[Phase 15] Backup & DR Posture Inference...")
+
+    backup_software = []
+    storage_targets = []
+    hypervisors = []
+    replication_indicators = []
+    observations = []
+    seen_products = set()
+
+    for host in hosts:
+        ip = host.get("ip", "")
+        hostname = host.get("hostname", "N/A")
+        ports_set = set(host.get("open_ports", []))
+        services = host.get("services", {})
+        category = host.get("category", "")
+        os_guess = (host.get("os_guess") or "").lower()
+
+        # Collect all text to search (banners, titles, server headers)
+        searchable_text = os_guess
+        for key, svc in services.items():
+            if isinstance(svc, dict):
+                for field in ("banner", "title", "server", "version",
+                              "nse_banner", "name"):
+                    searchable_text += " " + (svc.get(field) or "")
+        snmp_descr = (services.get("snmp", {}) or {}).get("sysDescr", "")
+        searchable_text += " " + snmp_descr
+        searchable_lower = searchable_text.lower()
+
+        # ── Backup software detection ──
+        for product, sig_ports, keywords in _BACKUP_PORT_SIGNATURES:
+            if product in seen_products and ip in [b["ip"] for b in backup_software]:
+                continue
+
+            port_match = sig_ports & ports_set if sig_ports else False
+            keyword_match = any(kw in searchable_lower for kw in keywords)
+
+            if port_match or keyword_match:
+                evidence_parts = []
+                if port_match:
+                    evidence_parts.append(
+                        f"Port(s) {', '.join(str(p) for p in sorted(port_match))}"
+                    )
+                if keyword_match:
+                    matched_kw = [kw for kw in keywords if kw in searchable_lower]
+                    evidence_parts.append(f"Keyword: {matched_kw[0]}")
+
+                backup_software.append({
+                    "ip": ip, "hostname": hostname, "product": product,
+                    "evidence": "; ".join(evidence_parts),
+                    "ports": sorted(sig_ports & ports_set),
+                })
+                seen_products.add(product)
+
+        # ── NAS / Storage detection ──
+        if category in ("NAS / Storage",):
+            storage_targets.append({
+                "ip": ip, "hostname": hostname,
+                "product": category,
+                "evidence": f"Classified as {category} by device fingerprint",
+                "role": "NAS",
+            })
+        else:
+            # Check SNMP sysDescr for NAS keywords
+            descr_lower = snmp_descr.lower()
+            for kw, product_name in _NAS_SNMP_KEYWORDS:
+                if re.search(kw, descr_lower):
+                    storage_targets.append({
+                        "ip": ip, "hostname": hostname, "product": product_name,
+                        "evidence": f"SNMP sysDescr: {snmp_descr[:80]}",
+                        "role": "NAS",
+                    })
+                    break
+
+        # iSCSI targets
+        if 3260 in ports_set:
+            storage_targets.append({
+                "ip": ip, "hostname": hostname,
+                "product": "iSCSI Target",
+                "evidence": "Port 3260 (iSCSI) open",
+                "role": "SAN/iSCSI",
+            })
+
+        # NFS
+        if 2049 in ports_set:
+            storage_targets.append({
+                "ip": ip, "hostname": hostname,
+                "product": "NFS Server",
+                "evidence": "Port 2049 (NFS) open",
+                "role": "NFS",
+            })
+
+        # ── Hypervisor detection ──
+        if category == "Hypervisor":
+            hypervisors.append({
+                "ip": ip, "hostname": hostname,
+                "product": os_guess[:60] or "Hypervisor",
+                "evidence": f"Classified as Hypervisor",
+                "role": "Hypervisor",
+            })
+        elif 902 in ports_set:
+            hypervisors.append({
+                "ip": ip, "hostname": hostname,
+                "product": "VMware ESXi (probable)",
+                "evidence": "Port 902 (VMware auth) open",
+                "role": "Hypervisor",
+            })
+
+        # Hyper-V detection
+        if any(kw in searchable_lower for kw in ("hyper-v", "hyperv", "vmms")):
+            hypervisors.append({
+                "ip": ip, "hostname": hostname,
+                "product": "Microsoft Hyper-V",
+                "evidence": "Hyper-V keyword detected in service banners",
+                "role": "Hypervisor",
+            })
+
+        # Proxmox
+        if 8006 in ports_set and "proxmox" in searchable_lower:
+            hypervisors.append({
+                "ip": ip, "hostname": hostname,
+                "product": "Proxmox VE",
+                "evidence": "Port 8006 + Proxmox keyword",
+                "role": "Hypervisor",
+            })
+
+        # ── Replication indicators ──
+        for rport, rproto in _REPLICATION_PORTS.items():
+            if rport in ports_set:
+                replication_indicators.append({
+                    "ip": ip, "protocol": rproto,
+                    "port": rport, "direction": "service detected",
+                })
+
+    # ── Build observations ──
+    solution_names = sorted(set(b["product"] for b in backup_software))
+
+    if not backup_software:
+        observations.append(
+            "No backup software detected on the network — potential gap in data protection"
+        )
+    else:
+        observations.append(
+            f"Backup solution(s) detected: {', '.join(solution_names)}"
+        )
+
+    if not storage_targets:
+        observations.append(
+            "No dedicated NAS/SAN storage detected — backups may reside on local disk"
+        )
+
+    nas_with_smb = [
+        s for s in storage_targets
+        if s["role"] == "NAS"
+        and any(h.get("ip") == s["ip"] and 445 in set(h.get("open_ports", []))
+                for h in hosts)
+    ]
+    if nas_with_smb:
+        observations.append(
+            f"{len(nas_with_smb)} NAS device(s) with SMB shares exposed — "
+            f"potential ransomware risk if not network-isolated"
+        )
+
+    if not replication_indicators:
+        observations.append(
+            "No offsite replication indicators detected (rsync, Zerto, "
+            "Veeam Cloud Connect)"
+        )
+
+    if hypervisors and not backup_software:
+        observations.append(
+            f"{len(hypervisors)} hypervisor(s) found but no backup software — "
+            f"VM backups may not be automated"
+        )
+
+    # Coverage estimate
+    has_backup = len(backup_software) > 0
+    has_storage = len(storage_targets) > 0
+    has_offsite = len(replication_indicators) > 0
+    if has_backup and has_storage and has_offsite:
+        coverage = "Good"
+    elif has_backup and (has_storage or has_offsite):
+        coverage = "Partial"
+    elif has_backup:
+        coverage = "Partial"
+    else:
+        coverage = "None"
+
+    # Dedup storage targets by IP
+    seen_storage_ips = set()
+    deduped_storage = []
+    for s in storage_targets:
+        if s["ip"] not in seen_storage_ips:
+            seen_storage_ips.add(s["ip"])
+            deduped_storage.append(s)
+
+    # Dedup hypervisors by IP
+    seen_hyper_ips = set()
+    deduped_hypers = []
+    for h in hypervisors:
+        if h["ip"] not in seen_hyper_ips:
+            seen_hyper_ips.add(h["ip"])
+            deduped_hypers.append(h)
+
+    logger.info(
+        f"  Backup posture: {len(backup_software)} solution(s), "
+        f"{len(deduped_storage)} storage target(s), "
+        f"{len(deduped_hypers)} hypervisor(s), "
+        f"coverage={coverage}"
+    )
+
+    return {
+        "backup_software": backup_software,
+        "storage_targets": deduped_storage,
+        "hypervisors": deduped_hypers,
+        "replication_indicators": replication_indicators,
+        "observations": observations,
+        "summary": {
+            "backup_solutions_found": solution_names,
+            "storage_device_count": len(deduped_storage),
+            "hypervisor_count": len(deduped_hypers),
+            "has_offsite_replication": has_offsite,
+            "estimated_coverage": coverage,
+        },
+    }
+
+
+# ── Phase 16: End-of-Life / End-of-Support Detection ───────────────────────
+
+# EOL database: (regex, category, product_label, eol_date, severity, notes)
+# category: "os" matches os_guess + smb_os; "firmware" matches snmp sysDescr +
+#           gateway_info; "service" matches service version strings + banners
+_EOL_DATABASE = [
+    # ── Windows Server ─────────────────────────────────────────────────
+    (r"Windows Server 2003",  "os", "Windows Server 2003",  "2015-07-14", "CRITICAL", "Unsupported since 2015"),
+    (r"Windows Server 2008",  "os", "Windows Server 2008/R2", "2020-01-14", "CRITICAL", "No patches since Jan 2020"),
+    (r"Windows Server 2012",  "os", "Windows Server 2012/R2", "2023-10-10", "CRITICAL", "Extended support ended Oct 2023"),
+    (r"Windows Server 2016",  "os", "Windows Server 2016",  "2027-01-12", "INFO", "Extended support until Jan 2027"),
+    (r"Windows Server 2019",  "os", "Windows Server 2019",  "2029-01-09", "INFO", "Extended support until Jan 2029"),
+    # ── Windows Desktop ────────────────────────────────────────────────
+    (r"Windows XP",           "os", "Windows XP",           "2014-04-08", "CRITICAL", "Unsupported since 2014"),
+    (r"Windows Vista",        "os", "Windows Vista",        "2017-04-11", "CRITICAL", "Unsupported since 2017"),
+    (r"Windows 7",            "os", "Windows 7",            "2020-01-14", "CRITICAL", ""),
+    (r"Windows 8(?:\.0)?(?!\.\d)", "os", "Windows 8",      "2016-01-12", "CRITICAL", ""),
+    (r"Windows 8\.1",         "os", "Windows 8.1",          "2023-01-10", "CRITICAL", ""),
+    (r"Windows 10.*\b(?:1507|1511|1607|1703|1709|1803|1809)\b",
+     "os", "Windows 10 (EOL build)", "varies", "HIGH", "Build no longer receives updates"),
+    (r"Windows 10.*\b(?:1903|1909|2004|20H2|21H1|21H2)\b",
+     "os", "Windows 10 (EOL build)", "varies", "HIGH", "Build no longer receives updates"),
+    # ── Linux ──────────────────────────────────────────────────────────
+    (r"Ubuntu 14\.04",        "os", "Ubuntu 14.04 LTS",    "2019-04-30", "CRITICAL", ""),
+    (r"Ubuntu 16\.04",        "os", "Ubuntu 16.04 LTS",    "2021-04-30", "CRITICAL", ""),
+    (r"Ubuntu 18\.04",        "os", "Ubuntu 18.04 LTS",    "2023-05-31", "HIGH", "Standard support ended"),
+    (r"Ubuntu 20\.04",        "os", "Ubuntu 20.04 LTS",    "2025-04-30", "MEDIUM", "Approaching EOL Apr 2025"),
+    (r"CentOS (?:Linux )?[56](?:\.|\s|$)", "os", "CentOS 5/6", "2020-11-30", "CRITICAL", ""),
+    (r"CentOS (?:Linux )?7",  "os", "CentOS 7",            "2024-06-30", "HIGH", "EOL June 2024"),
+    (r"CentOS (?:Linux )?8(?:\.|\s|$)", "os", "CentOS 8",  "2021-12-31", "CRITICAL", "Upstream dropped; use Stream or alternative"),
+    (r"Red Hat.*(?:Enterprise|RHEL).*[56](?:\.|\s|$)", "os", "RHEL 5/6", "2024-06-30", "HIGH", ""),
+    (r"Debian.*(?:wheezy|7\.)",  "os", "Debian 7 Wheezy",  "2018-05-31", "CRITICAL", ""),
+    (r"Debian.*(?:jessie|8\.)",  "os", "Debian 8 Jessie",  "2020-06-30", "CRITICAL", ""),
+    (r"Debian.*(?:stretch|9\.)", "os", "Debian 9 Stretch",  "2022-06-30", "CRITICAL", ""),
+    (r"Debian.*(?:buster|10\.)", "os", "Debian 10 Buster",  "2024-06-30", "HIGH", ""),
+    (r"Amazon Linux AMI(?!\s*2)", "os", "Amazon Linux AMI", "2023-12-31", "HIGH", ""),
+    (r"SUSE.*1[12](?:\.|\s|$)", "os", "SLES 11/12",        "2024-10-31", "HIGH", ""),
+    (r"FreeBSD\s*(?:1[012]|[0-9])(?:\.|\s|$)", "os", "FreeBSD (old)", "varies", "HIGH", "Out of support"),
+    # ── Firewalls & Network ────────────────────────────────────────────
+    (r"FortiOS[^\d]*5\.",     "firmware", "FortiOS 5.x",    "2020-09-30", "CRITICAL", ""),
+    (r"FortiOS[^\d]*6\.[02]", "firmware", "FortiOS 6.0/6.2", "2023-09-29", "CRITICAL", ""),
+    (r"FortiOS[^\d]*6\.4",   "firmware", "FortiOS 6.4",     "2025-03-31", "MEDIUM", "Approaching EOL"),
+    (r"SonicOS[^\d]*[56]\.",  "firmware", "SonicOS 5.x/6.x", "2024-01-31", "CRITICAL", ""),
+    (r"pfSense.*2\.[0-4](?:\.|\s|$)", "firmware", "pfSense (old)", "varies", "HIGH", "Upgrade recommended"),
+    (r"ASA.*(?:8\.|9\.[0-8](?:\.|\s|$))", "firmware", "Cisco ASA (old firmware)", "varies", "HIGH", ""),
+    (r"IOS\s*(?:12|15\.0|15\.1)\.", "firmware", "Cisco IOS (old)", "varies", "HIGH", ""),
+    (r"MikroTik.*(?:5\.|6\.[0-3])", "firmware", "RouterOS (old)", "varies", "MEDIUM", ""),
+    (r"Meraki.*(?:MR|MS|MX)\s*\d.*(?:unsupported|eol)", "firmware", "Meraki (EOL model)", "varies", "HIGH", ""),
+    # ── Hypervisors ────────────────────────────────────────────────────
+    (r"(?:ESXi|vSphere)[^\d]*5\.", "firmware", "VMware ESXi 5.x", "2020-09-19", "CRITICAL", ""),
+    (r"(?:ESXi|vSphere)[^\d]*6\.[057]", "firmware", "VMware ESXi 6.x", "2022-10-15", "CRITICAL", "General support ended"),
+    (r"(?:ESXi|vSphere)[^\d]*7\.0", "firmware", "VMware ESXi 7.0", "2025-04-02", "MEDIUM", "General support ending"),
+    (r"Hyper-V.*2012",        "firmware", "Hyper-V 2012/R2",  "2023-10-10", "CRITICAL", ""),
+    (r"Hyper-V.*2016",        "firmware", "Hyper-V 2016",     "2027-01-12", "INFO", ""),
+    (r"XenServer\s*[67]\.",   "firmware", "XenServer 6/7",    "varies", "HIGH", ""),
+    # ── Web Servers ────────────────────────────────────────────────────
+    (r"Apache/2\.0\.",        "service", "Apache 2.0",       "2013-07-10", "CRITICAL", ""),
+    (r"Apache/2\.2\.",        "service", "Apache 2.2",       "2017-07-11", "CRITICAL", ""),
+    (r"nginx/0\.",            "service", "nginx 0.x",        "varies", "CRITICAL", "Extremely outdated"),
+    (r"nginx/1\.[0-9](?:\.|\s)", "service", "nginx 1.0–1.9", "varies", "HIGH", "Old stable branch"),
+    (r"nginx/1\.1[0-7]\.",    "service", "nginx 1.10–1.17",  "varies", "MEDIUM", "Consider upgrade"),
+    (r"Microsoft-IIS/[56]\.",  "service", "IIS 5/6",         "varies", "CRITICAL", "Tied to Server 2003"),
+    (r"Microsoft-IIS/7\.",    "service", "IIS 7.x",          "varies", "CRITICAL", "Tied to Server 2008"),
+    (r"Microsoft-IIS/8\.",    "service", "IIS 8.x",          "varies", "HIGH", "Tied to Server 2012"),
+    # ── SSH ────────────────────────────────────────────────────────────
+    (r"OpenSSH[_ ](?:[1-5]\.|6\.[0-6])", "service", "OpenSSH (very old)", "varies", "CRITICAL", "Known CVEs"),
+    (r"OpenSSH[_ ](?:6\.[7-9]|7\.[0-3])", "service", "OpenSSH (old)", "varies", "HIGH", "Known vulnerabilities"),
+    (r"OpenSSH[_ ]7\.[4-9]", "service", "OpenSSH 7.4–7.9", "varies", "MEDIUM", "Consider upgrade"),
+    # ── Programming / Runtime ──────────────────────────────────────────
+    (r"PHP/5\.",              "service", "PHP 5.x",          "2018-12-31", "CRITICAL", "No security fixes"),
+    (r"PHP/7\.[0-3]",        "service", "PHP 7.0–7.3",      "2021-12-06", "HIGH", "No security fixes"),
+    (r"PHP/7\.4",            "service", "PHP 7.4",           "2022-11-28", "HIGH", ""),
+    (r"PHP/8\.0",            "service", "PHP 8.0",           "2023-11-26", "MEDIUM", ""),
+    # ── Databases ──────────────────────────────────────────────────────
+    (r"MySQL\s*5\.[0-6]",    "service", "MySQL 5.0–5.6",    "2021-02-01", "HIGH", ""),
+    (r"MariaDB.*5\.",        "service", "MariaDB 5.x",       "varies", "HIGH", ""),
+    (r"PostgreSQL\s*(?:[0-9]|1[01])(?:\.|\s)", "service", "PostgreSQL ≤11", "varies", "MEDIUM", ""),
+    (r"Microsoft SQL Server 20(?:00|05|08)", "service", "SQL Server 2000/2005/2008", "varies", "CRITICAL", ""),
+    (r"Microsoft SQL Server 2012", "service", "SQL Server 2012", "2022-07-12", "CRITICAL", ""),
+    (r"Microsoft SQL Server 2014", "service", "SQL Server 2014", "2024-07-09", "HIGH", ""),
+    # ── Email ──────────────────────────────────────────────────────────
+    (r"Exchange Server 20(?:03|07|10)", "service", "Exchange 2003/2007/2010", "varies", "CRITICAL", ""),
+    (r"Exchange Server 2013", "service", "Exchange 2013",    "2023-04-11", "CRITICAL", ""),
+    (r"Exchange Server 2016", "service", "Exchange 2016",    "2025-10-14", "MEDIUM", "Approaching EOL"),
+    (r"Postfix.*2\.",        "service", "Postfix 2.x",       "varies", "MEDIUM", ""),
+    # ── Printers / IoT ────────────────────────────────────────────────
+    (r"JetDirect",           "firmware", "HP JetDirect (legacy)", "varies", "LOW", "Often unpatched"),
+]
+
+
+def _collect_matchable_strings(host: dict) -> dict:
+    """Gather all strings from a host that can be matched against EOL DB.
+
+    Returns dict with keys 'os', 'firmware', 'service' each containing a
+    list of (source_label, text) tuples.
+    """
+    strings = {"os": [], "firmware": [], "service": []}
+
+    # OS-level strings
+    os_guess = host.get("os_guess", "")
+    if os_guess:
+        strings["os"].append(("nmap OS", os_guess))
+
+    # SMB OS
+    smb = host.get("services", {}).get("smb", {}) or {}
+    smb_os = smb.get("smb_os", "")
+    if smb_os:
+        strings["os"].append(("SMB OS discovery", smb_os))
+
+    # SNMP sysDescr → both firmware and OS
+    snmp = host.get("services", {}).get("snmp", {}) or {}
+    descr = snmp.get("sysDescr", "")
+    if descr:
+        strings["firmware"].append(("SNMP sysDescr", descr))
+        strings["os"].append(("SNMP sysDescr", descr))
+
+    # Gateway fingerprint
+    gw = host.get("gateway_info", {}) or {}
+    gw_product = gw.get("product", "")
+    gw_version = gw.get("version", "")
+    if gw_product:
+        strings["firmware"].append(("Gateway fingerprint", f"{gw_product} {gw_version}"))
+
+    # Service versions + banners
+    services = host.get("services", {})
+    for key, svc in services.items():
+        if not isinstance(svc, dict) or not isinstance(key, int):
+            continue
+        version = svc.get("version", "")
+        banner = svc.get("banner", "")
+        nse_banner = svc.get("nse_banner", "")
+        server = svc.get("server", "")
+        for val, src in [(version, f"port {key} version"),
+                         (banner, f"port {key} banner"),
+                         (nse_banner, f"port {key} NSE"),
+                         (server, f"port {key} server header")]:
+            if val:
+                strings["service"].append((src, val))
+
+    # HTTP titles sometimes reveal versions
+    for key, svc in services.items():
+        if isinstance(svc, dict) and svc.get("title"):
+            strings["service"].append((f"port {key} HTTP title", svc["title"]))
+
+    return strings
+
+
+def phase16_eol_detection(hosts: list, config: dict) -> dict:
+    """Phase 16: End-of-Life / End-of-Support Detection.
+
+    Matches OS fingerprints, service versions, SNMP sysDescr, and banner
+    strings against a curated EOL database. Groups results by product and
+    severity.
+    """
+    logger.info("[Phase 16] End-of-Life / End-of-Support Detection...")
+
+    eol_devices = []   # CRITICAL/HIGH: already past EOL
+    approaching = []   # MEDIUM/INFO: approaching EOL
+    eol_services = []  # Service-level (per port)
+    seen = set()       # (ip, product_label) dedup
+
+    for host in hosts:
+        ip = host.get("ip", "")
+        hostname = host.get("hostname", "N/A")
+        matchable = _collect_matchable_strings(host)
+
+        for pattern, category, product_label, eol_date, severity, notes in _EOL_DATABASE:
+            if (ip, product_label) in seen:
+                continue
+
+            texts = matchable.get(category, [])
+            for source_label, text in texts:
+                try:
+                    if re.search(pattern, text, re.IGNORECASE):
+                        entry = {
+                            "ip": ip,
+                            "hostname": hostname,
+                            "product": product_label,
+                            "version_detected": text[:100],
+                            "eol_date": eol_date,
+                            "severity": severity,
+                            "match_source": source_label,
+                            "notes": notes,
+                        }
+
+                        seen.add((ip, product_label))
+
+                        if category == "service":
+                            # Try to get port number from source_label
+                            port_m = re.search(r"port (\d+)", source_label)
+                            entry["port"] = int(port_m.group(1)) if port_m else 0
+                            eol_services.append(entry)
+                        elif severity in ("CRITICAL", "HIGH"):
+                            eol_devices.append(entry)
+                        else:
+                            approaching.append(entry)
+
+                        break  # Only first match per (host, product)
+                except re.error:
+                    pass
+
+    # Summary stats
+    all_entries = eol_devices + approaching + eol_services
+    crit = sum(1 for e in all_entries if e["severity"] == "CRITICAL")
+    high = sum(1 for e in all_entries if e["severity"] == "HIGH")
+    med = sum(1 for e in all_entries if e["severity"] == "MEDIUM")
+
+    # Find top risk (product with most affected IPs)
+    product_counts = {}
+    for e in all_entries:
+        if e["severity"] in ("CRITICAL", "HIGH"):
+            product_counts.setdefault(e["product"], set()).add(e["ip"])
+    top_risk = ""
+    if product_counts:
+        top_prod = max(product_counts, key=lambda k: len(product_counts[k]))
+        top_risk = f"{top_prod} ({len(product_counts[top_prod])} device(s))"
+
+    logger.info(
+        f"  EOL detection: {len(all_entries)} finding(s) — "
+        f"{crit} CRITICAL, {high} HIGH, {med} MEDIUM"
+    )
+
+    return {
+        "eol_devices": eol_devices,
+        "approaching_eol": approaching,
+        "eol_services": eol_services,
+        "summary": {
+            "critical_eol_count": crit,
+            "high_eol_count": high,
+            "medium_eol_count": med,
+            "total_eol_products": len(all_entries),
+            "top_risk": top_risk,
+        },
+    }
+
+
 # ── Summary Statistics ─────────────────────────────────────────────────────
 
 def build_summary(recon: dict, hosts: list) -> dict:
@@ -3113,6 +3901,33 @@ def run_discovery(progress_callback=None) -> dict:
         except Exception as e:
             logger.error(f"Phase 13 (OSINT) failed: {e}", exc_info=True)
 
+    # Phase 14: SSL/TLS Certificate Health Audit
+    ssl_audit_results = {}
+    if config.get("enable_ssl_audit", True):
+        try:
+            progress("Phase 14: SSL/TLS certificate health audit...")
+            ssl_audit_results = phase14_ssl_audit(hosts, config)
+        except Exception as e:
+            logger.error(f"Phase 14 (SSL Audit) failed: {e}", exc_info=True)
+
+    # Phase 15: Backup & DR Posture Inference
+    backup_results = {}
+    if config.get("enable_backup_posture", True):
+        try:
+            progress("Phase 15: Backup & DR posture inference...")
+            backup_results = phase15_backup_posture(hosts, config)
+        except Exception as e:
+            logger.error(f"Phase 15 (Backup/DR) failed: {e}", exc_info=True)
+
+    # Phase 16: End-of-Life / End-of-Support Detection
+    eol_results = {}
+    if config.get("enable_eol_detection", True):
+        try:
+            progress("Phase 16: End-of-life / end-of-support detection...")
+            eol_results = phase16_eol_detection(hosts, config)
+        except Exception as e:
+            logger.error(f"Phase 16 (EOL) failed: {e}", exc_info=True)
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
@@ -3147,6 +3962,9 @@ def run_discovery(progress_callback=None) -> dict:
         "ntp": ntp_results,
         "nac": nac_results,
         "osint": osint_results,
+        "ssl_audit": ssl_audit_results,
+        "backup_posture": backup_results,
+        "eol_detection": eol_results,
     }
 
     timestamp_str = start_time.strftime("%Y%m%d_%H%M%S")

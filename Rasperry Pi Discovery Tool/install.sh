@@ -403,7 +403,14 @@ run_config_wizard() {
     "enable_shodan_internetdb": true,
     "enable_crtsh_lookup": true,
     "enable_dns_security": true,
-    "enable_whois_lookup": true
+    "enable_whois_lookup": true,
+    "enable_ssl_audit": true,
+    "ssl_audit_timeout": 5,
+    "ssl_cert_warning_days": 30,
+    "ssl_cert_critical_days": 7,
+    "enable_backup_posture": true,
+    "enable_eol_detection": true,
+    "eol_warning_months": 12
   },
   "reporting": {
     "company_name": "${COMPANY_NAME}",
