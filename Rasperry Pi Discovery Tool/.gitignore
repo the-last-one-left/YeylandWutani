@@ -11,6 +11,7 @@ config/.env
 # Token cache
 data/.token_cache.json
 data/*.json
+!data/eol-database.json
 data/*.csv
 data/*.gz
 

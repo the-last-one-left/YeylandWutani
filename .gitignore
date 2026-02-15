@@ -8,7 +8,6 @@
 *.txt
 *.csv
 *.json
-!Rasperry Pi Discovery Tool/data/eol-database.json
 *.xml
 logs/
 output/
