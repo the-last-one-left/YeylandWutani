@@ -1917,6 +1917,116 @@ def _build_eol_section(eol_results: dict, company_color: str) -> str:
   </tr>"""
 
 
+# ── Operational statistics section ─────────────────────────────────────────
+
+def _build_ops_stats_section(scan_results: dict, company_color: str) -> str:
+    """Build an operational statistics table showing per-phase timing and status.
+
+    This section is appended at the bottom of the report for engineer
+    diagnostics — it shows exactly how long each scan phase took and
+    whether it succeeded, was skipped, or encountered an error.
+    """
+    phase_timings = scan_results.get("phase_timings", [])
+    if not phase_timings:
+        return ""
+
+    duration = scan_results.get("duration_seconds", 0)
+    scanner_host = scan_results.get("scanner_host", "Unknown")
+    scan_start = scan_results.get("scan_start", "")
+    scan_end = scan_results.get("scan_end", "")
+
+    # Status colour mapping
+    _STATUS_STYLE = {
+        "ok": ("&#x2705;", "#2d6a4f", "#d8f3dc"),        # green check
+        "skipped": ("&#x23ED;", "#666", "#f0f0f0"),       # skip icon
+        "error": ("&#x274C;", "#dc3545", "#fff5f5"),      # red X
+    }
+
+    # Build table rows
+    rows = ""
+    for pt in phase_timings:
+        status = pt.get("status", "ok")
+        icon, colour, bg = _STATUS_STYLE.get(status, ("?", "#333", "#fff"))
+        name = pt.get("name", "")
+        phase = pt.get("phase", "")
+        dur = pt.get("duration", 0)
+        err_note = ""
+        if status == "error":
+            err_msg = pt.get("error", "")[:80]
+            err_note = f'<br><span style="font-size:10px;color:#dc3545;">{err_msg}</span>'
+        elif status == "skipped":
+            dur_str = "—"
+        if status != "skipped":
+            dur_str = f"{dur:.1f}s"
+
+        # Bar width — proportional to total duration (min 2px so it's visible)
+        bar_pct = min(100, max(2, int(dur / max(duration, 1) * 100)))
+        rows += f"""
+      <tr style="background:{bg};">
+        <td style="padding:6px 10px; font-size:12px; border-bottom:1px solid #eee; color:#555;">{phase}</td>
+        <td style="padding:6px 10px; font-size:12px; border-bottom:1px solid #eee;">{name}{err_note}</td>
+        <td style="padding:6px 10px; font-size:12px; border-bottom:1px solid #eee; text-align:right;
+                   font-family:monospace; white-space:nowrap;">{dur_str}</td>
+        <td style="padding:6px 10px; border-bottom:1px solid #eee; width:120px;">
+          <div style="background:#e0e0e0; border-radius:3px; height:10px; width:100%;">
+            <div style="background:{colour}; border-radius:3px; height:10px; width:{bar_pct}%;"></div>
+          </div>
+        </td>
+        <td style="padding:6px 10px; font-size:13px; border-bottom:1px solid #eee; text-align:center;">{icon}</td>
+      </tr>"""
+
+    # Count statuses
+    ok_count = sum(1 for pt in phase_timings if pt.get("status") == "ok")
+    skip_count = sum(1 for pt in phase_timings if pt.get("status") == "skipped")
+    err_count = sum(1 for pt in phase_timings if pt.get("status") == "error")
+    status_summary = f"{ok_count} passed"
+    if skip_count:
+        status_summary += f", {skip_count} skipped"
+    if err_count:
+        status_summary += f", {err_count} failed"
+
+    duration_min = int(duration // 60)
+    duration_sec = int(duration % 60)
+
+    return f"""
+  <!-- ═══ OPERATIONAL STATISTICS ═══ -->
+  <tr>
+    <td style="padding:28px 36px 12px 36px;">
+      <div style="font-size:16px; font-weight:bold; color:#333; margin-bottom:4px;">
+        &#x2699;&#xFE0F; Operational Statistics
+      </div>
+      <div style="font-size:12px; color:#888; margin-bottom:12px;">
+        Scanner: {scanner_host} &bull;
+        Total: {duration_min}m {duration_sec}s &bull;
+        {status_summary}
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border:1px solid #e0e0e0; border-radius:4px; overflow:hidden;">
+        <tr style="background:{company_color};">
+          <th style="padding:8px 10px; color:#fff; font-size:11px; text-align:left;">Phase</th>
+          <th style="padding:8px 10px; color:#fff; font-size:11px; text-align:left;">Name</th>
+          <th style="padding:8px 10px; color:#fff; font-size:11px; text-align:right;">Duration</th>
+          <th style="padding:8px 10px; color:#fff; font-size:11px; text-align:left;"></th>
+          <th style="padding:8px 10px; color:#fff; font-size:11px; text-align:center;">Status</th>
+        </tr>{rows}
+        <tr style="background:#f0f0f0; font-weight:bold;">
+          <td style="padding:8px 10px; font-size:12px;"></td>
+          <td style="padding:8px 10px; font-size:12px;">Total</td>
+          <td style="padding:8px 10px; font-size:12px; text-align:right; font-family:monospace;">
+            {duration_min}m {duration_sec}s
+          </td>
+          <td style="padding:8px 10px;"></td>
+          <td style="padding:8px 10px;"></td>
+        </tr>
+      </table>
+      <p style="color:#888; font-size:11px; margin:6px 0 0 0; font-style:italic;">
+        Timings reflect wall-clock duration per phase. Phases may overlap with network I/O wait.
+        Review the discovery log on the Pi for detailed subprocess-level diagnostics.
+      </p>
+    </td>
+  </tr>"""
+
+
 # ── Main report builder ────────────────────────────────────────────────────
 
 def build_discovery_report(scan_results: dict, config: dict) -> tuple:
@@ -1924,6 +2034,9 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     Build subject + full HTML email report from scan_results dict.
     Returns (subject: str, html: str).
     """
+    import time as _time
+    _t0 = _time.time()
+
     reporting = config.get("reporting", {})
     company_name = reporting.get("company_name", "Pacific Office Automation Inc.")
     company_color = reporting.get("company_color", "#00A0D9")
@@ -1932,6 +2045,10 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
 
     hosts = scan_results.get("hosts", [])
     summary = scan_results.get("summary", {})
+    logger.info(
+        f"Building HTML report: {len(hosts)} host(s), "
+        f"company={company_name}"
+    )
     recon = scan_results.get("reconnaissance", {})
     topology = scan_results.get("topology", {})
 
@@ -1982,6 +2099,13 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
             return (best_sev, -len(h.get("open_ports", [])))
         display_hosts = sorted(hosts, key=_host_priority)[:MAX_INLINE_DEVICES]
 
+    if truncated:
+        logger.info(
+            f"  Large network: showing top {MAX_INLINE_DEVICES} of "
+            f"{len(hosts)} hosts in inline table (full list in CSV)"
+        )
+
+    logger.debug("  Building core report sections...")
     device_rows = _build_device_rows(display_hosts, company_color)
     security_rows = _build_security_section(hosts, company_color)
     category_cards = _build_category_cards(summary, company_color)
@@ -2002,6 +2126,7 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     backup_results = scan_results.get("backup_posture", {})
     eol_results = scan_results.get("eol_detection", {})
 
+    logger.debug("  Building extended discovery sections...")
     wifi_section = _build_wifi_section(wifi_results, company_color)
     protocol_section = _build_protocol_discovery_section(mdns_results, ssdp_results, company_color)
     dhcp_section = _build_dhcp_section(dhcp_results, company_color)
@@ -2010,6 +2135,7 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     ssl_audit_section = _build_ssl_audit_section(ssl_audit_results, company_color)
     backup_section = _build_backup_section(backup_results, company_color)
     eol_section = _build_eol_section(eol_results, company_color)
+    ops_stats_section = _build_ops_stats_section(scan_results, company_color)
 
     critical_count = len(summary.get("critical_hosts", []))
     security_color = "#dc3545" if critical_count > 0 else ("#fd7e14" if security_obs > 5 else "#2d6a4f")
@@ -2171,6 +2297,8 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
 
   {eol_section}
 
+  {ops_stats_section}
+
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2281,6 +2409,14 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
 </body>
 </html>"""
 
+    html_size_kb = len(html.encode("utf-8")) / 1024
+    _elapsed = _time.time() - _t0
+    logger.info(
+        f"HTML report built in {_elapsed:.1f}s — "
+        f"{html_size_kb:.0f} KB, {len(hosts)} host(s), "
+        f"subject: '{subject}'"
+    )
+
     return subject, html
 
 
@@ -2292,6 +2428,7 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
     When *scan_results* is provided, mDNS and SSDP data are correlated
     with host IPs so the CSV shows which services each host advertises.
     """
+    logger.info(f"Building CSV attachment for {len(hosts)} host(s)...")
     # Pre-build IP -> mDNS/SSDP lookup maps
     mdns_by_ip: dict = {}
     ssdp_by_ip: dict = {}
@@ -2442,7 +2579,9 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
             backup_role_by_ip.get(ip, ""),
         ])
 
-    return output.getvalue().encode("utf-8")
+    csv_bytes = output.getvalue().encode("utf-8")
+    logger.info(f"CSV attachment built: {len(csv_bytes) / 1024:.0f} KB, {len(hosts)} row(s)")
+    return csv_bytes
 
 
 # ── Error notification email ───────────────────────────────────────────────

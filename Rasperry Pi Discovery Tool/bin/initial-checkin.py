@@ -10,8 +10,10 @@ then writes a flag file to prevent re-running.
 
 import json
 import logging
+import logging.handlers
 import os
 import platform
+import shutil
 import socket
 import subprocess
 import sys
@@ -38,12 +40,18 @@ CONFIG_PATH = Path("/opt/network-discovery/config/config.json")
 FLAG_FILE = Path("/opt/network-discovery/data/.checkin_complete")
 LOG_FILE = Path("/opt/network-discovery/logs/initial-checkin.log")
 
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_log_format = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_file_handler.setFormatter(logging.Formatter(_log_format))
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    format=_log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        _file_handler,
     ],
 )
 logger = logging.getLogger("initial-checkin")
@@ -74,6 +82,8 @@ def wait_for_connectivity(retries: int = 12, delay: int = 10) -> bool:
 
 def gather_system_info() -> dict:
     """Collect Pi hardware, OS, and network information."""
+    logger.info("Gathering system information...")
+    t0 = time.time()
     info = {
         "timestamp": datetime.now().isoformat(),
         "hostname": get_hostname(),
@@ -88,22 +98,48 @@ def gather_system_info() -> dict:
         "boot_time": _get_boot_time(),
     }
 
+    logger.info(
+        f"  Host: {info['hostname']} | Model: {info['pi_model']} | "
+        f"OS: {info['os_info']} | Python: {info['python_version']}"
+    )
+    logger.info(f"  Uptime: {info['uptime']} | Boot: {info['boot_time']}")
+
+    # Disk space
+    try:
+        usage = shutil.disk_usage("/")
+        logger.info(
+            f"  Disk: {usage.total / (1024**3):.1f} GB total, "
+            f"{usage.free / (1024**3):.1f} GB free "
+            f"({usage.free / max(usage.total, 1) * 100:.0f}%)"
+        )
+    except Exception as e:
+        logger.debug(f"  Disk space check failed: {e}")
+
     # Network interfaces
     interfaces = get_network_interfaces()
     info["interfaces"] = interfaces
-    logger.info(f"Discovered {len(interfaces)} network interface(s)")
+    logger.info(f"  Network interfaces: {len(interfaces)}")
+    for iface in interfaces:
+        logger.info(
+            f"    {iface['name']}: ip={iface['ip']} "
+            f"mask={iface['netmask']} mac={iface.get('mac', 'N/A')}"
+        )
 
     # Gateway
     gw = get_default_gateway()
     info["default_gateway"] = gw
     if gw:
         info["gateway_hostname"] = reverse_dns(gw) or "N/A"
-        logger.info(f"Gateway: {gw} ({info['gateway_hostname']})")
+        logger.info(f"  Gateway: {gw} ({info['gateway_hostname']})")
+    else:
+        logger.warning("  No default gateway detected")
 
     # DNS
     info["dns_servers"] = get_dns_servers()
-    logger.info(f"DNS servers: {info['dns_servers']}")
+    logger.info(f"  DNS servers: {', '.join(info['dns_servers']) or 'none'}")
 
+    elapsed = time.time() - t0
+    logger.info(f"System info gathered in {elapsed:.1f}s")
     return info
 
 
@@ -114,7 +150,8 @@ def _get_uptime() -> str:
         mins, secs = divmod(int(secs), 60)
         hours, mins = divmod(mins, 60)
         return f"{hours}h {mins}m {secs}s"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not read uptime: {e}")
         return "Unknown"
 
 
@@ -123,7 +160,8 @@ def _get_boot_time() -> str:
         result = subprocess.check_output(["who", "-b"], text=True, timeout=5)
         match = result.strip()
         return match if match else "Unknown"
-    except Exception:
+    except Exception as e:
+        logger.debug(f"Could not read boot time: {e}")
         return "Unknown"
 
 
@@ -140,7 +178,8 @@ def _run_self_update() -> bool:
         logger.debug("self-update.sh not found, skipping auto-update.")
         return False
 
-    logger.info("Running self-update from GitHub...")
+    logger.info(f"Running self-update from GitHub ({update_script})...")
+    t0 = time.time()
     try:
         result = subprocess.run(
             ["/bin/bash", str(update_script)],
@@ -148,19 +187,27 @@ def _run_self_update() -> bool:
             text=True,
             timeout=90,  # Allow up to 90s for slow connections
         )
+        elapsed = time.time() - t0
         if result.returncode != 0:
-            logger.warning(f"self-update.sh exited with code {result.returncode}")
+            logger.warning(
+                f"self-update.sh exited with code {result.returncode} "
+                f"after {elapsed:.1f}s"
+            )
+            if result.stderr.strip():
+                logger.warning(f"  stderr: {result.stderr.strip()[:300]}")
         if "UPDATED" in result.stdout:
-            logger.info("Self-update applied — code updated from GitHub.")
+            logger.info(f"Self-update applied in {elapsed:.1f}s — code updated from GitHub.")
+            if result.stdout.strip():
+                logger.debug(f"  stdout: {result.stdout.strip()[:300]}")
             return True
         else:
-            logger.info("Self-update: already up to date or skipped.")
+            logger.info(f"Self-update: already up to date ({elapsed:.1f}s).")
             return False
     except subprocess.TimeoutExpired:
         logger.warning("Self-update timed out after 90s, continuing with check-in...")
         return False
     except Exception as e:
-        logger.warning(f"Self-update failed: {e}. Continuing with check-in...")
+        logger.warning(f"Self-update failed: {e}. Continuing with check-in...", exc_info=True)
         return False
 
 
@@ -372,8 +419,9 @@ def main():
     # Auto-update from GitHub before proceeding (non-fatal if it fails)
     _run_self_update()
 
+    checkin_start = time.time()
+
     # Gather system info
-    logger.info("Gathering system information...")
     info = gather_system_info()
 
     # Load config
@@ -382,20 +430,24 @@ def main():
     # Build email
     logger.info("Building check-in email...")
     subject, body_html = build_checkin_email(info, config)
+    html_kb = len(body_html.encode("utf-8")) / 1024
+    logger.info(f"Check-in email built: {html_kb:.0f} KB")
 
     # Send email
     try:
         mailer = load_mailer_from_config(str(CONFIG_PATH))
         logger.info(f"Sending check-in email: {subject}")
+        send_start = time.time()
         mailer.send_email(subject=subject, body_html=body_html)
-        logger.info("Check-in email sent successfully.")
+        logger.info(f"Check-in email sent successfully in {time.time() - send_start:.1f}s.")
     except (GraphMailerError, GraphAuthError) as e:
-        logger.error(f"Failed to send check-in email: {e}")
+        logger.error(f"Failed to send check-in email: {e}", exc_info=True)
         sys.exit(1)
 
     # Mark complete
     mark_checkin_complete()
-    logger.info("Initial check-in complete.")
+    total = time.time() - checkin_start
+    logger.info(f"Initial check-in complete in {total:.1f}s total.")
     sys.exit(0)
 
 

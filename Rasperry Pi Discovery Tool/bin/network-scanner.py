@@ -722,9 +722,11 @@ def _nmap_port_scan(
                     result["os_guess"] = og.group(1).strip()[:100]
 
     except subprocess.TimeoutExpired:
-        logger.debug(f"Port scan timeout: {ip}")
+        logger.warning(f"Port scan timeout (>90s): {ip}")
+    except FileNotFoundError:
+        logger.error("nmap not found — is it installed?")
     except Exception as e:
-        logger.debug(f"Port scan error for {ip}: {e}")
+        logger.warning(f"Port scan error for {ip}: {e}")
 
     return result
 
@@ -1284,8 +1286,11 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
 
     # Check ldapsearch is available
     if not Path("/usr/bin/ldapsearch").exists():
+        logger.debug(f"  LDAP probe {ip}: ldapsearch not installed, skipping")
         result["error"] = "ldapsearch not found — install ldap-utils"
         return result
+
+    logger.debug(f"  LDAP probe {ip}: starting anonymous bind enumeration")
 
     _AD_FUNC_LEVELS = {
         "0": "Windows Server 2000",
@@ -1326,16 +1331,26 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
             elif line.startswith("domainFunctionality:"):
                 lvl = line.split(":", 1)[1].strip()
                 result["domain_functional_level"] = _AD_FUNC_LEVELS.get(lvl, f"Level {lvl}")
+    except subprocess.TimeoutExpired:
+        logger.warning(f"  LDAP probe {ip}: rootDSE query timed out ({timeout}s)")
+        result["error"] = f"rootDSE query timed out ({timeout}s)"
+        return result
     except Exception as e:
+        logger.warning(f"  LDAP probe {ip}: rootDSE query failed: {e}")
         result["error"] = f"rootDSE query failed: {e}"
         return result
 
     if not result["base_dn"]:
+        logger.debug(f"  LDAP probe {ip}: no base DN in rootDSE — not an AD DC")
         result["error"] = "Could not determine base DN from rootDSE"
         return result
 
     base_dn = result["base_dn"]
     result["enumerated"] = True   # rootDSE succeeded
+    logger.info(
+        f"  LDAP probe {ip}: AD domain={result['domain_name'] or '?'}, "
+        f"base_dn={base_dn}, level={result['domain_functional_level'] or '?'}"
+    )
 
     # ── Step 2: User count (anonymous bind, may be restricted) ───────────
     try:
@@ -1348,8 +1363,13 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
         if "result: 0 Success" in proc.stdout or "dn: CN=" in proc.stdout:
             result["user_count"] = proc.stdout.count("dn: CN=")
             result["anonymous_bind_allowed"] = True
-    except Exception:
-        pass
+            logger.info(f"  LDAP probe {ip}: anonymous bind OK — {result['user_count']} user(s)")
+        else:
+            logger.debug(f"  LDAP probe {ip}: user query denied (anonymous bind restricted)")
+    except subprocess.TimeoutExpired:
+        logger.debug(f"  LDAP probe {ip}: user query timed out")
+    except Exception as e:
+        logger.debug(f"  LDAP probe {ip}: user query error: {e}")
 
     # ── Step 3: Computer count + OS breakdown ────────────────────────────
     try:
@@ -1369,8 +1389,14 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
                     os_name = line.split(":", 1)[1].strip()
                     os_versions[os_name] = os_versions.get(os_name, 0) + 1
             result["os_versions"] = os_versions
-    except Exception:
-        pass
+            logger.info(
+                f"  LDAP probe {ip}: {result['computer_count']} computer(s), "
+                f"{len(os_versions)} OS variant(s)"
+            )
+    except subprocess.TimeoutExpired:
+        logger.debug(f"  LDAP probe {ip}: computer query timed out")
+    except Exception as e:
+        logger.debug(f"  LDAP probe {ip}: computer query error: {e}")
 
     # ── Step 4: Domain Admins group members ──────────────────────────────
     try:
@@ -1389,8 +1415,11 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
         if admins:
             result["domain_admins"] = admins[:15]
             result["anonymous_bind_allowed"] = True
-    except Exception:
-        pass
+            logger.info(f"  LDAP probe {ip}: {len(admins)} Domain Admin(s) found")
+    except subprocess.TimeoutExpired:
+        logger.debug(f"  LDAP probe {ip}: Domain Admins query timed out")
+    except Exception as e:
+        logger.debug(f"  LDAP probe {ip}: Domain Admins query error: {e}")
 
     # ── Step 5: DC count ──────────────────────────────────────────────────
     try:
@@ -1403,9 +1432,17 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
         )
         count = proc.stdout.count("dn: CN=")
         result["dc_count"] = max(count, 1)  # At minimum, we're talking to this DC
-    except Exception:
+        logger.debug(f"  LDAP probe {ip}: {result['dc_count']} DC(s) found")
+    except Exception as e:
+        logger.debug(f"  LDAP probe {ip}: DC count query error: {e}")
         result["dc_count"] = 1
 
+    logger.info(
+        f"  LDAP probe {ip}: enumeration complete — "
+        f"anon_bind={'yes' if result['anonymous_bind_allowed'] else 'no'}, "
+        f"users={result['user_count']}, computers={result['computer_count']}, "
+        f"DCs={result['dc_count']}"
+    )
     return result
 
 
@@ -3787,130 +3824,124 @@ def run_discovery(progress_callback=None) -> dict:
     """Execute all discovery phases and return structured results."""
     config = load_scan_config()
     start_time = datetime.now()
+    phase_timings = []  # Collected for operational statistics in the report
 
     def progress(msg: str):
         logger.info(msg)
         if progress_callback:
             progress_callback(msg)
 
+    def _run_phase(phase_num, phase_name, func, *args, config_key=None, **kwargs):
+        """Run a phase with timing, logging, and error handling.
+
+        Returns the phase result (or default empty value on failure/skip).
+        Records timing entry in phase_timings list.
+        """
+        if config_key and not config.get(config_key, True):
+            logger.info(f"Phase {phase_num} ({phase_name}): SKIPPED (disabled in config)")
+            phase_timings.append({
+                "phase": phase_num, "name": phase_name,
+                "duration": 0.0, "status": "skipped",
+            })
+            return kwargs.get("default", {})
+
+        progress(f"Phase {phase_num}: {phase_name}...")
+        t0 = time.time()
+        try:
+            result = func(*args)
+            elapsed = time.time() - t0
+            logger.info(
+                f"Phase {phase_num} ({phase_name}): completed in {elapsed:.1f}s"
+            )
+            phase_timings.append({
+                "phase": phase_num, "name": phase_name,
+                "duration": round(elapsed, 2), "status": "ok",
+            })
+            return result
+        except Exception as e:
+            elapsed = time.time() - t0
+            logger.error(
+                f"Phase {phase_num} ({phase_name}): FAILED after {elapsed:.1f}s — {e}",
+                exc_info=True,
+            )
+            phase_timings.append({
+                "phase": phase_num, "name": phase_name,
+                "duration": round(elapsed, 2), "status": "error",
+                "error": str(e),
+            })
+            return kwargs.get("default", {})
+
     progress("Starting network discovery...")
 
-    # Phase 1
-    recon = phase1_reconnaissance(config)
+    # ── Core phases (1–6) ────────────────────────────────────────────────
+    recon = _run_phase("1", "Reconnaissance", phase1_reconnaissance, config)
 
-    # Phase 1b: alternate subnet detection
-    recon = phase1b_alternate_subnet_detection(recon, config)
+    recon = _run_phase("1b", "Alternate subnet detection",
+                       phase1b_alternate_subnet_detection, recon, config)
 
-    # Phase 2
-    hosts = phase2_host_discovery(recon, config)
+    hosts = _run_phase("2", "Host discovery",
+                       phase2_host_discovery, recon, config, default=[])
     if not hosts:
-        logger.warning("No hosts discovered. Network may be empty or scanning may be blocked.")
+        logger.warning(
+            "No hosts discovered. Network may be empty or scanning may be blocked."
+        )
 
-    # Phase 3
-    hosts = phase3_port_scan(hosts, config)
+    hosts = _run_phase("3", "Port scan",
+                       phase3_port_scan, hosts, config, default=hosts)
 
-    # Phase 4
-    hosts = phase4_service_enumeration(hosts, config)
+    hosts = _run_phase("4", "Service enumeration",
+                       phase4_service_enumeration, hosts, config, default=hosts)
 
-    # Phase 5
-    topology = phase5_topology(recon, config)
+    topology = _run_phase("5", "Topology mapping",
+                          phase5_topology, recon, config)
 
-    # Phase 6
-    hosts = phase6_security(hosts)
+    hosts = _run_phase("6", "Security analysis",
+                       phase6_security, hosts, default=hosts)
 
-    # ── Extended discovery phases ────────────────────────────────────────
-    # Each phase is wrapped in try/except so a failure in one doesn't
-    # abort the entire scan.
+    # ── Extended discovery phases (7–16) ─────────────────────────────────
+    wifi_results = _run_phase(
+        "7", "WiFi enumeration", phase7_wifi_scan, config,
+        config_key="enable_wifi_scan")
 
-    # Phase 7: WiFi enumeration + channel analysis
-    wifi_results = {}
-    if config.get("enable_wifi_scan", True):
-        try:
-            progress("Phase 7: WiFi network enumeration...")
-            wifi_results = phase7_wifi_scan(config)
-        except Exception as e:
-            logger.error(f"Phase 7 (WiFi) failed: {e}", exc_info=True)
+    mdns_results = _run_phase(
+        "8", "mDNS / Bonjour discovery", phase8_mdns_discovery, config,
+        config_key="enable_mdns_discovery")
 
-    # Phase 8: mDNS / Bonjour
-    mdns_results = {}
-    if config.get("enable_mdns_discovery", True):
-        try:
-            progress("Phase 8: mDNS / Bonjour service discovery...")
-            mdns_results = phase8_mdns_discovery(config)
-        except Exception as e:
-            logger.error(f"Phase 8 (mDNS) failed: {e}", exc_info=True)
+    ssdp_results = _run_phase(
+        "9", "UPnP / SSDP discovery", phase9_ssdp_discovery, config,
+        config_key="enable_ssdp_discovery")
 
-    # Phase 9: UPnP / SSDP
-    ssdp_results = {}
-    if config.get("enable_ssdp_discovery", True):
-        try:
-            progress("Phase 9: UPnP / SSDP device discovery...")
-            ssdp_results = phase9_ssdp_discovery(config)
-        except Exception as e:
-            logger.error(f"Phase 9 (SSDP) failed: {e}", exc_info=True)
+    dhcp_results = _run_phase(
+        "10", "DHCP scope analysis", phase10_dhcp_analysis, recon, config,
+        config_key="enable_dhcp_analysis")
 
-    # Phase 10: DHCP scope analysis
-    dhcp_results = {}
-    if config.get("enable_dhcp_analysis", True):
-        try:
-            progress("Phase 10: DHCP scope analysis...")
-            dhcp_results = phase10_dhcp_analysis(recon, config)
-        except Exception as e:
-            logger.error(f"Phase 10 (DHCP) failed: {e}", exc_info=True)
+    ntp_results = _run_phase(
+        "11", "NTP server detection", phase11_ntp_detection, hosts, recon, config,
+        config_key="enable_ntp_detection")
 
-    # Phase 11: NTP server detection
-    ntp_results = {}
-    if config.get("enable_ntp_detection", True):
-        try:
-            progress("Phase 11: NTP server detection...")
-            ntp_results = phase11_ntp_detection(hosts, recon, config)
-        except Exception as e:
-            logger.error(f"Phase 11 (NTP) failed: {e}", exc_info=True)
+    nac_results = _run_phase(
+        "12", "802.1X / NAC detection", phase12_nac_detection, config,
+        config_key="enable_nac_detection")
 
-    # Phase 12: 802.1X / NAC detection
-    nac_results = {}
-    if config.get("enable_nac_detection", True):
-        try:
-            progress("Phase 12: 802.1X / NAC detection...")
-            nac_results = phase12_nac_detection(config)
-        except Exception as e:
-            logger.error(f"Phase 12 (NAC) failed: {e}", exc_info=True)
+    osint_results = _run_phase(
+        "13", "OSINT / External reconnaissance",
+        phase13_osint, recon, hosts, dhcp_results, config,
+        config_key="enable_osint")
 
-    # Phase 13: OSINT / External Reconnaissance
-    osint_results = {}
-    if config.get("enable_osint", True):
-        try:
-            progress("Phase 13: OSINT / External reconnaissance...")
-            osint_results = phase13_osint(recon, hosts, dhcp_results, config)
-        except Exception as e:
-            logger.error(f"Phase 13 (OSINT) failed: {e}", exc_info=True)
+    ssl_audit_results = _run_phase(
+        "14", "SSL/TLS certificate health audit",
+        phase14_ssl_audit, hosts, config,
+        config_key="enable_ssl_audit")
 
-    # Phase 14: SSL/TLS Certificate Health Audit
-    ssl_audit_results = {}
-    if config.get("enable_ssl_audit", True):
-        try:
-            progress("Phase 14: SSL/TLS certificate health audit...")
-            ssl_audit_results = phase14_ssl_audit(hosts, config)
-        except Exception as e:
-            logger.error(f"Phase 14 (SSL Audit) failed: {e}", exc_info=True)
+    backup_results = _run_phase(
+        "15", "Backup & DR posture inference",
+        phase15_backup_posture, hosts, config,
+        config_key="enable_backup_posture")
 
-    # Phase 15: Backup & DR Posture Inference
-    backup_results = {}
-    if config.get("enable_backup_posture", True):
-        try:
-            progress("Phase 15: Backup & DR posture inference...")
-            backup_results = phase15_backup_posture(hosts, config)
-        except Exception as e:
-            logger.error(f"Phase 15 (Backup/DR) failed: {e}", exc_info=True)
-
-    # Phase 16: End-of-Life / End-of-Support Detection
-    eol_results = {}
-    if config.get("enable_eol_detection", True):
-        try:
-            progress("Phase 16: End-of-life / end-of-support detection...")
-            eol_results = phase16_eol_detection(hosts, config)
-        except Exception as e:
-            logger.error(f"Phase 16 (EOL) failed: {e}", exc_info=True)
+    eol_results = _run_phase(
+        "16", "End-of-life / end-of-support detection",
+        phase16_eol_detection, hosts, config,
+        config_key="enable_eol_detection")
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -3927,6 +3958,26 @@ def run_discovery(progress_callback=None) -> dict:
 
     summary = build_summary(recon, hosts)
     summary["scan_delta"] = scan_delta
+
+    # ── Phase timing summary log ─────────────────────────────────────────
+    logger.info("-" * 60)
+    logger.info("PHASE TIMING SUMMARY")
+    for pt in phase_timings:
+        status_tag = pt["status"].upper()
+        if pt["status"] == "skipped":
+            logger.info(f"  Phase {pt['phase']:>3s}  {pt['name']:<40s}  SKIPPED")
+        elif pt["status"] == "error":
+            logger.info(
+                f"  Phase {pt['phase']:>3s}  {pt['name']:<40s}  "
+                f"FAILED  {pt['duration']:>7.1f}s"
+            )
+        else:
+            logger.info(
+                f"  Phase {pt['phase']:>3s}  {pt['name']:<40s}  "
+                f"OK      {pt['duration']:>7.1f}s"
+            )
+    logger.info(f"  {'':>5s}  {'TOTAL':<40s}          {duration:>7.1f}s")
+    logger.info("-" * 60)
 
     results = {
         "scan_start": start_time.isoformat(),
@@ -3949,6 +4000,8 @@ def run_discovery(progress_callback=None) -> dict:
         "ssl_audit": ssl_audit_results,
         "backup_posture": backup_results,
         "eol_detection": eol_results,
+        # Operational statistics
+        "phase_timings": phase_timings,
     }
 
     timestamp_str = start_time.strftime("%Y%m%d_%H%M%S")

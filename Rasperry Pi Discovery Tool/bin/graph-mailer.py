@@ -73,7 +73,10 @@ class GraphMailer:
         self.to_email = to_email
 
     def _get_headers(self, content_type: str = "application/json") -> dict:
+        logger.debug("Acquiring Graph API token for request...")
+        token_start = time.time()
         token = self.auth.get_token()
+        logger.debug(f"Token acquired in {time.time() - token_start:.2f}s")
         return {
             "Authorization": f"Bearer {token}",
             "Content-Type": content_type,
@@ -181,14 +184,20 @@ class GraphMailer:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 headers = self._get_headers()
+                payload_size = len(json.dumps(payload).encode("utf-8"))
                 logger.info(
                     f"Sending email via sendMail (attempt {attempt}/{MAX_RETRIES}): "
-                    f"'{subject}' -> {self.to_email}"
+                    f"'{subject}' -> {self.to_email} "
+                    f"[payload: {payload_size / 1024:.0f} KB]"
                 )
+                req_start = time.time()
                 response = requests.post(url, headers=headers, json=payload, timeout=30)
+                req_duration = time.time() - req_start
 
                 if response.status_code == 202:
-                    logger.info(f"Email sent successfully: '{subject}'")
+                    logger.info(
+                        f"Email sent successfully in {req_duration:.1f}s: '{subject}'"
+                    )
                     return True
 
                 if response.status_code == 429:
@@ -251,15 +260,21 @@ class GraphMailer:
             headers = self._get_headers()
 
             logger.info(f"Creating draft message for large email: '{subject}'")
+            draft_start = time.time()
             resp = requests.post(draft_url, headers=headers, json=draft_payload, timeout=30)
             if resp.status_code not in (200, 201):
+                logger.error(
+                    f"Draft creation failed ({resp.status_code}): {resp.text[:500]}"
+                )
                 raise GraphMailerError(
                     f"Failed to create draft message ({resp.status_code}): {resp.text[:500]}"
                 )
             draft_id = resp.json().get("id")
             if not draft_id:
                 raise GraphMailerError("Draft message created but no ID returned.")
-            logger.info(f"Draft message created: {draft_id[:20]}...")
+            logger.info(
+                f"Draft message created in {time.time() - draft_start:.1f}s: {draft_id[:20]}..."
+            )
 
             # Step 2: Upload each attachment via upload session
             for file_path in attachment_paths:
@@ -273,10 +288,19 @@ class GraphMailer:
             send_url = f"{GRAPH_API_BASE}/users/{self.from_email}/messages/{draft_id}/send"
             headers = self._get_headers()
             logger.info(f"Sending draft message: '{subject}' -> {self.to_email}")
+            send_start = time.time()
             resp = requests.post(send_url, headers=headers, timeout=30)
             if resp.status_code == 202:
-                logger.info(f"Large email sent successfully: '{subject}'")
+                total_upload_time = time.time() - draft_start
+                logger.info(
+                    f"Large email sent successfully in {total_upload_time:.1f}s "
+                    f"(draft + upload + send): '{subject}'"
+                )
                 return True
+            logger.error(
+                f"Draft send failed ({resp.status_code}) after {time.time() - send_start:.1f}s: "
+                f"{resp.text[:500]}"
+            )
             raise GraphMailerError(
                 f"Failed to send draft ({resp.status_code}): {resp.text[:500]}"
             )
@@ -322,18 +346,22 @@ class GraphMailer:
         if not upload_url:
             raise GraphMailerError(f"Upload session created but no uploadUrl for '{path.name}'.")
 
+        total_chunks = (file_size + UPLOAD_CHUNK_SIZE - 1) // UPLOAD_CHUNK_SIZE
         logger.info(
             f"Uploading attachment '{path.name}' ({file_size / 1024 / 1024:.1f} MB) "
-            f"in {UPLOAD_CHUNK_SIZE // 1024} KB chunks..."
+            f"in {total_chunks} x {UPLOAD_CHUNK_SIZE // 1024} KB chunks..."
         )
 
         # Upload in chunks
+        upload_start = time.time()
         with open(path, "rb") as f:
             offset = 0
+            chunk_num = 0
             while offset < file_size:
                 chunk = f.read(UPLOAD_CHUNK_SIZE)
                 chunk_len = len(chunk)
                 end = offset + chunk_len - 1
+                chunk_num += 1
 
                 chunk_headers = {
                     "Content-Type": "application/octet-stream",
@@ -343,19 +371,26 @@ class GraphMailer:
 
                 for retry in range(3):
                     try:
+                        chunk_start = time.time()
                         resp = requests.put(
                             upload_url, headers=chunk_headers, data=chunk, timeout=60,
                         )
+                        chunk_duration = time.time() - chunk_start
                         if resp.status_code in (200, 201, 202):
+                            logger.debug(
+                                f"  Chunk {chunk_num}/{total_chunks} uploaded in "
+                                f"{chunk_duration:.1f}s ({chunk_len / 1024:.0f} KB)"
+                            )
                             break
                         if resp.status_code == 416:
                             # Range not satisfiable — server already has this chunk
-                            logger.debug(f"Chunk {offset}-{end} already uploaded, skipping.")
+                            logger.debug(f"  Chunk {offset}-{end} already uploaded, skipping.")
                             break
                         if retry < 2:
                             logger.warning(
-                                f"Chunk upload {offset}-{end} failed ({resp.status_code}), "
-                                f"retry {retry + 1}/3..."
+                                f"Chunk {chunk_num}/{total_chunks} upload failed "
+                                f"({resp.status_code}), retry {retry + 1}/3: "
+                                f"{resp.text[:300]}"
                             )
                             time.sleep(RETRY_BASE_DELAY * (retry + 1))
                         else:
@@ -365,7 +400,10 @@ class GraphMailer:
                             )
                     except (requests.ConnectionError, requests.Timeout) as e:
                         if retry < 2:
-                            logger.warning(f"Network error uploading chunk, retry {retry + 1}/3: {e}")
+                            logger.warning(
+                                f"Network error on chunk {chunk_num}/{total_chunks}, "
+                                f"retry {retry + 1}/3: {e}"
+                            )
                             time.sleep(RETRY_BASE_DELAY * (retry + 1))
                         else:
                             raise GraphMailerError(
@@ -375,9 +413,19 @@ class GraphMailer:
                 offset += chunk_len
                 pct = min(100, int(offset / file_size * 100))
                 if pct % 25 == 0 or offset >= file_size:
-                    logger.debug(f"  Upload progress for '{path.name}': {pct}%")
+                    elapsed = time.time() - upload_start
+                    logger.info(
+                        f"  Upload progress '{path.name}': {pct}% "
+                        f"({offset / 1024 / 1024:.1f}/{file_size / 1024 / 1024:.1f} MB, "
+                        f"{elapsed:.0f}s elapsed)"
+                    )
 
-        logger.info(f"Attachment uploaded successfully: '{path.name}'")
+        upload_duration = time.time() - upload_start
+        speed_kbps = (file_size / 1024) / max(upload_duration, 0.001)
+        logger.info(
+            f"Attachment uploaded successfully: '{path.name}' "
+            f"in {upload_duration:.1f}s ({speed_kbps:.0f} KB/s)"
+        )
 
     def _delete_draft(self, draft_id: Optional[str]) -> None:
         """Best-effort cleanup of a draft message on failure."""
@@ -410,12 +458,22 @@ class GraphMailer:
         Returns True on success, raises GraphMailerError on failure.
         """
         # Calculate approximate total size
-        total_size = len(body_html.encode("utf-8"))
+        html_size = len(body_html.encode("utf-8"))
+        attach_size = 0
         if attachment_paths:
             for p in attachment_paths:
                 path = Path(p)
                 if path.exists():
-                    total_size += path.stat().st_size
+                    fsize = path.stat().st_size
+                    attach_size += fsize
+                    logger.debug(f"Attachment: {path.name} ({fsize / 1024:.0f} KB)")
+                else:
+                    logger.warning(f"Attachment file not found (will skip): {p}")
+        total_size = html_size + attach_size
+        logger.info(
+            f"Email size estimate: HTML {html_size / 1024:.0f} KB + "
+            f"attachments {attach_size / 1024:.0f} KB = {total_size / 1024:.0f} KB total"
+        )
 
         if total_size > LARGE_ATTACHMENT_THRESHOLD and attachment_paths:
             logger.info(
@@ -434,17 +492,21 @@ def load_mailer_from_config(
     """
     Build a GraphMailer from config.json / environment variables.
     """
+    logger.debug(f"Loading mailer config from: {config_path}")
     auth = load_credentials_from_config(config_path)
 
     # Email addresses - env vars take precedence
-    from_email = (
-        os.environ.get("GRAPH_FROM_EMAIL")
-        or _read_config_value(config_path, "graph_api", "from_email")
-    )
-    to_email = (
-        os.environ.get("GRAPH_TO_EMAIL")
-        or _read_config_value(config_path, "graph_api", "to_email")
-    )
+    from_email = os.environ.get("GRAPH_FROM_EMAIL")
+    if from_email:
+        logger.debug("From email loaded from GRAPH_FROM_EMAIL env var")
+    else:
+        from_email = _read_config_value(config_path, "graph_api", "from_email")
+
+    to_email = os.environ.get("GRAPH_TO_EMAIL")
+    if to_email:
+        logger.debug("To email loaded from GRAPH_TO_EMAIL env var")
+    else:
+        to_email = _read_config_value(config_path, "graph_api", "to_email")
 
     if not from_email or not to_email:
         raise GraphMailerError(
@@ -452,6 +514,7 @@ def load_mailer_from_config(
             "or configure graph_api.from_email / to_email in config.json."
         )
 
+    logger.info(f"Mailer configured: {from_email} -> {to_email}")
     return GraphMailer(auth=auth, from_email=from_email, to_email=to_email)
 
 
@@ -485,7 +548,7 @@ if __name__ == "__main__":
             body_html=args.body,
             attachment_paths=args.attachments,
         )
-        print("Email sent successfully.")
+        logger.info("CLI test email sent successfully.")
     except (GraphMailerError, GraphAuthError) as e:
-        print(f"ERROR: {e}", file=sys.stderr)
+        logger.error(f"CLI test email failed: {e}", exc_info=True)
         sys.exit(1)

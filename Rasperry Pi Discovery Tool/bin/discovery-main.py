@@ -17,7 +17,9 @@ Orchestrates the full discovery workflow:
 import gzip
 import json
 import logging
+import logging.handlers
 import os
+import platform
 import shutil
 import signal
 import sys
@@ -40,14 +42,19 @@ LOG_FILE = BASE_DIR / "logs" / "discovery.log"
 DATA_DIR = BASE_DIR / "data"
 LOCK_FILE = BASE_DIR / "data" / ".discovery.lock"
 
-# Set up logging before anything else
+# Set up logging before anything else — rotating logs to avoid filling the SD card
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_log_format = "%(asctime)s [%(levelname)s] %(name)s - %(message)s"
+_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+)
+_file_handler.setFormatter(logging.Formatter(_log_format))
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
+    format=_log_format,
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        _file_handler,
     ],
 )
 logger = logging.getLogger("discovery-main")
@@ -275,12 +282,48 @@ def main():
     logger.info("Yeyland Wutani - Network Discovery Pi: Starting Discovery")
     logger.info("=" * 70)
 
+    # Log system environment for diagnostics
+    try:
+        uname = platform.uname()
+        logger.info(f"System: {uname.system} {uname.release} ({uname.machine})")
+        logger.info(f"Python: {platform.python_version()} ({sys.executable})")
+        logger.info(f"PID: {os.getpid()}  |  User: {os.getenv('USER', 'unknown')}")
+        usage = shutil.disk_usage(str(DATA_DIR))
+        logger.info(
+            f"Disk: {usage.total / (1024**3):.1f} GB total, "
+            f"{usage.used / (1024**3):.1f} GB used, "
+            f"{usage.free / (1024**3):.1f} GB free "
+            f"({usage.free / max(usage.total, 1) * 100:.0f}%)"
+        )
+    except Exception as e:
+        logger.warning(f"Could not gather system diagnostics: {e}")
+
     # Prevent concurrent runs
     if not acquire_lock():
         sys.exit(1)
 
     config = load_config()
     apply_log_level(config)
+
+    # Log enabled feature flags so an engineer knows what will run
+    nd = config.get("network_discovery", {})
+    features = {
+        "WiFi scan": nd.get("enable_wifi_scan", True),
+        "mDNS": nd.get("enable_mdns", True),
+        "UPnP/SSDP": nd.get("enable_upnp", True),
+        "DHCP analysis": nd.get("enable_dhcp_analysis", True),
+        "NTP check": nd.get("enable_ntp_check", True),
+        "802.1X/NAC": nd.get("enable_dot1x_check", True),
+        "OSINT": nd.get("enable_osint", True),
+        "SSL audit": nd.get("enable_ssl_audit", True),
+        "Backup/DR posture": nd.get("enable_backup_posture", True),
+        "EOL detection": nd.get("enable_eol_detection", True),
+    }
+    enabled = [k for k, v in features.items() if v]
+    disabled = [k for k, v in features.items() if not v]
+    logger.info(f"Enabled features: {', '.join(enabled) if enabled else '(none)'}")
+    if disabled:
+        logger.info(f"Disabled features: {', '.join(disabled)}")
 
     # Prune oldest archives if disk space is low (before we generate new data)
     manage_disk_space(config)
@@ -319,24 +362,30 @@ def main():
         scanner_mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(scanner_mod)
 
+        scan_start = time.time()
         scan_results = scanner_mod.run_discovery(
             progress_callback=lambda msg: logger.info(f"[Scanner] {msg}")
         )
+        scan_duration = time.time() - scan_start
+        host_count = len(scan_results.get("hosts", []))
+        logger.info(f"Network scan completed in {scan_duration:.1f}s — {host_count} host(s) found")
 
         if _shutdown_requested:
             logger.warning("Shutdown requested during scan. Sending partial results...")
 
         # Generate report
         logger.info("Generating discovery report...")
+        report_start = time.time()
         subject, html_body = build_discovery_report(scan_results, config)
+        report_duration = time.time() - report_start
 
         html_size_mb = len(html_body.encode("utf-8")) / (1024 * 1024)
+        logger.info(f"HTML report generated in {report_duration:.1f}s ({html_size_mb:.2f} MB)")
         if html_size_mb > 3.0:
             logger.warning(f"HTML report is {html_size_mb:.1f} MB — may exceed Graph API limits.")
-        else:
-            logger.info(f"HTML report size: {html_size_mb:.2f} MB")
 
         # Build CSV attachment with gzip compression
+        csv_start = time.time()
         csv_data = build_csv_attachment(scan_results.get("hosts", []), scan_results)
         timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -360,33 +409,50 @@ def main():
         json_gz_path = DATA_DIR / f"scan_{timestamp_str}.json.gz"
         with gzip.open(json_gz_path, "wb", compresslevel=6) as gz:
             gz.write(json_data)
-        logger.info(f"Compressed JSON report saved: {json_gz_path}")
+        csv_duration = time.time() - csv_start
+        logger.info(
+            f"Compressed JSON report saved: {json_gz_path} — "
+            f"archive build took {csv_duration:.1f}s"
+        )
 
         # Send report with compressed CSV + JSON attachments
-        logger.info("Sending discovery report email...")
+        total_attach_kb = (gz_size + json_gz_path.stat().st_size) / 1024
+        logger.info(f"Sending discovery report email ({total_attach_kb:.0f} KB attachments)...")
         attachment_paths = [str(csv_gz_path), str(json_gz_path)]
+        email_start = time.time()
         try:
             mailer.send_email(
                 subject=subject,
                 body_html=html_body,
                 attachment_paths=attachment_paths,
             )
-            logger.info("Discovery report email sent successfully.")
+            email_duration = time.time() - email_start
+            logger.info(f"Discovery report email sent successfully in {email_duration:.1f}s.")
             # Email confirmed sent — remove uncompressed intermediaries,
             # keep the .gz archives for local reference
             cleanup_after_send(timestamp_str)
         except GraphMailerError as e:
-            logger.error(f"Failed to send report email: {e}")
+            email_duration = time.time() - email_start
+            logger.error(
+                f"Failed to send report email after {email_duration:.1f}s: {e}",
+                exc_info=True,
+            )
             logger.info("Keeping uncompressed files since email send failed.")
             exit_code = 1
 
+        # Final summary
         summary = scan_results.get("summary", {})
-        logger.info(
-            f"Discovery complete. "
-            f"Hosts: {summary.get('total_hosts', 0)}, "
-            f"Open ports: {summary.get('total_open_ports', 0)}, "
-            f"Security observations: {summary.get('security_observations', 0)}"
-        )
+        total_duration = time.time() - scan_start
+        logger.info("-" * 50)
+        logger.info("DISCOVERY RUN SUMMARY")
+        logger.info(f"  Total duration:        {total_duration:.0f}s")
+        logger.info(f"  Scan phase:            {scan_duration:.0f}s")
+        logger.info(f"  Report generation:     {report_duration:.1f}s")
+        logger.info(f"  Email delivery:        {email_duration:.1f}s")
+        logger.info(f"  Hosts discovered:      {summary.get('total_hosts', 0)}")
+        logger.info(f"  Open ports:            {summary.get('total_open_ports', 0)}")
+        logger.info(f"  Security observations: {summary.get('security_observations', 0)}")
+        logger.info("-" * 50)
 
     except Exception as e:
         logger.critical(f"Unhandled exception in discovery: {e}", exc_info=True)

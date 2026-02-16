@@ -260,9 +260,16 @@ def get_network_interfaces() -> list:
                 "is_up": True,
             })
     except ImportError:
-        logger.warning("netifaces not installed - falling back to ip command")
+        logger.warning("netifaces not installed — falling back to ip command")
         interfaces = _get_interfaces_via_ip_cmd()
 
+    if interfaces:
+        logger.info(
+            f"Network interfaces found: {len(interfaces)} — "
+            + ", ".join(f"{i['name']}({i['ip']})" for i in interfaces)
+        )
+    else:
+        logger.warning("No active network interfaces detected")
     return interfaces
 
 
@@ -300,17 +307,19 @@ def _get_interfaces_via_ip_cmd() -> list:
 
 def get_default_gateway() -> Optional[str]:
     """Return the default gateway IP address."""
+    # Method 1: netifaces
     try:
         import netifaces
         gws = netifaces.gateways()
         default = gws.get("default", {})
         gw_entry = default.get(netifaces.AF_INET)
         if gw_entry:
+            logger.debug(f"Default gateway via netifaces: {gw_entry[0]}")
             return gw_entry[0]
     except ImportError:
-        pass
+        logger.debug("netifaces not available for gateway detection")
 
-    # Fallback: parse /proc/net/route
+    # Method 2: /proc/net/route
     try:
         with open("/proc/net/route") as f:
             for line in f.readlines()[1:]:
@@ -319,19 +328,22 @@ def get_default_gateway() -> Optional[str]:
                     gw_hex = parts[2]
                     gw_int = int(gw_hex, 16)
                     gw_ip = socket.inet_ntoa(struct.pack("<L", gw_int))
+                    logger.debug(f"Default gateway via /proc/net/route: {gw_ip}")
                     return gw_ip
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"/proc/net/route read failed: {e}")
 
-    # Last resort: ip route
+    # Method 3: ip route
     try:
         output = subprocess.check_output(["ip", "route", "show", "default"], text=True, timeout=5)
         match = re.search(r"default via (\S+)", output)
         if match:
+            logger.debug(f"Default gateway via ip route: {match.group(1)}")
             return match.group(1)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"ip route command failed: {e}")
 
+    logger.warning("Could not determine default gateway via any method")
     return None
 
 
@@ -348,6 +360,10 @@ def get_dns_servers() -> list:
                         servers.append(parts[1])
     except Exception as e:
         logger.warning(f"Could not read /etc/resolv.conf: {e}")
+    if servers:
+        logger.debug(f"DNS servers: {', '.join(servers)}")
+    else:
+        logger.warning("No DNS servers found in /etc/resolv.conf")
     return servers
 
 
@@ -817,9 +833,13 @@ def get_wifi_interfaces() -> list:
                     name = line.split(None, 1)[1]
                     if name not in wifi_ifaces:
                         wifi_ifaces.append(name)
-    except (FileNotFoundError, subprocess.TimeoutExpired, Exception):
-        pass
+    except (FileNotFoundError, subprocess.TimeoutExpired, Exception) as e:
+        logger.debug(f"iw dev fallback failed: {e}")
 
+    if wifi_ifaces:
+        logger.debug(f"WiFi interfaces: {', '.join(sorted(wifi_ifaces))}")
+    else:
+        logger.debug("No WiFi interfaces detected")
     return sorted(wifi_ifaces)
 
 
