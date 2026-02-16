@@ -334,6 +334,14 @@ run_config_wizard() {
     read -r COMPANY_NAME
     COMPANY_NAME="${COMPANY_NAME:-Yeyland Wutani LLC}"
 
+    prompt "Company accent color - hex code (default: #FF6600):"
+    read -r COMPANY_COLOR
+    COMPANY_COLOR="${COMPANY_COLOR:-#FF6600}"
+
+    prompt "Company tagline (default: Building Better Systems):"
+    read -r COMPANY_TAGLINE
+    COMPANY_TAGLINE="${COMPANY_TAGLINE:-Building Better Systems}"
+
     # Escape JSON special characters in user input (backslash and double-quote)
     # to prevent invalid config.json from secrets containing these characters.
     json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -344,6 +352,8 @@ run_config_wizard() {
     TO_EMAIL="$(json_escape "${TO_EMAIL}")"
     DEVICE_NAME="$(json_escape "${DEVICE_NAME}")"
     COMPANY_NAME="$(json_escape "${COMPANY_NAME}")"
+    COMPANY_COLOR="$(json_escape "${COMPANY_COLOR}")"
+    COMPANY_TAGLINE="$(json_escape "${COMPANY_TAGLINE}")"
 
     # Write config.json from template + user input
     cat > "${CONFIG_FILE}" << EOF
@@ -414,8 +424,8 @@ run_config_wizard() {
   },
   "reporting": {
     "company_name": "${COMPANY_NAME}",
-    "company_color": "#FF6600",
-    "tagline": "Building Better Systems",
+    "company_color": "${COMPANY_COLOR}",
+    "tagline": "${COMPANY_TAGLINE}",
     "include_raw_data": false
   },
   "system": {

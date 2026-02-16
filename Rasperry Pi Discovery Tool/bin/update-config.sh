@@ -178,10 +178,11 @@ menu_device_report() {
     echo "  (Leave blank to keep existing value)"
     echo ""
 
-    local DEVICE COMPANY COLOR LOG_LEVEL V
+    local DEVICE COMPANY COLOR TAGLINE LOG_LEVEL V
     DEVICE="$(get_val '.system.device_name')"
     COMPANY="$(get_val '.reporting.company_name')"
     COLOR="$(get_val '.reporting.company_color')"
+    TAGLINE="$(get_val '.reporting.tagline')"
     LOG_LEVEL="$(get_val '.system.log_level')"
 
     read -rp "  Device name [${DEVICE}]: " V
@@ -190,8 +191,11 @@ menu_device_report() {
     read -rp "  Company name for reports [${COMPANY}]: " V
     [[ -n "${V}" ]] && patch_config_str ".reporting.company_name" "${V}"
 
-    read -rp "  Company color (hex, e.g. #FF6600) [${COLOR}]: " V
+    read -rp "  Company accent color (hex, e.g. #FF6600) [${COLOR}]: " V
     [[ -n "${V}" ]] && patch_config_str ".reporting.company_color" "${V}"
+
+    read -rp "  Company tagline [${TAGLINE}]: " V
+    [[ -n "${V}" ]] && patch_config_str ".reporting.tagline" "${V}"
 
     read -rp "  Log level (DEBUG/INFO/WARNING/ERROR) [${LOG_LEVEL}]: " V
     if [[ -n "${V}" ]]; then
