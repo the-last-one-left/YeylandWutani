@@ -218,9 +218,9 @@ def manage_disk_space(config: dict):
 
 def send_starting_email(mailer: GraphMailer, config: dict):
     reporting = config.get("reporting", {})
-    company_name = reporting.get("company_name", "Pacific Office Automation Inc.")
-    company_color = reporting.get("company_color", "#00A0D9")
-    tagline = reporting.get("tagline", "Problem Solved.")
+    company_name = reporting.get("company_name", "Yeyland Wutani LLC")
+    company_color = reporting.get("company_color", "#FF6600")
+    tagline = reporting.get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
     timestamp = datetime.now().isoformat()
 

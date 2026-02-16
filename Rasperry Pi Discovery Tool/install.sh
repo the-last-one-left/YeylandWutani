@@ -330,9 +330,9 @@ run_config_wizard() {
     read -r DEVICE_NAME
     DEVICE_NAME="${DEVICE_NAME:-NetDiscovery-Pi}"
 
-    prompt "Company name for reports (default: Pacific Office Automation Inc.):"
+    prompt "Company name for reports (default: Yeyland Wutani LLC):"
     read -r COMPANY_NAME
-    COMPANY_NAME="${COMPANY_NAME:-Pacific Office Automation Inc.}"
+    COMPANY_NAME="${COMPANY_NAME:-Yeyland Wutani LLC}"
 
     # Escape JSON special characters in user input (backslash and double-quote)
     # to prevent invalid config.json from secrets containing these characters.
@@ -414,8 +414,8 @@ run_config_wizard() {
   },
   "reporting": {
     "company_name": "${COMPANY_NAME}",
-    "company_color": "#00A0D9",
-    "tagline": "Problem Solved.",
+    "company_color": "#FF6600",
+    "tagline": "Building Better Systems",
     "include_raw_data": false
   },
   "system": {
@@ -466,7 +466,7 @@ send_test_email() {
     if "${VENV_DIR}/bin/python3" "${INSTALL_DIR}/bin/graph-mailer.py" \
         --config "${CONFIG_FILE}" \
         --subject "[Network Discovery Pi] Installation Test - ${DEVICE_NAME:-NetDiscovery-Pi}" \
-        --body "<h2 style='color:#00A0D9;'>Installation Successful!</h2>
+        --body "<h2 style='color:#FF6600;'>Installation Successful!</h2>
 <p>The <strong>Yeyland Wutani Network Discovery Pi</strong> has been installed and configured successfully.</p>
 <p>Device: <strong>${DEVICE_NAME:-NetDiscovery-Pi}</strong></p>
 <p>Graph API email delivery is working. The device will begin network discovery on next boot.</p>

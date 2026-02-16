@@ -190,7 +190,7 @@ menu_device_report() {
     read -rp "  Company name for reports [${COMPANY}]: " V
     [[ -n "${V}" ]] && patch_config_str ".reporting.company_name" "${V}"
 
-    read -rp "  Company color (hex, e.g. #00A0D9) [${COLOR}]: " V
+    read -rp "  Company color (hex, e.g. #FF6600) [${COLOR}]: " V
     [[ -n "${V}" ]] && patch_config_str ".reporting.company_color" "${V}"
 
     read -rp "  Log level (DEBUG/INFO/WARNING/ERROR) [${LOG_LEVEL}]: " V

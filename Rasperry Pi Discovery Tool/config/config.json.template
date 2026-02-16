@@ -43,9 +43,9 @@
     "ad_probe_timeout": 10
   },
   "reporting": {
-    "company_name": "Pacific Office Automation Inc.",
-    "company_color": "#00A0D9",
-    "tagline": "Problem Solved.",
+    "company_name": "Yeyland Wutani LLC",
+    "company_color": "#FF6600",
+    "tagline": "Building Better Systems",
     "include_raw_data": false
   },
   "system": {

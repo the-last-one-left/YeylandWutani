@@ -30,7 +30,7 @@ timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 html_body = f"""<!DOCTYPE html>
 <html>
 <body style="font-family:Arial,sans-serif; max-width:500px; margin:auto; padding:20px;">
-  <div style="background:#00A0D9; color:#fff; padding:20px; border-radius:4px 4px 0 0;">
+  <div style="background:#FF6600; color:#fff; padding:20px; border-radius:4px 4px 0 0;">
     <h2 style="margin:0;">Yeyland Wutani - Network Discovery Pi</h2>
     <p style="margin:5px 0 0 0; opacity:0.85;">Email Delivery Test</p>
   </div>

@@ -234,9 +234,9 @@ def check_log_errors() -> dict:
 
 def build_health_email(checks: list, config: dict) -> tuple:
     """Build the health check email subject and HTML body."""
-    company_name = config.get("reporting", {}).get("company_name", "Pacific Office Automation Inc.")
-    company_color = config.get("reporting", {}).get("company_color", "#00A0D9")
-    tagline = config.get("reporting", {}).get("tagline", "Problem Solved.")
+    company_name = config.get("reporting", {}).get("company_name", "Yeyland Wutani LLC")
+    company_color = config.get("reporting", {}).get("company_color", "#FF6600")
+    tagline = config.get("reporting", {}).get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
 
     issues = [c for c in checks if c.get("status") in ("WARNING", "CRITICAL", "ERROR")]

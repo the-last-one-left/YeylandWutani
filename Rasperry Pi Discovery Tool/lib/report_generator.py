@@ -3,7 +3,7 @@
 Yeyland Wutani - Network Discovery Pi
 report_generator.py - HTML Report Builder
 
-Generates professional HTML email reports with Pacific Office Automation
+Generates professional HTML email reports with configurable client
 branding and Yeyland Wutani tooling attribution.
 """
 
@@ -410,7 +410,7 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
 
 # ── Security observations section ─────────────────────────────────────────
 
-def _build_ad_section(hosts: list, company_color: str = "#00A0D9") -> str:
+def _build_ad_section(hosts: list, company_color: str = "#FF6600") -> str:
     """
     Build an Active Directory Environment section for the report.
     Only rendered when at least one host has ad_info.enumerated == True.
@@ -529,7 +529,7 @@ def _build_ad_section(hosts: list, company_color: str = "#00A0D9") -> str:
 """
 
 
-def _build_delta_section(summary: dict, company_color: str = "#00A0D9") -> str:
+def _build_delta_section(summary: dict, company_color: str = "#FF6600") -> str:
     """
     Build a 'Changes Since Last Scan' section.
     Only rendered if summary["scan_delta"]["has_changes"] is True.
@@ -2038,9 +2038,9 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     _t0 = _time.time()
 
     reporting = config.get("reporting", {})
-    company_name = reporting.get("company_name", "Pacific Office Automation Inc.")
-    company_color = reporting.get("company_color", "#00A0D9")
-    tagline = reporting.get("tagline", "Problem Solved.")
+    company_name = reporting.get("company_name", "Yeyland Wutani LLC")
+    company_color = reporting.get("company_color", "#FF6600")
+    tagline = reporting.get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
 
     hosts = scan_results.get("hosts", [])
@@ -2589,9 +2589,9 @@ def build_csv_attachment(hosts: list, scan_results: dict = None) -> bytes:
 def build_error_email(error_message: str, config: dict) -> tuple:
     """Build a simple error notification email."""
     reporting = config.get("reporting", {})
-    company_name = reporting.get("company_name", "Pacific Office Automation Inc.")
-    company_color = reporting.get("company_color", "#00A0D9")
-    tagline = reporting.get("tagline", "Problem Solved.")
+    company_name = reporting.get("company_name", "Yeyland Wutani LLC")
+    company_color = reporting.get("company_color", "#FF6600")
+    tagline = reporting.get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
     timestamp = datetime.now().isoformat()
 

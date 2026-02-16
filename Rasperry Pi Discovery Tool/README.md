@@ -14,7 +14,7 @@ A headless Raspberry Pi tool for MSP sales engineers. Deploy on a customer LAN, 
 |-------|-------------|
 | **Check-In** | Emails the Pi's IP, MAC, subnet, gateway, and DNS within minutes of connecting |
 | **Scan** | Full 17-phase network discovery: reconnaissance → host discovery → port scan → service enum → topology → security → WiFi → mDNS → UPnP/SSDP → DHCP → NTP → 802.1X/NAC → OSINT → SSL audit → backup/DR posture → EOL detection |
-| **Report** | Professional HTML email report with Pacific Office Automation branding, device table, WiFi analysis, DHCP/NTP infrastructure, external attack surface, email security posture, SSL certificate health, backup & DR assessment, end-of-life inventory, and compressed CSV + JSON attachments (up to 25 MB) |
+| **Report** | Professional HTML email report with configurable client branding, device table, WiFi analysis, DHCP/NTP infrastructure, external attack surface, email security posture, SSL certificate health, backup & DR assessment, end-of-life inventory, operational statistics with per-phase timing, and compressed CSV + JSON attachments (up to 25 MB) |
 
 ---
 
@@ -65,9 +65,11 @@ Boot
 
  └─▶ network-discovery.service
       └─▶ discovery-main.py
+           ├─ Log system diagnostics (OS, disk, features)
+           ├─ Manage disk space (prune oldest archives if low)
            ├─ Validate Graph API credentials
            ├─ Send "Scan Starting" notification
-           ├─ Run network-scanner.py (17 phases)
+           ├─ Run network-scanner.py (17 phases, each timed)
            │   ├─ Phases 1–6: Host discovery, ports, services, security
            │   ├─ Phase 7:    WiFi enumeration + channel analysis
            │   ├─ Phase 8:    mDNS / Bonjour service discovery
@@ -79,8 +81,10 @@ Boot
            │   ├─ Phase 14:   SSL/TLS certificate health audit
            │   ├─ Phase 15:   Backup & DR posture inference
            │   └─ Phase 16:   End-of-life / end-of-support detection
-           ├─ Build HTML report + compressed CSV/JSON (.gz)
-           └─ Send report email via Graph API (up to 25 MB)
+           ├─ Build HTML report (with operational statistics)
+           ├─ Compress CSV/JSON (.gz) for attachment
+           ├─ Send report email via Graph API (up to 25 MB)
+           └─ Cleanup: remove uncompressed intermediaries on send success
 ```
 
 ---
@@ -90,8 +94,8 @@ Boot
 ```
 /opt/network-discovery/          (install target)
 ├── bin/
-│   ├── discovery-main.py        Main orchestration
-│   ├── network-scanner.py       13-phase discovery engine
+│   ├── discovery-main.py        Main orchestration (disk mgmt, timing, cleanup)
+│   ├── network-scanner.py       17-phase discovery engine
 │   ├── graph-mailer.py          Graph API email sender (sendMail + upload session)
 │   ├── initial-checkin.py       First-boot check-in
 │   ├── health-check.py          Weekly health report
@@ -104,18 +108,19 @@ Boot
 ├── lib/
 │   ├── graph_auth.py            OAuth2 authentication
 │   ├── network_utils.py         Network/WiFi helpers + OUI lookup
-│   └── report_generator.py      HTML report builder
+│   └── report_generator.py      HTML report builder (incl. ops stats)
 ├── config/
 │   ├── config.json              Active configuration (created by installer)
 │   ├── config.json.template     Configuration template
 │   └── .env.template            Environment variables template
+├── data/
+│   └── eol-database.json        Curated EOL database (auto-updated via git)
 ├── systemd/
 │   ├── initial-checkin.service
 │   ├── network-discovery.service
 │   ├── network-discovery-health.service
 │   └── network-discovery-health.timer
-├── logs/                        Log files
-├── data/                        Scan results (JSON/CSV, gzipped)
+├── logs/                        Rotating log files (10 MB, 5 backups)
 ├── install.sh                   Installer
 └── uninstall.sh                 Uninstaller
 ```
@@ -157,8 +162,8 @@ All settings live in `/opt/network-discovery/config/config.json`.
 | `network_discovery.enable_backup_posture` | true | Backup & DR posture inference (Veeam, Commvault, Acronis, NAS, etc.) |
 | `network_discovery.enable_eol_detection` | true | End-of-life / end-of-support detection against curated EOL database |
 | `network_discovery.eol_warning_months` | 12 | Flag products approaching EOL within N months |
-| `reporting.company_name` | Pacific Office Automation Inc. | Report branding |
-| `reporting.company_color` | #00A0D9 | Report accent color |
+| `reporting.company_name` | Yeyland Wutani LLC | Company name shown in report header and footer (customize per deployment) |
+| `reporting.company_color` | #FF6600 | Report accent color (customize to match client branding) |
 | `system.device_name` | NetDiscovery-Pi | Device identifier in emails |
 | `system.min_free_disk_mb` | 200 | Prune oldest scan archives when free disk drops below N MB |
 
@@ -197,9 +202,17 @@ sudo /opt/network-discovery/bin/manual-scan.sh
 sudo journalctl -u nd-discovery -f
 sudo journalctl -u nd-checkin -f
 
-# Log file
+# Discovery log (detailed per-phase timing, subprocess results, errors)
 tail -f /opt/network-discovery/logs/discovery.log
+
+# Check-in log
+tail -f /opt/network-discovery/logs/initial-checkin.log
+
+# Rotated logs (auto-managed: 10 MB × 5 backups for discovery, 5 MB × 3 for check-in)
+ls -la /opt/network-discovery/logs/
 ```
+
+Logs include system diagnostics at startup (OS, Python version, disk space, enabled features), per-phase timing summaries, all subprocess results, HTTP request/response durations, and full stack traces on errors. The HTML report also includes an **Operational Statistics** section showing phase-by-phase timing and status.
 
 ### Re-run initial check-in
 
@@ -226,10 +239,26 @@ sudo systemctl start initial-checkin.service
 - DNS security checks query only public DNS records (MX, TXT for SPF/DKIM/DMARC)
 - SSL certificate audit connects to internal HTTPS services to inspect certificates—**no data is exfiltrated**, only certificate metadata (CN, issuer, expiry, key size) is collected
 - Backup/DR posture inference is **pure data analysis** of ports and banners already collected—no additional network traffic
-- EOL detection uses an **embedded, curated database** — no external API calls, works fully offline
+- EOL detection uses a **curated JSON database** (`data/eol-database.json`) auto-distributed via `self-update.sh` — no external API calls, works fully offline with a minimal embedded fallback
 - Reports include a disclaimer noting authorized use
 - All Graph API communication is over TLS
 - All external OSINT queries are over HTTPS
+
+---
+
+## Self-Maintenance
+
+The Pi manages its own storage and stays up to date automatically:
+
+| Feature | How It Works |
+|---------|--------------|
+| **Self-update** | On every check-in, `self-update.sh` runs `git pull --ff-only` to pick up code changes and updated EOL database entries from GitHub |
+| **Disk management** | On startup, checks free disk space against `min_free_disk_mb` (default 200 MB). If low, prunes oldest `.gz` scan archives one at a time until the threshold is met |
+| **Post-send cleanup** | After a successful email send, uncompressed intermediary files (`.csv`, `.json`) are deleted — the compressed `.gz` archives are retained for local reference |
+| **Log rotation** | `RotatingFileHandler` keeps logs bounded: discovery log at 10 MB × 5 backups, check-in log at 5 MB × 3 backups |
+| **Operational statistics** | Every scan records per-phase timing and status. The HTML report includes an Operational Statistics section with a visual timing breakdown, and the log file prints a structured timing summary table |
+
+If an email send **fails**, uncompressed files are preserved so nothing is lost.
 
 ---
 

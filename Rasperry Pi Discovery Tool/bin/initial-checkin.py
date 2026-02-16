@@ -213,9 +213,9 @@ def _run_self_update() -> bool:
 
 def build_checkin_email(info: dict, config: dict) -> tuple:
     """Build the subject and HTML body for the check-in email."""
-    company_name = config.get("reporting", {}).get("company_name", "Pacific Office Automation Inc.")
-    company_color = config.get("reporting", {}).get("company_color", "#00A0D9")
-    tagline = config.get("reporting", {}).get("tagline", "Problem Solved.")
+    company_name = config.get("reporting", {}).get("company_name", "Yeyland Wutani LLC")
+    company_color = config.get("reporting", {}).get("company_color", "#FF6600")
+    tagline = config.get("reporting", {}).get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
 
     hostname = info.get("hostname", "unknown")
