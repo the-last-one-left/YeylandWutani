@@ -15,6 +15,7 @@ Orchestrates the full discovery workflow:
 """
 
 import gzip
+import html
 import json
 import logging
 import logging.handlers
@@ -218,14 +219,14 @@ def manage_disk_space(config: dict):
 
 def send_starting_email(mailer: GraphMailer, config: dict):
     reporting = config.get("reporting", {})
-    company_name = reporting.get("company_name", "Yeyland Wutani LLC")
-    company_color = reporting.get("company_color", "#FF6600")
-    tagline = reporting.get("tagline", "Building Better Systems")
-    device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
-    timestamp = datetime.now().isoformat()
+    company_name = html.escape(reporting.get("company_name", "Yeyland Wutani LLC"))
+    company_color = html.escape(reporting.get("company_color", "#FF6600"))
+    tagline = html.escape(reporting.get("tagline", "Building Better Systems"))
+    device_name = html.escape(config.get("system", {}).get("device_name", "NetDiscovery-Pi"))
+    timestamp = html.escape(datetime.now().isoformat())
 
     subject = f"[Network Discovery Pi] Scan Starting on {device_name}"
-    html = f"""<!DOCTYPE html>
+    body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <body style="margin:0; padding:20px; background:#f4f4f4; font-family:Arial, sans-serif;">
   <table width="600" cellpadding="0" cellspacing="0" style="background:#fff; border-radius:4px; overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,0.1); margin:auto;">
@@ -254,7 +255,7 @@ def send_starting_email(mailer: GraphMailer, config: dict):
 </body></html>"""
 
     try:
-        mailer.send_email(subject=subject, body_html=html)
+        mailer.send_email(subject=subject, body_html=body_html)
         logger.info("'Discovery Starting' notification sent.")
     except GraphMailerError as e:
         logger.warning(f"Could not send starting notification: {e}")

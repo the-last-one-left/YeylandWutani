@@ -9,6 +9,7 @@ Handles client credentials flow for headless Graph API access.
 import json
 import logging
 import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -56,11 +57,24 @@ class GraphAuth:
                 logger.warning(f"Could not load token cache: {e}. Starting fresh.")
 
     def _save_token_cache(self):
-        """Persist token cache to disk with restricted permissions."""
+        """Persist token cache to disk with restricted permissions.
+
+        Writes to a temp file at mode 0o600 first, then atomically renames
+        it into place to avoid a race where the file is briefly world-readable.
+        """
         try:
             TOKEN_CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
-            TOKEN_CACHE_PATH.write_text(self._token_cache.serialize())
-            TOKEN_CACHE_PATH.chmod(0o600)
+            data = self._token_cache.serialize().encode("utf-8")
+            # O_CREAT | O_WRONLY | O_EXCL at mode 0o600 so it's never world-readable
+            fd, tmp_path = tempfile.mkstemp(
+                dir=str(TOKEN_CACHE_PATH.parent), prefix=".token_cache_"
+            )
+            try:
+                os.chmod(fd, 0o600)
+                os.write(fd, data)
+            finally:
+                os.close(fd)
+            os.replace(tmp_path, str(TOKEN_CACHE_PATH))
             logger.debug("Token cache saved to disk.")
         except Exception as e:
             logger.warning(f"Could not save token cache: {e}")
@@ -136,10 +150,16 @@ class GraphAuth:
             return False
 
 
-def load_credentials_from_config(config_path: str = "/opt/network-discovery/config/config.json") -> GraphAuth:
+def load_credentials_from_config(
+    config_path: str = "/opt/network-discovery/config/config.json",
+    _preloaded_config: dict = None,
+) -> GraphAuth:
     """
     Load Graph API credentials from config.json or environment variables.
     Environment variables take precedence over config file values.
+
+    Pass _preloaded_config to avoid re-reading the file when the caller
+    already has the parsed JSON (e.g. load_mailer_from_config).
     """
     # Try environment variables first
     tenant_id = os.environ.get("GRAPH_TENANT_ID")
@@ -156,8 +176,11 @@ def load_credentials_from_config(config_path: str = "/opt/network-discovery/conf
     if not all([tenant_id, client_id, client_secret]):
         logger.debug(f"Reading credentials from config: {config_path}")
         try:
-            with open(config_path, "r") as f:
-                config = json.load(f)
+            if _preloaded_config is not None:
+                config = _preloaded_config
+            else:
+                with open(config_path, "r") as f:
+                    config = json.load(f)
             graph_config = config.get("graph_api", {})
             tenant_id = tenant_id or graph_config.get("tenant_id")
             client_id = client_id or graph_config.get("client_id")

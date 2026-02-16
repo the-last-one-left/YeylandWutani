@@ -10,8 +10,10 @@ If all checks pass: sends "All systems nominal" confirmation.
 If any issue is found: sends a summary of issues found with severity.
 """
 
+import html
 import json
 import logging
+import logging.handlers
 import shutil
 import subprocess
 import sys
@@ -36,12 +38,19 @@ CPU_TEMP_CRITICAL = 80    # Critical if CPU temp > 80°C
 SCAN_AGE_WARNING_DAYS = 8  # Warn if last scan is > 8 days old
 RAM_WARNING_PCT = 85      # Warn if RAM > 85% used
 
+LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+_hc_file_handler = logging.handlers.RotatingFileHandler(
+    LOG_FILE, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"
+)
+_hc_file_handler.setFormatter(
+    logging.Formatter("%(asctime)s [%(levelname)s] %(name)s - %(message)s")
+)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     handlers=[
         logging.StreamHandler(sys.stdout),
-        logging.FileHandler(str(LOG_FILE), encoding="utf-8"),
+        _hc_file_handler,
     ],
 )
 logger = logging.getLogger("health-check")
@@ -174,7 +183,7 @@ def check_services() -> dict:
 def check_scan_age() -> dict:
     """Check when the last scan was completed."""
     scan_files = sorted(
-        DATA_DIR.glob("scan_*.json"),
+        list(DATA_DIR.glob("scan_*.json")) + list(DATA_DIR.glob("scan_*.json.gz")),
         key=lambda f: f.stat().st_mtime,
         reverse=True
     )
@@ -289,8 +298,8 @@ def build_health_email(checks: list, config: dict) -> tuple:
 
         check_rows += f"""
           <tr style="background:{row_bg}; border-bottom:1px solid #eee;">
-            <td style="padding:7px 10px; font-size:12px; font-weight:bold; color:#333;">{c.get('check', '')}</td>
-            <td style="padding:7px 10px; font-size:12px; color:#555;">{c.get('value', '')}</td>
+            <td style="padding:7px 10px; font-size:12px; font-weight:bold; color:#333;">{html.escape(c.get('check', ''))}</td>
+            <td style="padding:7px 10px; font-size:12px; color:#555;">{html.escape(str(c.get('value', '')))}</td>
             <td style="padding:7px 10px; text-align:center;">
               <span style="background:{badge_bg}; color:#fff; padding:2px 6px; border-radius:3px; font-size:11px; font-weight:bold;">{badge_txt}</span>
             </td>
@@ -305,7 +314,7 @@ def build_health_email(checks: list, config: dict) -> tuple:
             color = "#dc3545" if sev == "CRITICAL" else "#fd7e14"
             issue_items += f"""
           <li style="margin-bottom:6px; color:{color};">
-            <strong>{c.get('check', '')}:</strong> {c.get('message', '')}
+            <strong>{html.escape(c.get('check', ''))}</strong>: {html.escape(c.get('message', ''))}
           </li>"""
         issues_html = f"""
           <div style="background:#fff8e6; border:1px solid #ffc107; border-left:4px solid #e69900; border-radius:3px; padding:12px 14px; margin-bottom:18px;">
@@ -315,7 +324,7 @@ def build_health_email(checks: list, config: dict) -> tuple:
             </ul>
           </div>"""
 
-    html = f"""<!DOCTYPE html>
+    body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -386,7 +395,7 @@ def build_health_email(checks: list, config: dict) -> tuple:
 </body>
 </html>"""
 
-    return subject, html
+    return subject, body_html
 
 
 def main():

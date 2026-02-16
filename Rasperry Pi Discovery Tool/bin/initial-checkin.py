@@ -8,6 +8,7 @@ Gathers Pi and network info, sends a branded confirmation email via Graph API,
 then writes a flag file to prevent re-running.
 """
 
+import html
 import json
 import logging
 import logging.handlers
@@ -157,12 +158,14 @@ def _get_uptime() -> str:
 
 def _get_boot_time() -> str:
     try:
-        result = subprocess.check_output(["who", "-b"], text=True, timeout=5)
-        match = result.strip()
-        return match if match else "Unknown"
+        with open("/proc/stat") as f:
+            for line in f:
+                if line.startswith("btime "):
+                    btime = int(line.split()[1])
+                    return datetime.fromtimestamp(btime).strftime("%Y-%m-%d %H:%M:%S")
     except Exception as e:
-        logger.debug(f"Could not read boot time: {e}")
-        return "Unknown"
+        logger.debug(f"Could not read boot time from /proc/stat: {e}")
+    return "Unknown"
 
 
 def _run_self_update() -> bool:
@@ -218,29 +221,32 @@ def build_checkin_email(info: dict, config: dict) -> tuple:
     tagline = config.get("reporting", {}).get("tagline", "Building Better Systems")
     device_name = config.get("system", {}).get("device_name", "NetDiscovery-Pi")
 
-    hostname = info.get("hostname", "unknown")
-    pi_model = info.get("pi_model", "Raspberry Pi")
-    os_info = info.get("os_info", "Raspberry Pi OS")
-    gateway = info.get("default_gateway", "N/A")
-    gateway_hostname = info.get("gateway_hostname", "N/A")
-    dns_servers = ", ".join(info.get("dns_servers", [])) or "N/A"
-    uptime = info.get("uptime", "N/A")
-    timestamp = info.get("timestamp", datetime.now().isoformat())
+    def _e(v) -> str:
+        return html.escape(str(v)) if v else "N/A"
+
+    hostname = _e(info.get("hostname", "unknown"))
+    pi_model = _e(info.get("pi_model", "Raspberry Pi"))
+    os_info = _e(info.get("os_info", "Raspberry Pi OS"))
+    gateway = _e(info.get("default_gateway"))
+    gateway_hostname = _e(info.get("gateway_hostname"))
+    dns_servers = html.escape(", ".join(info.get("dns_servers", []))) or "N/A"
+    uptime = _e(info.get("uptime", "N/A"))
+    timestamp = _e(info.get("timestamp", datetime.now().isoformat()))
 
     # Build interface rows
     iface_rows = ""
     for iface in info.get("interfaces", []):
         iface_rows += f"""
         <tr>
-          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{iface.get('name', 'N/A')}</td>
-          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{iface.get('ip', 'N/A')}</td>
-          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{iface.get('cidr', 'N/A')}</td>
-          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{iface.get('mac', 'N/A')}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{_e(iface.get('name'))}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{_e(iface.get('ip'))}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{_e(iface.get('cidr'))}</td>
+          <td style="padding:6px 12px; border-bottom:1px solid #e8e8e8;">{_e(iface.get('mac'))}</td>
         </tr>"""
 
     subject = f"[Network Discovery Pi] Initial Check-In: {hostname} is online"
 
-    html = f"""<!DOCTYPE html>
+    body_html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
@@ -389,7 +395,7 @@ def build_checkin_email(info: dict, config: dict) -> tuple:
 </body>
 </html>"""
 
-    return subject, html
+    return subject, body_html
 
 
 def load_config() -> dict:

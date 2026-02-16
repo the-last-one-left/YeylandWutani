@@ -154,25 +154,32 @@ def load_scan_config() -> dict:
 
 # ── Subnet label lookup ──────────────────────────────────────────────────
 
-def _resolve_subnet_label(ip: str, subnet_labels: dict) -> str:
+def _build_subnet_label_index(subnet_labels: dict) -> list:
+    """Pre-compile subnet label CIDRs into (IPv4Network, label) tuples for O(1) lookups."""
+    index = []
+    for cidr, label in subnet_labels.items():
+        try:
+            index.append((ipaddress.IPv4Network(cidr, strict=False), label))
+        except ValueError:
+            pass
+    return index
+
+
+def _resolve_subnet_label(ip: str, label_index: list) -> str:
     """Return the human-readable label for the subnet an IP belongs to.
 
-    subnet_labels is a dict of {"CIDR": "Label"} from config, e.g.
-    {"192.168.1.0/24": "Corporate LAN", "10.0.10.0/24": "Guest WiFi"}.
-    Returns empty string if no match.
+    label_index is a pre-compiled list of (IPv4Network, label) tuples
+    built by _build_subnet_label_index().  Returns empty string if no match.
     """
-    if not subnet_labels:
+    if not label_index:
         return ""
     try:
         addr = ipaddress.IPv4Address(ip)
     except ValueError:
         return ""
-    for cidr, label in subnet_labels.items():
-        try:
-            if addr in ipaddress.IPv4Network(cidr, strict=False):
-                return label
-        except ValueError:
-            continue
+    for net, label in label_index:
+        if addr in net:
+            return label
     return ""
 
 
@@ -473,12 +480,18 @@ def phase1b_alternate_subnet_detection(recon: dict, config: dict) -> dict:
             return True  # skip invalid
 
     # Build candidate list: config list + .1 and .254 of each known subnet
+    # Use network_address/broadcast_address to avoid materializing host list (#14)
     candidates = list(config.get("multi_subnet_candidates", []))
     for net in known_nets:
-        hosts = list(net.hosts())
-        if hosts:
-            candidates.append(str(hosts[0]))    # .1 equivalent
-            candidates.append(str(hosts[-1]))   # .254 equivalent
+        if net.num_addresses > 2:
+            candidates.append(str(net.network_address + 1))    # .1 equivalent
+            candidates.append(str(net.broadcast_address - 1))  # .254 equivalent
+
+    # Determine the Pi's own prefix length to use when inferring new subnets (#16)
+    # Fall back to /24 if no known nets exist.
+    pi_prefixlen = 24
+    if known_nets:
+        pi_prefixlen = known_nets[0].prefixlen
 
     # Deduplicate, skip IPs already in known subnets and our own IPs
     our_ips = set(recon.get("our_ips", []))
@@ -491,27 +504,36 @@ def phase1b_alternate_subnet_detection(recon: dict, config: dict) -> dict:
         if not is_in_known_net(ip):
             probe_targets.append(ip)
 
-    logger.info(f"  Probing {len(probe_targets)} candidate gateway IPs...")
+    logger.info(f"  Probing {len(probe_targets)} candidate gateway IPs (parallel)...")
 
+    # Probe in parallel to avoid blocking sequentially on each timeout (#4)
+    def _probe_and_infer(ip: str):
+        if not _probe_ip_alive(ip):
+            return None
+        try:
+            inferred_net = ipaddress.IPv4Network(f"{ip}/{pi_prefixlen}", strict=False)
+            return (ip, inferred_net)
+        except ValueError:
+            return None
+
+    probe_workers = min(len(probe_targets), 20)
     found = 0
-    for ip in probe_targets:
-        if _probe_ip_alive(ip):
-            # Infer /24 subnet from this gateway IP
-            try:
-                inferred_net = ipaddress.IPv4Network(f"{ip}/24", strict=False)
+    if probe_targets:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=probe_workers) as ex:
+            for result in ex.map(_probe_and_infer, probe_targets):
+                if result is None:
+                    continue
+                ip, inferred_net = result
                 cidr = str(inferred_net)
-                # Check it doesn't overlap a known network
                 if not any(inferred_net.overlaps(kn) for kn in known_nets):
                     recon["additional_subnets"].append({
                         "cidr": cidr,
                         "discovered_via": ip,
                     })
                     recon["subnets"].append(cidr)
-                    known_nets.append(inferred_net)  # prevent duplicates
+                    known_nets.append(inferred_net)
                     logger.info(f"  Found additional subnet: {cidr} (via {ip})")
                     found += 1
-            except ValueError:
-                pass
 
     logger.info(f"  Alternate subnet detection complete. {found} additional subnet(s) found.")
     return recon
@@ -640,11 +662,15 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
             if ip not in our_ips and ip not in all_hosts:
                 all_hosts[ip] = _make_empty_host(ip, "additional")
 
-    # ── DNS lookups ───────────────────────────────────────────────────────
+    # ── DNS lookups (parallel) ────────────────────────────────────────────
     if config.get("enable_dns_enumeration", True):
-        logger.info(f"  Reverse DNS for {len(all_hosts)} hosts...")
-        for ip, host in all_hosts.items():
-            host["hostname"] = reverse_dns(ip) or "N/A"
+        logger.info(f"  Reverse DNS for {len(all_hosts)} hosts (parallel)...")
+        dns_threads = min(config.get("max_threads", 50), len(all_hosts), 50)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=dns_threads) as ex:
+            ip_list = list(all_hosts.keys())
+            results_iter = ex.map(reverse_dns, ip_list)
+            for ip, hostname in zip(ip_list, results_iter):
+                all_hosts[ip]["hostname"] = hostname or "N/A"
 
     # ── Ensure gateway is present ─────────────────────────────────────────
     gw = recon.get("default_gateway")
@@ -659,8 +685,9 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
     # Apply subnet labels from config (e.g. "192.168.1.0/24" -> "Corporate LAN")
     subnet_labels = config.get("subnet_labels", {})
     if subnet_labels:
+        label_index = _build_subnet_label_index(subnet_labels)
         for host in all_hosts.values():
-            host["subnet_label"] = _resolve_subnet_label(host["ip"], subnet_labels)
+            host["subnet_label"] = _resolve_subnet_label(host["ip"], label_index)
 
     hosts = sorted(all_hosts.values(), key=lambda h: socket.inet_aton(h["ip"]))
     logger.info(f"  Discovered {len(hosts)} live hosts.")
@@ -885,7 +912,7 @@ def _check_snmp_enhanced(ip: str, config: dict) -> dict:
     if not working_community:
         return {}
 
-    logger.debug(f"  SNMP {ip}: community='{working_community}' version=v{working_version}")
+    logger.debug(f"  SNMP {ip}: community='***' version=v{working_version}")
 
     info = {
         "working_community": working_community,

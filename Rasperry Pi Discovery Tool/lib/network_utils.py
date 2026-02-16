@@ -127,6 +127,14 @@ _BUILTIN_OUI = {
     "00:00:F0": "Samsung", "78:1F:DB": "Samsung",
 }
 
+# Pre-built 2-octet prefix index for O(1) partial OUI lookups.
+# Built once at module load; maps "XX:XX" -> first matching vendor.
+_BUILTIN_OUI_PREFIX2: dict = {}
+for _oui_key, _oui_vendor in _BUILTIN_OUI.items():
+    _prefix2 = _oui_key[:5]
+    if _prefix2 not in _BUILTIN_OUI_PREFIX2:
+        _BUILTIN_OUI_PREFIX2[_prefix2] = _oui_vendor
+
 # ── Service port name mapping ──────────────────────────────────────────────
 
 PORT_SERVICE_MAP = {
@@ -219,8 +227,12 @@ def cidr_to_range(cidr: str) -> tuple:
     """Return (first_ip, last_ip, host_count) for a CIDR block."""
     try:
         net = ipaddress.IPv4Network(cidr, strict=False)
-        hosts = list(net.hosts())
-        return (str(hosts[0]), str(hosts[-1]), len(hosts)) if hosts else ("", "", 0)
+        host_count = net.num_addresses - 2
+        if host_count <= 0:
+            return ("", "", 0)
+        first = str(net.network_address + 1)
+        last = str(net.broadcast_address - 1)
+        return (first, last, host_count)
     except ValueError:
         return ("", "", 0)
 
@@ -387,15 +399,15 @@ def reverse_dns(ip: str, timeout: float = 2.0) -> Optional[str]:
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
     # Fallback: use socket with a brief global-timeout window (best-effort)
+    old_timeout = socket.getdefaulttimeout()
     try:
-        old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(timeout)
         hostname = socket.gethostbyaddr(ip)[0]
-        socket.setdefaulttimeout(old_timeout)
         return hostname
     except (socket.herror, socket.gaierror, socket.timeout, OSError):
-        socket.setdefaulttimeout(old_timeout if 'old_timeout' in dir() else None)
         return None
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 def forward_dns(hostname: str, timeout: float = 2.0) -> Optional[str]:
@@ -416,15 +428,15 @@ def forward_dns(hostname: str, timeout: float = 2.0) -> Optional[str]:
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
     # Fallback
+    old_timeout = socket.getdefaulttimeout()
     try:
-        old_timeout = socket.getdefaulttimeout()
         socket.setdefaulttimeout(timeout)
         ip = socket.gethostbyname(hostname)
-        socket.setdefaulttimeout(old_timeout)
         return ip
     except (socket.herror, socket.gaierror, socket.timeout, OSError):
-        socket.setdefaulttimeout(old_timeout if 'old_timeout' in dir() else None)
         return None
+    finally:
+        socket.setdefaulttimeout(old_timeout)
 
 
 # ── MAC vendor lookup ──────────────────────────────────────────────────────
@@ -448,16 +460,16 @@ def get_mac_vendor(mac: str) -> str:
     mac_norm = normalize_mac(mac)
     oui = mac_norm[:8]  # First 3 octets: "XX:XX:XX"
 
-    # Check builtin table
+    # Check builtin table (exact 3-octet match)
     vendor = _BUILTIN_OUI.get(oui)
     if vendor:
         return vendor
 
-    # Try first 2 octets for broader match (some OUI blocks)
+    # Try first 2 octets for broader match — O(1) via pre-built prefix index
     oui_short = mac_norm[:5]
-    for key, val in _BUILTIN_OUI.items():
-        if key.startswith(oui_short):
-            return val
+    vendor = _BUILTIN_OUI_PREFIX2.get(oui_short)
+    if vendor:
+        return vendor
 
     return "Unknown"
 

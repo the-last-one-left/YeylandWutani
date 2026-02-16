@@ -491,22 +491,34 @@ def load_mailer_from_config(
 ) -> GraphMailer:
     """
     Build a GraphMailer from config.json / environment variables.
+    Reads config.json exactly once and passes it down to avoid redundant I/O.
     """
     logger.debug(f"Loading mailer config from: {config_path}")
-    auth = load_credentials_from_config(config_path)
+
+    # Load config once up front
+    file_config: dict = {}
+    try:
+        with open(config_path, "r") as f:
+            file_config = json.load(f)
+    except Exception as e:
+        logger.debug(f"Could not load config file {config_path}: {e}")
+
+    auth = load_credentials_from_config(config_path, _preloaded_config=file_config)
+
+    graph_cfg = file_config.get("graph_api", {})
 
     # Email addresses - env vars take precedence
     from_email = os.environ.get("GRAPH_FROM_EMAIL")
     if from_email:
         logger.debug("From email loaded from GRAPH_FROM_EMAIL env var")
     else:
-        from_email = _read_config_value(config_path, "graph_api", "from_email")
+        from_email = graph_cfg.get("from_email")
 
     to_email = os.environ.get("GRAPH_TO_EMAIL")
     if to_email:
         logger.debug("To email loaded from GRAPH_TO_EMAIL env var")
     else:
-        to_email = _read_config_value(config_path, "graph_api", "to_email")
+        to_email = graph_cfg.get("to_email")
 
     if not from_email or not to_email:
         raise GraphMailerError(
@@ -516,16 +528,6 @@ def load_mailer_from_config(
 
     logger.info(f"Mailer configured: {from_email} -> {to_email}")
     return GraphMailer(auth=auth, from_email=from_email, to_email=to_email)
-
-
-def _read_config_value(config_path: str, section: str, key: str):
-    """Helper to safely read a value from config.json."""
-    try:
-        with open(config_path, "r") as f:
-            config = json.load(f)
-        return config.get(section, {}).get(key)
-    except Exception:
-        return None
 
 
 # ── CLI entrypoint for quick email tests ───────────────────────────────────
