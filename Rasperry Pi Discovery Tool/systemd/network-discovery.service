@@ -15,7 +15,8 @@ ExecStart=/opt/network-discovery/venv/bin/python3 /opt/network-discovery/bin/dis
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nd-discovery
-TimeoutStartSec=1200
+TimeoutStartSec=1800
+TimeoutStopSec=60
 Restart=no
 
 # Grant raw socket access for nmap/arp-scan

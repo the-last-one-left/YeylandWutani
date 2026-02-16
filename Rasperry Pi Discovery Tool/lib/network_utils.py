@@ -384,8 +384,9 @@ def get_dns_servers() -> list:
 def reverse_dns(ip: str, timeout: float = 2.0) -> Optional[str]:
     """Perform reverse DNS lookup. Returns hostname or None.
 
-    Uses subprocess with 'getent' to avoid mutating the process-global
-    socket timeout, which is unsafe when called from worker threads.
+    Uses 'getent hosts' via subprocess so each call has an independent
+    per-process timeout and never mutates the process-global socket timeout,
+    which is unsafe to modify from worker threads.
     """
     try:
         result = subprocess.run(
@@ -398,23 +399,15 @@ def reverse_dns(ip: str, timeout: float = 2.0) -> Optional[str]:
                 return parts[1]
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
-    # Fallback: use socket with a brief global-timeout window (best-effort)
-    old_timeout = socket.getdefaulttimeout()
-    try:
-        socket.setdefaulttimeout(timeout)
-        hostname = socket.gethostbyaddr(ip)[0]
-        return hostname
-    except (socket.herror, socket.gaierror, socket.timeout, OSError):
-        return None
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    return None
 
 
 def forward_dns(hostname: str, timeout: float = 2.0) -> Optional[str]:
     """Resolve hostname to IP. Returns IP or None.
 
-    Uses subprocess with 'getent' to avoid mutating the process-global
-    socket timeout, which is unsafe when called from worker threads.
+    Uses 'getent hosts' via subprocess so each call has an independent
+    per-process timeout and never mutates the process-global socket timeout,
+    which is unsafe to modify from worker threads.
     """
     try:
         result = subprocess.run(
@@ -427,16 +420,7 @@ def forward_dns(hostname: str, timeout: float = 2.0) -> Optional[str]:
                 return parts[0]
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
-    # Fallback
-    old_timeout = socket.getdefaulttimeout()
-    try:
-        socket.setdefaulttimeout(timeout)
-        ip = socket.gethostbyname(hostname)
-        return ip
-    except (socket.herror, socket.gaierror, socket.timeout, OSError):
-        return None
-    finally:
-        socket.setdefaulttimeout(old_timeout)
+    return None
 
 
 # ── MAC vendor lookup ──────────────────────────────────────────────────────

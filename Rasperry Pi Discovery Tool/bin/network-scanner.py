@@ -4033,8 +4033,11 @@ def run_discovery(progress_callback=None) -> dict:
 
     timestamp_str = start_time.strftime("%Y%m%d_%H%M%S")
     json_path = DATA_DIR / f"scan_{timestamp_str}.json"
-    with open(json_path, "w") as f:
+    # Write atomically: temp file + rename so a mid-write kill never leaves a corrupt file
+    tmp_json = json_path.with_suffix(".json.tmp")
+    with open(tmp_json, "w") as f:
         json.dump(results, f, indent=2)
+    tmp_json.replace(json_path)
     logger.info(f"Scan results saved: {json_path}")
 
     progress(f"Discovery complete. {len(hosts)} hosts found in {duration:.0f}s.")
