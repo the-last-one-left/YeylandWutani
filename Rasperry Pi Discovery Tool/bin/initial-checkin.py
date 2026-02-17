@@ -422,6 +422,13 @@ def main():
         logger.error("Network connectivity not established after waiting. Exiting.")
         sys.exit(1)
 
+    # Brief settle delay: network-online.target fires when DHCP assigns a route,
+    # but DNS resolvers and full routing can still be propagating at that point.
+    # 15 seconds is enough for typical DHCP/DNS stacks to stabilise on first boot.
+    _SETTLE_DELAY = 15
+    logger.info(f"Network up. Waiting {_SETTLE_DELAY}s for DNS and routing to settle...")
+    time.sleep(_SETTLE_DELAY)
+
     # Auto-update from GitHub before proceeding (non-fatal if it fails)
     _run_self_update()
 
