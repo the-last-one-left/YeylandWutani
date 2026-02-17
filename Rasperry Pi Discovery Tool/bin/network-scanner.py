@@ -791,7 +791,18 @@ def _nmap_port_scan(
         except FileNotFoundError:
             return None, None, False  # None sentinel = nmap missing
 
-    # ── First attempt: SYN scan ───────────────────────────────────────────
+    def _permission_error(stderr_text: str) -> bool:
+        if not stderr_text:
+            return False
+        s = stderr_text.lower()
+        return (
+            "requires root" in s
+            or "requires privileges" in s
+            or "operation not permitted" in s
+            or "you requested a scan" in s
+        )
+
+    # ── First attempt: SYN scan (direct — works if setcap succeeded) ─────
     stdout, stderr, timed_out = _run(_build_cmd("-sS"))
 
     if stdout is None:
@@ -802,29 +813,37 @@ def _nmap_port_scan(
         logger.warning(f"Port scan timeout (>120s) for {ip}")
         return result
 
-    # Detect permission failure from stderr and fall back to connect scan
-    _needs_root = (
-        stderr and (
-            "requires root" in stderr.lower()
-            or "requires privileges" in stderr.lower()
-            or "operation not permitted" in stderr.lower()
-            or "you requested a scan" in stderr.lower()
-        )
-    )
-    if _needs_root:
-        logger.warning(
-            f"nmap SYN scan needs CAP_NET_RAW for {ip} — falling back to connect scan. "
-            f"This usually means 'apt upgrade' replaced the nmap binary and cleared its "
-            f"file capabilities. Restore with: "
-            f"sudo setcap cap_net_raw+eip $(readlink -f $(which nmap))"
-        )
-        result["scan_type"] = "connect"
-        stdout2, stderr2, timed_out2 = _run(_build_cmd("-sT"))
-        if timed_out2:
-            logger.warning(f"Connect scan timeout for {ip}")
-            return result
-        if stdout2:
-            _parse_output(stdout2)
+    if _permission_error(stderr):
+        # setcap-based capability grant is unreliable with NoNewPrivileges=yes
+        # on some kernel versions (especially 4.x).  Try via sudo using the
+        # targeted sudoers rule installed by install.sh before giving up on
+        # SYN scan entirely.
+        logger.debug(f"nmap -sS permission denied for {ip} — retrying via sudo")
+        sudo_cmd = ["sudo", "--non-interactive"] + _build_cmd("-sS")
+        stdout_s, stderr_s, timed_out_s = _run(sudo_cmd)
+        if (stdout_s is not None
+                and not timed_out_s
+                and not _permission_error(stderr_s)
+                and (stderr_s is None or "sudo:" not in stderr_s.lower())):
+            # sudo SYN scan worked
+            if stderr_s:
+                logger.debug(f"nmap (sudo) stderr for {ip}: {stderr_s.strip()[:200]}")
+            _parse_output(stdout_s)
+        else:
+            # Neither setcap nor sudo worked — fall back to connect scan
+            logger.warning(
+                f"nmap SYN scan needs root for {ip} — falling back to connect scan. "
+                f"Run install.sh to set up the nmap sudoers rule, or restore file "
+                f"capabilities manually: "
+                f"sudo setcap cap_net_raw+eip $(readlink -f $(which nmap))"
+            )
+            result["scan_type"] = "connect"
+            stdout2, _, timed_out2 = _run(_build_cmd("-sT"))
+            if timed_out2:
+                logger.warning(f"Connect scan timeout for {ip}")
+                return result
+            if stdout2:
+                _parse_output(stdout2)
     else:
         if stderr:
             logger.debug(f"nmap stderr for {ip}: {stderr.strip()[:200]}")
