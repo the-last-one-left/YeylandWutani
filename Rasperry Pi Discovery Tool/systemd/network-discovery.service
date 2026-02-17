@@ -2,9 +2,9 @@
 Description=Yeyland Wutani Network Discovery Pi - Full Network Discovery
 Documentation=https://github.com/the-last-one-left/YeylandWutani
 After=network-online.target initial-checkin.service
-Wants=network-online.target
-# Wait for initial check-in to succeed first
-Requires=initial-checkin.service
+Wants=network-online.target initial-checkin.service
+# initial-checkin is ordered before us but not a hard requirement —
+# discovery should run even if the check-in call fails (server unreachable, etc.)
 
 [Service]
 Type=simple

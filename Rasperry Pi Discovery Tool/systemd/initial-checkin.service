@@ -1,9 +1,11 @@
 [Unit]
 Description=Yeyland Wutani Network Discovery Pi - Initial Check-In
 Documentation=https://github.com/the-last-one-left/YeylandWutani
-# Run after network is fully up with a valid IP/route
-After=network-online.target
-Wants=network-online.target
+# Run after network is fully up AND the system clock is NTP-synced.
+# time-sync.target prevents the Azure AD token lifetime-validation error
+# that occurs when the Pi boots with a stale/wrong clock.
+After=network-online.target time-sync.target
+Wants=network-online.target time-sync.target
 # Must run before the full discovery service
 Before=network-discovery.service
 
