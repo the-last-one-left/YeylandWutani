@@ -26,6 +26,7 @@ set -euo pipefail
 REPO_URL="https://github.com/the-last-one-left/YeylandWutani.git"
 REPO_SUBFOLDER="Rasperry Pi Discovery Tool"
 INSTALL_DIR="/opt/network-discovery"
+SRC_DIR="/opt/network-discovery-src"  # persistent git clone; self-update operates here
 SERVICE_USER="network-discovery"
 VENV_DIR="${INSTALL_DIR}/venv"
 CONFIG_FILE="${INSTALL_DIR}/config/config.json"
@@ -140,31 +141,31 @@ install_packages() {
 
 clone_repo() {
     step "Cloning ${BRAND} ${PRODUCT} from GitHub"
-    local tmp_dir
-    tmp_dir="$(mktemp -d)"
-    info "Sparse-cloning '${REPO_SUBFOLDER}' from ${REPO_URL}..."
 
-    cd "${tmp_dir}"
-    git init
-    git remote add origin "${REPO_URL}"
+    # Clone (or update) into SRC_DIR so the .git metadata is kept for self-update.
+    if [[ -d "${SRC_DIR}/.git" ]]; then
+        info "Existing source repo found at ${SRC_DIR} — updating..."
+        git -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}" || true
+        git -C "${SRC_DIR}" pull --ff-only origin main 2>>"${LOG_FILE}" || \
+            warn "git pull failed; installing from existing source."
+    else
+        info "Sparse-cloning '${REPO_SUBFOLDER}' from ${REPO_URL}..."
+        mkdir -p "${SRC_DIR}"
+        git -C "${SRC_DIR}" init
+        git -C "${SRC_DIR}" remote add origin "${REPO_URL}"
+        git -C "${SRC_DIR}" config core.sparseCheckout true
+        echo "${REPO_SUBFOLDER}/" >> "${SRC_DIR}/.git/info/sparse-checkout"
+        git -C "${SRC_DIR}" pull --depth=1 origin main
+    fi
 
-    # Sparse checkout - only pull the discovery tool subfolder
-    git config core.sparseCheckout true
-    echo "${REPO_SUBFOLDER}/" >> .git/info/sparse-checkout
-
-    git pull --depth=1 origin main
-
-    if [[ ! -d "${tmp_dir}/${REPO_SUBFOLDER}" ]]; then
+    if [[ ! -d "${SRC_DIR}/${REPO_SUBFOLDER}" ]]; then
         die "Sparse clone did not produce expected directory: '${REPO_SUBFOLDER}'"
     fi
 
-    # Move files to install location
+    # Rsync from the permanent source clone to the install directory.
     info "Installing files to ${INSTALL_DIR}..."
     mkdir -p "${INSTALL_DIR}"
-    rsync -a --exclude='.git' "${tmp_dir}/${REPO_SUBFOLDER}/" "${INSTALL_DIR}/"
-
-    cd /
-    rm -rf "${tmp_dir}"
+    rsync -a "${SRC_DIR}/${REPO_SUBFOLDER}/" "${INSTALL_DIR}/"
     success "Files installed to ${INSTALL_DIR}."
 }
 
