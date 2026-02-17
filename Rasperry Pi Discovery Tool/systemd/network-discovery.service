@@ -11,6 +11,7 @@ Type=simple
 User=network-discovery
 Group=network-discovery
 WorkingDirectory=/opt/network-discovery
+ExecStartPre=+/bin/bash -c "mkdir -p /opt/network-discovery/data /opt/network-discovery/logs && chown network-discovery:network-discovery /opt/network-discovery/data /opt/network-discovery/logs && chmod 750 /opt/network-discovery/data /opt/network-discovery/logs && chown root:network-discovery /opt/network-discovery/config && chmod 750 /opt/network-discovery/config"
 ExecStart=/opt/network-discovery/venv/bin/python3 /opt/network-discovery/bin/discovery-main.py
 StandardOutput=journal
 StandardError=journal

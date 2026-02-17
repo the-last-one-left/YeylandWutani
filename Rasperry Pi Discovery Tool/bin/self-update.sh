@@ -133,9 +133,13 @@ log_ok "Files synced to ${INSTALL_DIR}."
 
 # ── Restore ownership that rsync-as-root may have reset ──────────────────────
 # install.sh sets these; rsync run via sudo would reset them to root:root.
+# Also mkdir -p in case the dirs don't exist yet (they're not in git).
+mkdir -p "${INSTALL_DIR}/logs" "${INSTALL_DIR}/data"
 chown -R network-discovery:network-discovery \
     "${INSTALL_DIR}/logs" "${INSTALL_DIR}/data" 2>/dev/null || true
+chmod 750 "${INSTALL_DIR}/logs" "${INSTALL_DIR}/data" 2>/dev/null || true
 chown root:network-discovery "${INSTALL_DIR}/config" 2>/dev/null || true
+chmod 750 "${INSTALL_DIR}/config" 2>/dev/null || true
 
 # ── Reinstall pip packages if requirements.txt changed ───────────────────────
 if "${GIT_BIN}" -C "${SRC_DIR}" diff "${BEFORE}" "${AFTER}" --name-only 2>/dev/null | grep -q "requirements.txt"; then
