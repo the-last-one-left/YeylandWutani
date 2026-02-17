@@ -2555,8 +2555,12 @@ def _derive_domains(recon: dict, hosts: list, dhcp_results: dict,
         _add(_extract_registrable(pub_hostname))
 
     # 5. SSL cert common names (harvested during service enum)
+    # services dict values are normally dicts, but some entries (e.g.
+    # "smb_shares") are lists — skip anything that isn't a dict.
     for host in hosts:
         for svc in host.get("services", {}).values():
+            if not isinstance(svc, dict):
+                continue
             ssl_cn = svc.get("ssl_cn", "")
             if ssl_cn and _is_public(ssl_cn) and not ssl_cn.startswith("*"):
                 _add(_extract_registrable(ssl_cn))

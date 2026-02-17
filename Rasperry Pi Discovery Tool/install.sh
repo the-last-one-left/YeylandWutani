@@ -146,8 +146,14 @@ clone_repo() {
     if [[ -d "${SRC_DIR}/.git" ]]; then
         info "Existing source repo found at ${SRC_DIR} — updating..."
         git -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}" || true
-        git -C "${SRC_DIR}" pull --ff-only origin main 2>>"${LOG_FILE}" || \
-            warn "git pull failed; installing from existing source."
+        # --ff-only fails for shallow clones whose shallow history became
+        # disconnected (common after force-pushes or re-installs).  Fall back to
+        # reset --hard FETCH_HEAD which always works for a source-only clone.
+        if ! git -C "${SRC_DIR}" merge --ff-only FETCH_HEAD 2>>"${LOG_FILE}"; then
+            warn "Fast-forward merge failed (shallow history) — resetting to FETCH_HEAD."
+            git -C "${SRC_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}" || \
+                warn "git reset failed; installing from existing source."
+        fi
     else
         info "Sparse-cloning '${REPO_SUBFOLDER}' from ${REPO_URL}..."
         mkdir -p "${SRC_DIR}"
@@ -241,16 +247,24 @@ setup_directories() {
     local NMAP_REAL
     if command -v nmap &>/dev/null; then
         NMAP_REAL="$(readlink -f "$(which nmap)")"
-        setcap cap_net_raw+eip "${NMAP_REAL}" 2>/dev/null || \
-            warn "Could not set cap_net_raw on nmap. SYN scan will fall back to connect scan."
+        if ! setcap cap_net_raw+eip "${NMAP_REAL}"; then
+            warn "Could not set cap_net_raw on nmap (${NMAP_REAL}). SYN scan will fall back to connect scan."
+            warn "Try manually: sudo setcap cap_net_raw+eip ${NMAP_REAL}"
+        else
+            success "cap_net_raw granted to nmap."
+        fi
     fi
 
     # Also grant CAP_NET_RAW to the venv python3 for any in-process raw socket use.
     # Resolve symlinks: setcap requires a real file on some kernels/filesystems.
     local PYTHON3_REAL
     PYTHON3_REAL="$(readlink -f "${VENV_DIR}/bin/python3")"
-    setcap cap_net_raw+eip "${PYTHON3_REAL}" 2>/dev/null || \
-        warn "Could not set cap_net_raw on python3."
+    if ! setcap cap_net_raw+eip "${PYTHON3_REAL}"; then
+        warn "Could not set cap_net_raw on python3 (${PYTHON3_REAL})."
+        warn "Try manually: sudo setcap cap_net_raw+eip ${PYTHON3_REAL}"
+    else
+        success "cap_net_raw granted to venv python3."
+    fi
 
     # arp-scan needs setuid or capabilities
     if command -v arp-scan &>/dev/null; then
