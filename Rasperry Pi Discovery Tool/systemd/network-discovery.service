@@ -20,12 +20,20 @@ TimeoutStartSec=1800
 TimeoutStopSec=60
 Restart=no
 
-# Grant raw socket access for nmap/arp-scan
+# Grant raw socket access for nmap/arp-scan.
+# AmbientCapabilities propagates CAP_NET_RAW into child processes (nmap,
+# arp-scan, scapy) so they can open raw sockets without needing setuid or sudo.
 AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
 # Security hardening
-NoNewPrivileges=yes
+# NOTE: NoNewPrivileges=yes is intentionally omitted.  On kernel 4.x it
+# blocks both ambient capability inheritance to child processes AND sudo's
+# setuid escalation, which prevents nmap SYN (-sS) scans from working even
+# when setcap and the sudoers rule are correctly installed.  The service is
+# already locked down by: non-root User=, CapabilityBoundingSet (limits
+# what capabilities can ever be gained), PrivateTmp, ProtectSystem, and
+# ProtectHome.
 PrivateTmp=yes
 ProtectSystem=strict
 ReadWritePaths=/opt/network-discovery/logs /opt/network-discovery/data

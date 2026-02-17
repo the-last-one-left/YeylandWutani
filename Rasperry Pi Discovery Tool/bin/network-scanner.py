@@ -2132,7 +2132,8 @@ def phase8_mdns_discovery(config: dict) -> dict:
     try:
         result = subprocess.run(
             ["avahi-browse", "-apt", "--resolve", "--no-db-lookup"],
-            capture_output=True, text=True, timeout=timeout + 5,
+            capture_output=True, timeout=timeout + 5,
+            encoding="utf-8", errors="replace",
         )
         if result.returncode == 0 and result.stdout.strip():
             for line in result.stdout.splitlines():
@@ -2166,7 +2167,8 @@ def phase8_mdns_discovery(config: dict) -> dict:
         try:
             result = subprocess.run(
                 ["avahi-browse", "-apt"],
-                capture_output=True, text=True, timeout=timeout,
+                capture_output=True, timeout=timeout,
+                encoding="utf-8", errors="replace",
             )
             if result.returncode == 0 and result.stdout.strip():
                 for line in result.stdout.splitlines():
