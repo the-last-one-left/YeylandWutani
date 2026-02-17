@@ -189,6 +189,12 @@ def _get_public_ip_info() -> dict:
     """
     Query ipinfo.io to get the Pi's public IP, ISP/ASN, and reverse PTR.
     Returns empty dict on any failure (e.g. no internet, timeout).
+
+    ipinfo.io's 'hostname' field is populated from PTR records.  If it
+    returns nothing (ISP hasn't registered a PTR, or the netblock is
+    delegated to a hosting provider), we fall back to a direct PTR query
+    against Cloudflare / Google DNS, which bypasses the local resolver and
+    reaches the authoritative nameserver for the netblock directly.
     """
     try:
         req = urllib.request.Request(
@@ -197,7 +203,7 @@ def _get_public_ip_info() -> dict:
         )
         with urllib.request.urlopen(req, timeout=5) as resp:
             data = json.loads(resp.read())
-        return {
+        pub = {
             "public_ip": data.get("ip", ""),
             "isp":       data.get("org", ""),      # e.g. "AS7922 Comcast Cable"
             "city":      data.get("city", ""),
@@ -206,6 +212,15 @@ def _get_public_ip_info() -> dict:
             "hostname":  data.get("hostname", ""), # reverse PTR if set
             "timezone":  data.get("timezone", ""),
         }
+        # If ipinfo.io has no PTR for this IP, try a direct PTR lookup
+        # against public resolvers so we don't miss customer-set PTRs that
+        # the local router resolver can't forward.
+        if not pub["hostname"] and pub["public_ip"]:
+            pub["hostname"] = reverse_dns(pub["public_ip"]) or ""
+            if pub["hostname"]:
+                logger.debug(f"Public IP PTR resolved via dig fallback: "
+                             f"{pub['public_ip']} → {pub['hostname']}")
+        return pub
     except Exception as exc:
         logger.debug(f"Public IP lookup failed: {exc}")
         return {}
