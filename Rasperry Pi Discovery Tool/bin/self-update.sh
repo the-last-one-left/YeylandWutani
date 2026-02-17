@@ -157,6 +157,27 @@ fi
 chmod +x "${INSTALL_DIR}/bin/"*.py 2>/dev/null || true
 chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
 
+# ── Restore nmap / python3 file capabilities ─────────────────────────────────
+# setcap grants CAP_NET_RAW on the binary so nmap can run SYN scans without
+# being root.  'apt-get upgrade' replaces the binary and silently clears file
+# capabilities, so we re-apply them here after every successful code update.
+if command -v nmap &>/dev/null; then
+    NMAP_REAL="$(readlink -f "$(which nmap)")"
+    if setcap cap_net_raw+eip "${NMAP_REAL}" 2>/dev/null; then
+        log_ok "cap_net_raw restored on nmap (${NMAP_REAL})."
+    else
+        log_warn "Could not restore cap_net_raw on nmap — SYN scans will fall back to connect scan."
+    fi
+fi
+PYTHON3_REAL="$(readlink -f "${INSTALL_DIR}/venv/bin/python3")"
+if [[ -f "${PYTHON3_REAL}" ]]; then
+    if setcap cap_net_raw+eip "${PYTHON3_REAL}" 2>/dev/null; then
+        log_ok "cap_net_raw restored on venv python3."
+    else
+        log_warn "Could not restore cap_net_raw on venv python3."
+    fi
+fi
+
 # ── Signal to callers that an actual update was applied ───────────────────────
 echo "UPDATED"
 
