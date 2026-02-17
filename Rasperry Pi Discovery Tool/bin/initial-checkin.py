@@ -447,10 +447,18 @@ def main():
         mailer.send_email(subject=subject, body_html=body_html)
         logger.info(f"Check-in email sent successfully in {time.time() - send_start:.1f}s.")
     except (GraphMailerError, GraphAuthError) as e:
-        logger.error(f"Failed to send check-in email: {e}", exc_info=True)
+        logger.error(f"Failed to send check-in email (auth/mailer error): {e}", exc_info=True)
+        logger.error("Check the Graph API credentials in config.json and run bin/test-email.py to verify.")
+        sys.exit(1)
+    except Exception as e:
+        # Catches config file missing, malformed JSON, unexpected network errors, etc.
+        # Without this broad catch these exceptions crash with an unhandled traceback
+        # that only appears in stderr/journal — not in the log file — making them
+        # very hard to diagnose.
+        logger.error(f"Unexpected error sending check-in email: {type(e).__name__}: {e}", exc_info=True)
         sys.exit(1)
 
-    # Mark complete
+    # Mark complete — only reached on successful email send
     mark_checkin_complete()
     total = time.time() - checkin_start
     logger.info(f"Initial check-in complete in {total:.1f}s total.")
