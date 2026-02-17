@@ -229,13 +229,23 @@ setup_directories() {
     chmod +x "${INSTALL_DIR}/install.sh" 2>/dev/null || true
     chmod +x "${INSTALL_DIR}/uninstall.sh" 2>/dev/null || true
 
-    # nmap needs CAP_NET_RAW or setuid - grant to venv python3
-    # (systemd service also grants AmbientCapabilities)
-    # Resolve symlinks: setcap requires a real file on some kernels/filesystems
+    # nmap SYN scan (-sS) requires CAP_NET_RAW.
+    # Grant it directly on the nmap binary so it works regardless of how the
+    # scanner is invoked (systemd ambient caps cover the service, but manual
+    # runs as a non-root user also need it on the binary itself).
+    local NMAP_REAL
+    if command -v nmap &>/dev/null; then
+        NMAP_REAL="$(readlink -f "$(which nmap)")"
+        setcap cap_net_raw+eip "${NMAP_REAL}" 2>/dev/null || \
+            warn "Could not set cap_net_raw on nmap. SYN scan will fall back to connect scan."
+    fi
+
+    # Also grant CAP_NET_RAW to the venv python3 for any in-process raw socket use.
+    # Resolve symlinks: setcap requires a real file on some kernels/filesystems.
     local PYTHON3_REAL
     PYTHON3_REAL="$(readlink -f "${VENV_DIR}/bin/python3")"
     setcap cap_net_raw+eip "${PYTHON3_REAL}" 2>/dev/null || \
-        warn "Could not set cap_net_raw on python3. nmap SYN scan may need root."
+        warn "Could not set cap_net_raw on python3."
 
     # arp-scan needs setuid or capabilities
     if command -v arp-scan &>/dev/null; then
