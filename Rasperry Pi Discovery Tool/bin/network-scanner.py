@@ -616,6 +616,9 @@ def _dhcp_discover_servers(iface: str = None, timeout: int = 5) -> list:
                     dns_servers = [str(ns) for ns in name_server]
                 else:
                     dns_servers = [str(name_server)]
+            # scapy returns DHCP option values as bytes; decode before storing
+            # so the domain name isn't rendered as b'example.com' in reports.
+            _dn = dhcp_opts.get("domain", "")
             servers.append({
                 "server_ip": str(server_ip),
                 "offered_ip": offer[BOOTP].yiaddr if offer.haslayer(BOOTP) else "",
@@ -623,7 +626,7 @@ def _dhcp_discover_servers(iface: str = None, timeout: int = 5) -> list:
                 "gateway": str(dhcp_opts.get("router", "")),
                 "dns_servers": dns_servers,
                 "lease_time": int(dhcp_opts.get("lease_time", 0)),
-                "domain_name": str(dhcp_opts.get("domain", "")),
+                "domain_name": _dn.decode("ascii", errors="replace") if isinstance(_dn, bytes) else str(_dn),
             })
         return servers
     except ImportError:
@@ -971,6 +974,12 @@ def _nmap_port_scan(
             _parse_output(stdout_s)
         else:
             # Neither setcap nor sudo worked — fall back to connect scan.
+            # Emit one DEBUG line explaining which path failed so it's
+            # diagnosable with journalctl -u nd-discovery --output=verbose.
+            if stderr_s:
+                logger.debug(f"nmap (sudo) also failed for {ip}: {stderr_s.strip()[:300]}")
+            elif stderr:
+                logger.debug(f"nmap -sS failed for {ip}: {stderr.strip()[:300]}")
             # Log at INFO only on the first host; demote to DEBUG for the rest
             # to avoid the message repeating once per scanned host.
             global _nmap_syn_fallback_logged
