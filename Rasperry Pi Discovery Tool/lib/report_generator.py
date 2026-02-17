@@ -271,6 +271,57 @@ def _build_msp_summary(hosts: list, summary: dict, recon: dict, company_color: s
     total_hosts = summary.get("total_hosts", len(hosts))
     total_devices_label = f"{total_hosts} device{'s' if total_hosts != 1 else ''} discovered"
 
+    # ── Hostname Resolution Coverage ──────────────────────────────────────
+    named_count = summary.get("named_hosts", sum(
+        1 for h in hosts
+        if h.get("hostname") and h["hostname"] not in ("N/A", "", None)
+    ))
+    hn_sources = summary.get("hostname_source_breakdown", {})
+    coverage_pct = int(named_count / total_hosts * 100) if total_hosts else 0
+    bar_color = "#198754" if coverage_pct >= 80 else ("#fd7e14" if coverage_pct >= 50 else "#dc3545")
+
+    src_pills = ""
+    src_order = ["DNS", "mDNS", "NetBIOS/SMB", "SNMP", "SSDP"]
+    for src in src_order:
+        cnt = hn_sources.get(src, 0)
+        if cnt:
+            bg, fg = _HOSTNAME_SOURCE_BADGE.get(src, ("#6c757d", "#fff"))
+            src_pills += (
+                f'<span style="background:{bg}; color:{fg}; font-size:10px; '
+                f'padding:2px 7px; border-radius:3px; margin-right:4px; '
+                f'white-space:nowrap;">{src}: {cnt}</span>'
+            )
+    # catch any source not in src_order
+    for src, cnt in hn_sources.items():
+        if src not in src_order and cnt:
+            src_pills += (
+                f'<span style="background:#6c757d; color:#fff; font-size:10px; '
+                f'padding:2px 7px; border-radius:3px; margin-right:4px; '
+                f'white-space:nowrap;">{src}: {cnt}</span>'
+            )
+    unresolved = total_hosts - named_count
+    if unresolved > 0:
+        src_pills += (
+            f'<span style="background:#adb5bd; color:#fff; font-size:10px; '
+            f'padding:2px 7px; border-radius:3px; white-space:nowrap;">'
+            f'Unresolved: {unresolved}</span>'
+        )
+
+    hn_coverage_html = f"""
+      <!-- Hostname resolution coverage -->
+      <div style="margin-top:14px; padding:10px 12px; background:#f8f9fa;
+                  border:1px solid #dee2e6; border-radius:4px;">
+        <div style="font-size:11px; font-weight:bold; color:#555; margin-bottom:5px;">
+          &#9993; Name Resolution: {named_count} of {total_hosts} hosts identified
+          <span style="font-weight:normal; color:#888;">({coverage_pct}%)</span>
+        </div>
+        <div style="background:#e9ecef; border-radius:3px; height:6px; margin-bottom:7px;">
+          <div style="background:{bar_color}; border-radius:3px; height:6px;
+                      width:{coverage_pct}%; min-width:2px;"></div>
+        </div>
+        <div>{src_pills}</div>
+      </div>"""
+
     return f"""
   <!-- ═══ MSP SUMMARY ═══ -->
   <tr>
@@ -307,11 +358,34 @@ def _build_msp_summary(hosts: list, summary: dict, recon: dict, company_color: s
              style="background:#fafafa; border:1px solid #f0d0d0; border-radius:4px;">
         {gap_html}
       </table>
+      {hn_coverage_html}
     </td>
   </tr>"""
 
 
 # ── Device table rows ──────────────────────────────────────────────────────
+
+# Hostname source badge colours: bg, text
+_HOSTNAME_SOURCE_BADGE = {
+    "DNS":         ("#0d6efd", "#fff"),
+    "mDNS":        ("#198754", "#fff"),
+    "SNMP":        ("#fd7e14", "#fff"),
+    "NetBIOS/SMB": ("#6f42c1", "#fff"),
+    "SSDP":        ("#0dcaf0", "#000"),
+}
+
+
+def _hostname_source_badge(source: str) -> str:
+    """Return a small inline HTML badge for a hostname source string."""
+    if not source:
+        return ""
+    bg, fg = _HOSTNAME_SOURCE_BADGE.get(source, ("#6c757d", "#fff"))
+    return (
+        f'<span style="background:{bg}; color:{fg}; font-size:9px; '
+        f'padding:1px 4px; border-radius:2px; display:inline-block; '
+        f'margin-top:1px; white-space:nowrap;">{source}</span>'
+    )
+
 
 def _build_device_rows(hosts: list, company_color: str) -> str:
     rows = ""
@@ -343,14 +417,20 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
 
         smb = services.get("smb", {})
         smb_info = ""
-        if smb and smb.get("smb_computer"):
+        hn_source = host.get("hostname_source", "")
+        if smb and smb.get("smb_computer") and hn_source != "NetBIOS/SMB":
             smb_info = f'<br><span style="color:#555; font-size:10px;">SMB: {smb["smb_computer"]}</span>'
 
         # SNMP device name
         snmp = services.get("snmp", {}) or {}
         snmp_info = ""
-        if snmp.get("sysName"):
+        if snmp.get("sysName") and hn_source != "SNMP":
             snmp_info = f'<br><span style="color:#555; font-size:10px;">SNMP: {snmp["sysName"][:50]}</span>'
+
+        # Hostname source badge (shown under the hostname)
+        hn_source_badge = ""
+        if hn_source and hostname not in ("N/A", ""):
+            hn_source_badge = "<br>" + _hostname_source_badge(hn_source)
 
         # OS guess
         os_guess = host.get("os_guess", "")
@@ -400,7 +480,7 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
             {icon} <span style="color:{company_color}; font-weight:bold;">{category}</span>
             {gw_badge}{http_title}{smb_info}{snmp_info}{os_info}{cert_info}
           </td>
-          <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; color:#555;">{hostname}</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; color:#555;">{hostname}{hn_source_badge}</td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; font-family:monospace;">{mac}<br><span style="color:#888;">{vendor}</span></td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7;">{port_html}{version_str}</td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7;">{flag_html}</td>
