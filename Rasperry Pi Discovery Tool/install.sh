@@ -116,6 +116,7 @@ install_packages() {
         python3 \
         python3-pip \
         python3-venv \
+        libcap2-bin \
         nmap \
         arp-scan \
         fping \
@@ -224,7 +225,10 @@ setup_directories() {
 
     # nmap needs CAP_NET_RAW or setuid - grant to venv python3
     # (systemd service also grants AmbientCapabilities)
-    setcap cap_net_raw+eip "${VENV_DIR}/bin/python3" 2>/dev/null || \
+    # Resolve symlinks: setcap requires a real file on some kernels/filesystems
+    local PYTHON3_REAL
+    PYTHON3_REAL="$(readlink -f "${VENV_DIR}/bin/python3")"
+    setcap cap_net_raw+eip "${PYTHON3_REAL}" 2>/dev/null || \
         warn "Could not set cap_net_raw on python3. nmap SYN scan may need root."
 
     # arp-scan needs setuid or capabilities
@@ -304,42 +308,49 @@ run_config_wizard() {
     echo "  See GRAPH_API_SETUP.md for step-by-step instructions."
     echo ""
 
+    # When the installer is piped through bash (e.g. curl | sudo bash), stdin is
+    # the pipe carrying the script itself — not the terminal — so plain `read`
+    # sees EOF immediately and the wizard fields appear un-enterable.
+    # Forcing reads through /dev/tty bypasses the pipe and restores keyboard input.
+    read_tty()        { local _v; IFS= read -r  _v < /dev/tty; printf '%s' "${_v}"; }
+    read_tty_secret() { local _v; IFS= read -rs _v < /dev/tty; printf '%s' "${_v}"; }
+
     # Tenant ID
     prompt "Microsoft Tenant ID (Azure Directory ID):"
-    read -r TENANT_ID
+    TENANT_ID="$(read_tty)"
     [[ -z "${TENANT_ID}" ]] && die "Tenant ID is required."
 
     prompt "Application (Client) ID:"
-    read -r CLIENT_ID
+    CLIENT_ID="$(read_tty)"
     [[ -z "${CLIENT_ID}" ]] && die "Client ID is required."
 
     prompt "Client Secret:"
-    read -rs CLIENT_SECRET
+    CLIENT_SECRET="$(read_tty_secret)"
     echo ""
     [[ -z "${CLIENT_SECRET}" ]] && die "Client Secret is required."
 
     prompt "From email address (M365 mailbox):"
-    read -r FROM_EMAIL
+    FROM_EMAIL="$(read_tty)"
     [[ -z "${FROM_EMAIL}" ]] && die "From email is required."
 
     prompt "To email address (receives reports):"
-    read -r TO_EMAIL
+    TO_EMAIL="$(read_tty)"
     [[ -z "${TO_EMAIL}" ]] && die "To email is required."
 
     prompt "Device name (default: NetDiscovery-Pi):"
-    read -r DEVICE_NAME
+    DEVICE_NAME="$(read_tty)"
     DEVICE_NAME="${DEVICE_NAME:-NetDiscovery-Pi}"
 
     prompt "Company name for reports (default: Yeyland Wutani LLC):"
-    read -r COMPANY_NAME
+    COMPANY_NAME="$(read_tty)"
     COMPANY_NAME="${COMPANY_NAME:-Yeyland Wutani LLC}"
 
     prompt "Company accent color - hex code (default: #FF6600):"
-    read -r COMPANY_COLOR
+    COMPANY_COLOR="$(read_tty)"
     COMPANY_COLOR="${COMPANY_COLOR:-#FF6600}"
 
     prompt "Company tagline (default: Building Better Systems):"
-    read -r COMPANY_TAGLINE
+    COMPANY_TAGLINE="$(read_tty)"
     COMPANY_TAGLINE="${COMPANY_TAGLINE:-Building Better Systems}"
 
     # Escape JSON special characters in user input (backslash and double-quote)
