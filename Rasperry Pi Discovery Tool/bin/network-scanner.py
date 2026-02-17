@@ -61,6 +61,10 @@ from network_utils import (
 
 logger = logging.getLogger(__name__)
 
+# Suppresses per-host repetition of the nmap SYN→connect fallback message.
+# Logged at INFO the first time; demoted to DEBUG for every subsequent host.
+_nmap_syn_fallback_logged = False
+
 CONFIG_PATH = Path("/opt/network-discovery/config/config.json")
 DATA_DIR = Path("/opt/network-discovery/data")
 
@@ -835,13 +839,19 @@ def _nmap_port_scan(
                 logger.debug(f"nmap (sudo) stderr for {ip}: {stderr_s.strip()[:200]}")
             _parse_output(stdout_s)
         else:
-            # Neither setcap nor sudo worked — fall back to connect scan
-            logger.warning(
-                f"nmap SYN scan needs root for {ip} — falling back to connect scan. "
-                f"Run install.sh to set up the nmap sudoers rule, or restore file "
-                f"capabilities manually: "
-                f"sudo setcap cap_net_raw+eip $(readlink -f $(which nmap))"
-            )
+            # Neither setcap nor sudo worked — fall back to connect scan.
+            # Log at INFO only on the first host; demote to DEBUG for the rest
+            # to avoid the message repeating once per scanned host.
+            global _nmap_syn_fallback_logged
+            if not _nmap_syn_fallback_logged:
+                logger.info(
+                    "nmap SYN scan unavailable — using connect scan for this run. "
+                    "To restore SYN scanning: sudo setcap cap_net_raw+eip "
+                    "$(readlink -f $(which nmap))  or re-run install.sh."
+                )
+                _nmap_syn_fallback_logged = True
+            else:
+                logger.debug(f"nmap connect scan (SYN unavailable) for {ip}")
             result["scan_type"] = "connect"
             stdout2, _, timed_out2 = _run(_build_cmd("-sT"))
             if timed_out2:
