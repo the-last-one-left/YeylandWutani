@@ -35,6 +35,7 @@ import ssl
 import struct
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 import xml.etree.ElementTree as ET
@@ -63,7 +64,10 @@ logger = logging.getLogger(__name__)
 
 # Suppresses per-host repetition of the nmap SYN→connect fallback message.
 # Logged at INFO the first time; demoted to DEBUG for every subsequent host.
+# Lock guards against the race where two scan threads both see False and both
+# log at INFO before either sets the flag to True.
 _nmap_syn_fallback_logged = False
+_nmap_syn_fallback_lock = threading.Lock()
 
 CONFIG_PATH = Path("/opt/network-discovery/config/config.json")
 DATA_DIR = Path("/opt/network-discovery/data")
@@ -964,32 +968,41 @@ def _nmap_port_scan(
         logger.debug(f"nmap -sS permission denied for {ip} — retrying via sudo")
         sudo_cmd = ["sudo", "--non-interactive"] + _build_cmd("-sS")
         stdout_s, stderr_s, timed_out_s = _run(sudo_cmd)
-        if (stdout_s is not None
-                and not timed_out_s
-                and not _permission_error(stderr_s)
-                and (stderr_s is None or "sudo:" not in stderr_s.lower())):
-            # sudo SYN scan worked
+        # Consider the sudo path a hard failure only when nmap produced no
+        # output at all.  sudo sometimes emits warnings to stderr (e.g.
+        # "sudo: unable to resolve host <hostname>") that do not prevent nmap
+        # from running.  Similarly, nmap's -O (OS detection) may print
+        # "requires root" / "operation not permitted" to stderr while still
+        # writing valid port-scan results to stdout.  Discarding good port
+        # data because of those warnings was the original bug.
+        _sudo_hard_fail = (
+            stdout_s is None          # sudo binary not found
+            or timed_out_s
+            or not (stdout_s or "").strip()  # nmap produced nothing at all
+        )
+        if not _sudo_hard_fail:
             if stderr_s:
-                logger.debug(f"nmap (sudo) stderr for {ip}: {stderr_s.strip()[:200]}")
+                logger.debug(f"nmap (sudo) stderr for {ip}: {stderr_s.strip()[:300]}")
             _parse_output(stdout_s)
         else:
-            # Neither setcap nor sudo worked — fall back to connect scan.
-            # Emit one DEBUG line explaining which path failed so it's
-            # diagnosable with journalctl -u nd-discovery --output=verbose.
+            # Neither setcap nor sudo produced usable output — fall back to
+            # connect scan.  Log the reason at DEBUG for diagnosis.
             if stderr_s:
                 logger.debug(f"nmap (sudo) also failed for {ip}: {stderr_s.strip()[:300]}")
             elif stderr:
                 logger.debug(f"nmap -sS failed for {ip}: {stderr.strip()[:300]}")
-            # Log at INFO only on the first host; demote to DEBUG for the rest
-            # to avoid the message repeating once per scanned host.
+            # Log at INFO only on the first host; use a lock to avoid the
+            # race where two threads both see the flag as False and both log.
             global _nmap_syn_fallback_logged
-            if not _nmap_syn_fallback_logged:
+            with _nmap_syn_fallback_lock:
+                _should_warn = not _nmap_syn_fallback_logged
+                _nmap_syn_fallback_logged = True
+            if _should_warn:
                 logger.info(
                     "nmap SYN scan unavailable — using connect scan for this run. "
-                    "To restore SYN scanning: sudo setcap cap_net_raw+eip "
-                    "$(readlink -f $(which nmap))  or re-run install.sh."
+                    "To restore SYN scanning: re-run install.sh as root (installs "
+                    "the sudoers rule and setcap grant)."
                 )
-                _nmap_syn_fallback_logged = True
             else:
                 logger.debug(f"nmap connect scan (SYN unavailable) for {ip}")
             result["scan_type"] = "connect"
