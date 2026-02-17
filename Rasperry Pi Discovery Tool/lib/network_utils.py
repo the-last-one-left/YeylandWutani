@@ -384,10 +384,16 @@ def get_dns_servers() -> list:
 def reverse_dns(ip: str, timeout: float = 2.0) -> Optional[str]:
     """Perform reverse DNS lookup. Returns hostname or None.
 
-    Uses 'getent hosts' via subprocess so each call has an independent
-    per-process timeout and never mutates the process-global socket timeout,
-    which is unsafe to modify from worker threads.
+    Tries three methods in order:
+      1. getent hosts — respects system NSS config; fast for LAN hosts
+         whose PTR is served by the local resolver.
+      2. dig -x @1.1.1.1 — bypasses the local resolver entirely.
+         Consumer routers and VPN/WireGuard setups often cannot forward
+         PTR queries for public IPs upstream, so getent returns nothing
+         even when a PTR record is correctly set at the ISP level.
+      3. dig -x @8.8.8.8 — Google DNS as a second public-resolver fallback.
     """
+    # Method 1: local resolver via getent
     try:
         result = subprocess.run(
             ["getent", "hosts", ip],
@@ -399,6 +405,23 @@ def reverse_dns(ip: str, timeout: float = 2.0) -> Optional[str]:
                 return parts[1]
     except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
         pass
+
+    # Methods 2 & 3: direct PTR query against public resolvers via dig.
+    # dig +short for a PTR returns "hostname." — we strip the trailing dot.
+    for resolver in ("1.1.1.1", "8.8.8.8"):
+        try:
+            result = subprocess.run(
+                ["dig", "-x", ip, f"@{resolver}",
+                 "+short", "+time=2", "+tries=1"],
+                capture_output=True, text=True, timeout=timeout + 1,
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                hostname = result.stdout.strip().splitlines()[0].rstrip(".")
+                if hostname:
+                    return hostname
+        except (subprocess.TimeoutExpired, FileNotFoundError, Exception):
+            pass
+
     return None
 
 
