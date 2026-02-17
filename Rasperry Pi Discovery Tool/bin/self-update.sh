@@ -59,6 +59,12 @@ fi
 touch "${LOCK_FILE}"
 trap 'rm -f "${LOCK_FILE}"' EXIT
 
+# ── Mark SRC_DIR as safe for git operations ──────────────────────────────────
+# Git 2.35.2+ rejects repos owned by a different uid (e.g. root-created clone
+# operated on by the service user or a sudo session).  Add it unconditionally
+# so self-update works regardless of which user invokes it.
+git config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
+
 # ── Verify the persistent source clone exists ────────────────────────────────
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
     log_warn "Source clone not found at ${SRC_DIR}"
@@ -95,13 +101,18 @@ fi
 
 log "Update available: ${BEFORE:0:8} -> ${REMOTE:0:8}"
 
-# ── Pull with fast-forward only ───────────────────────────────────────────────
-if ! git -C "${SRC_DIR}" pull --ff-only origin main 2>>"${LOG_FILE}"; then
-    log_warn "git pull --ff-only failed."
-    log_warn "This usually means the source repo has been manually modified."
-    log_warn "Run 'git status' in ${SRC_DIR} to investigate."
-    log_warn "Continuing without update."
-    exit 0
+# ── Update to the fetched tip ────────────────────────────────────────────────
+# SRC_DIR is a read-only source clone — it is never manually edited.
+# Prefer --ff-only, but if the shallow history can't fast-forward (common
+# after force-pushes or when the initial --depth=1 clone and a subsequent
+# --depth=1 fetch land on disconnected shallow roots), fall back to
+# reset --hard FETCH_HEAD which always works for shallow clones.
+if ! git -C "${SRC_DIR}" merge --ff-only FETCH_HEAD 2>>"${LOG_FILE}"; then
+    log_warn "Fast-forward merge failed (shallow history mismatch) — resetting to FETCH_HEAD."
+    if ! git -C "${SRC_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}"; then
+        log_warn "git reset --hard FETCH_HEAD also failed. Continuing without update."
+        exit 0
+    fi
 fi
 
 AFTER=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
