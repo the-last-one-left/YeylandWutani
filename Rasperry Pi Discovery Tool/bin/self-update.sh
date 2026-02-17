@@ -59,6 +59,12 @@ fi
 touch "${LOCK_FILE}"
 trap 'rm -f "${LOCK_FILE}"' EXIT
 
+# ── Mark SRC_DIR as safe for git operations ──────────────────────────────────
+# Git 2.35.2+ rejects repos owned by a different uid (e.g. root-created clone
+# operated on by the service user or a sudo session).  Add it unconditionally
+# so self-update works regardless of which user invokes it.
+git config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
+
 # ── Verify the persistent source clone exists ────────────────────────────────
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
     log_warn "Source clone not found at ${SRC_DIR}"
