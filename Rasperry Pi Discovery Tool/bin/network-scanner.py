@@ -558,6 +558,137 @@ def phase1b_alternate_subnet_detection(recon: dict, config: dict) -> dict:
     return recon
 
 
+# ── DHCP probe helper (shared by Phase 1c and Phase 10) ───────────────────
+
+def _dhcp_discover_servers(iface: str = None, timeout: int = 5) -> list:
+    """Send a DHCP DISCOVER and return a list of server info dicts from OFFERs.
+
+    Returns [] if scapy is unavailable, no server responds, or an error occurs.
+    Each dict contains: server_ip, offered_ip, subnet_mask, gateway,
+    dns_servers, lease_time, domain_name.
+    """
+    try:
+        from scapy.all import (
+            BOOTP, DHCP, IP, UDP, Ether, conf, get_if_hwaddr, sendp, sniff,
+        )
+        if iface is None:
+            iface = conf.iface
+        try:
+            hw = get_if_hwaddr(iface)
+        except Exception:
+            hw = "de:ad:be:ef:ca:fe"
+
+        mac_bytes = bytes.fromhex(hw.replace(":", ""))
+        pkt = (
+            Ether(dst="ff:ff:ff:ff:ff:ff")
+            / IP(src="0.0.0.0", dst="255.255.255.255")
+            / UDP(sport=68, dport=67)
+            / BOOTP(chaddr=mac_bytes, xid=0x12345678)
+            / DHCP(options=[("message-type", "discover"), "end"])
+        )
+        sendp(pkt, verbose=0, count=1, iface=iface)
+
+        def _is_offer(p):
+            return (
+                p.haslayer(DHCP)
+                and any(
+                    opt[0] == "message-type" and opt[1] == 2
+                    for opt in p[DHCP].options
+                    if isinstance(opt, tuple) and len(opt) >= 2
+                )
+            )
+
+        offers = sniff(filter="udp and port 68", timeout=timeout,
+                       lfilter=_is_offer, iface=iface)
+        servers = []
+        for offer in offers:
+            dhcp_opts = {
+                opt[0]: opt[1]
+                for opt in offer[DHCP].options
+                if isinstance(opt, tuple) and len(opt) >= 2
+            }
+            server_ip = dhcp_opts.get(
+                "server_id", offer[IP].src if offer.haslayer(IP) else "")
+            name_server = dhcp_opts.get("name_server", "")
+            dns_servers = []
+            if name_server:
+                if isinstance(name_server, (list, tuple)):
+                    dns_servers = [str(ns) for ns in name_server]
+                else:
+                    dns_servers = [str(name_server)]
+            servers.append({
+                "server_ip": str(server_ip),
+                "offered_ip": offer[BOOTP].yiaddr if offer.haslayer(BOOTP) else "",
+                "subnet_mask": str(dhcp_opts.get("subnet_mask", "")),
+                "gateway": str(dhcp_opts.get("router", "")),
+                "dns_servers": dns_servers,
+                "lease_time": int(dhcp_opts.get("lease_time", 0)),
+                "domain_name": str(dhcp_opts.get("domain", "")),
+            })
+        return servers
+    except ImportError:
+        logger.debug("_dhcp_discover_servers: scapy not available")
+        return []
+    except Exception as e:
+        logger.debug(f"_dhcp_discover_servers failed: {e}")
+        return []
+
+
+# ── Phase 1c: DHCP-seeded Subnet Discovery ────────────────────────────────
+
+def phase1c_dhcp_subnet_seeding(recon: dict, config: dict) -> dict:
+    """Phase 1c: Quick DHCP probe to discover server subnets before Phase 2.
+
+    Sends a DHCP DISCOVER with a short timeout.  Any DHCP server that replies
+    from a subnet not already in the scan list causes that subnet to be added
+    to recon["additional_subnets"] so Phase 2 will fully scan it.
+    """
+    logger.info("[Phase 1c] DHCP subnet seeding...")
+
+    known_nets = []
+    for cidr in recon.get("subnets", []):
+        try:
+            known_nets.append(ipaddress.IPv4Network(cidr, strict=False))
+        except ValueError:
+            pass
+    pi_prefixlen = known_nets[0].prefixlen if known_nets else 24
+
+    # Use at most half the full dhcp_timeout so Phase 1c stays quick
+    probe_timeout = max(3, min(config.get("dhcp_timeout", 10) // 2, 5))
+    servers = _dhcp_discover_servers(timeout=probe_timeout)
+
+    added = 0
+    for srv in servers:
+        server_ip = srv.get("server_ip", "")
+        if not server_ip:
+            continue
+        try:
+            addr = ipaddress.IPv4Address(server_ip)
+        except ValueError:
+            continue
+        if any(addr in net for net in known_nets):
+            continue  # already being scanned
+        try:
+            inferred_net = ipaddress.IPv4Network(
+                f"{server_ip}/{pi_prefixlen}", strict=False)
+        except ValueError:
+            continue
+        if any(inferred_net.overlaps(kn) for kn in known_nets):
+            continue
+        cidr = str(inferred_net)
+        recon["additional_subnets"].append({"cidr": cidr, "discovered_via": server_ip})
+        recon["subnets"].append(cidr)
+        known_nets.append(inferred_net)
+        logger.info(f"  DHCP server {server_ip} is on {cidr} — added for Phase 2 scanning")
+        added += 1
+
+    if added:
+        logger.info(f"  Phase 1c complete: {added} new subnet(s) queued.")
+    else:
+        logger.info("  Phase 1c complete: no new subnets found via DHCP probe.")
+    return recon
+
+
 # ── Phase 2: Host Discovery ────────────────────────────────────────────────
 
 def _run_arp_scan(subnet: str, iface: str = None) -> list:
@@ -2220,85 +2351,18 @@ def phase9_ssdp_discovery(config: dict) -> dict:
 def phase10_dhcp_analysis(recon: dict, config: dict) -> dict:
     """Phase 10: Detect DHCP servers and analyze scope configuration.
 
-    Uses scapy to send DHCP DISCOVER and collect OFFER responses.
+    Uses _dhcp_discover_servers() (scapy) to collect OFFER responses.
     Falls back to parsing current lease info from dhclient if scapy fails.
     """
     logger.info("[Phase 10] DHCP Scope Analysis...")
     timeout = config.get("dhcp_timeout", 10)
     expected_gateway = recon.get("default_gateway", "")
 
-    dhcp_servers = []
-
-    # Method 1: scapy DHCP DISCOVER
-    try:
-        from scapy.all import (
-            BOOTP, DHCP, IP, UDP, Ether, conf, get_if_hwaddr, sendp, sniff,
-        )
-
-        # Get the active interface MAC
-        iface = conf.iface
-        try:
-            hw = get_if_hwaddr(iface)
-        except Exception:
-            hw = "de:ad:be:ef:ca:fe"
-
-        mac_bytes = bytes.fromhex(hw.replace(":", ""))
-
-        pkt = (
-            Ether(dst="ff:ff:ff:ff:ff:ff")
-            / IP(src="0.0.0.0", dst="255.255.255.255")
-            / UDP(sport=68, dport=67)
-            / BOOTP(chaddr=mac_bytes, xid=0x12345678)
-            / DHCP(options=[("message-type", "discover"), "end"])
-        )
-
-        # Send and collect offers
-        logger.debug("  Sending DHCP DISCOVER...")
-        sendp(pkt, verbose=0, count=1)
-
-        def _is_dhcp_offer(p):
-            return (
-                p.haslayer(DHCP)
-                and any(
-                    opt[0] == "message-type" and opt[1] == 2  # OFFER
-                    for opt in p[DHCP].options
-                    if isinstance(opt, tuple) and len(opt) >= 2
-                )
-            )
-
-        offers = sniff(filter="udp and port 68", timeout=timeout, lfilter=_is_dhcp_offer)
-
-        for offer in offers:
-            dhcp_opts = {
-                opt[0]: opt[1]
-                for opt in offer[DHCP].options
-                if isinstance(opt, tuple) and len(opt) >= 2
-            }
-            server_ip = dhcp_opts.get("server_id", offer[IP].src if offer.haslayer(IP) else "")
-            srv = {
-                "server_ip": str(server_ip),
-                "offered_ip": offer[BOOTP].yiaddr if offer.haslayer(BOOTP) else "",
-                "subnet_mask": str(dhcp_opts.get("subnet_mask", "")),
-                "gateway": str(dhcp_opts.get("router", "")),
-                "dns_servers": [],
-                "lease_time": int(dhcp_opts.get("lease_time", 0)),
-                "domain_name": str(dhcp_opts.get("domain", "")),
-            }
-            # DNS servers may come as a list or single IP
-            name_server = dhcp_opts.get("name_server", "")
-            if name_server:
-                if isinstance(name_server, (list, tuple)):
-                    srv["dns_servers"] = [str(ns) for ns in name_server]
-                else:
-                    srv["dns_servers"] = [str(name_server)]
-            dhcp_servers.append(srv)
-
+    dhcp_servers = _dhcp_discover_servers(timeout=timeout)
+    if dhcp_servers:
         logger.info(f"  DHCP DISCOVER received {len(dhcp_servers)} OFFER(s).")
-
-    except ImportError:
-        logger.info("  scapy not available. Trying lease file fallback.")
-    except Exception as e:
-        logger.warning(f"  DHCP DISCOVER failed: {e}")
+    else:
+        logger.info("  scapy not available or no OFFER received. Trying lease file fallback.")
 
     # Method 2: Fallback — parse current DHCP lease
     if not dhcp_servers:
@@ -4071,7 +4135,7 @@ def _enrich_hostnames_from_discovery(
 
 # ── Summary Statistics ─────────────────────────────────────────────────────
 
-def build_summary(recon: dict, hosts: list) -> dict:
+def build_summary(recon: dict, hosts: list, dhcp_results: dict = None) -> dict:
     """Build summary statistics from scan results."""
     total_hosts = len(hosts)
     total_open_ports = sum(len(h["open_ports"]) for h in hosts)
@@ -4111,6 +4175,25 @@ def build_summary(recon: dict, hosts: list) -> dict:
 
     pub = recon.get("public_ip_info", {})
 
+    # DHCP summary — surface the most useful fields at the top level so
+    # report renderers don't have to dig into dhcp_analysis themselves.
+    dhcp_summary: dict = {}
+    if dhcp_results:
+        servers = dhcp_results.get("dhcp_servers", [])
+        if servers:
+            primary = servers[0]
+            lease_secs = primary.get("lease_time", 0)
+            dhcp_summary = {
+                "server_count": len(servers),
+                "server_ip": primary.get("server_ip", ""),
+                "gateway_from_dhcp": primary.get("gateway", ""),
+                "dns_from_dhcp": primary.get("dns_servers", []),
+                "domain": primary.get("domain_name", ""),
+                "lease_time_hours": round(lease_secs / 3600, 1) if lease_secs else 0,
+                "rogue_warning": dhcp_results.get("rogue_server_warning", False),
+                "all_server_ips": [s["server_ip"] for s in servers if s.get("server_ip")],
+            }
+
     return {
         "total_hosts": total_hosts,
         "total_open_ports": total_open_ports,
@@ -4128,6 +4211,8 @@ def build_summary(recon: dict, hosts: list) -> dict:
         # Convenience keys for report
         "public_ip": pub.get("public_ip", ""),
         "isp": pub.get("isp", ""),
+        # DHCP infrastructure
+        "dhcp": dhcp_summary,
     }
 
 
@@ -4191,6 +4276,10 @@ def run_discovery(progress_callback=None) -> dict:
 
     recon = _run_phase("1b", "Alternate subnet detection",
                        phase1b_alternate_subnet_detection, recon, config)
+
+    recon = _run_phase("1c", "DHCP subnet seeding",
+                       phase1c_dhcp_subnet_seeding, recon, config,
+                       config_key="enable_dhcp_analysis")
 
     hosts = _run_phase("2", "Host discovery",
                        phase2_host_discovery, recon, config, default=[])
@@ -4264,7 +4353,7 @@ def run_discovery(progress_callback=None) -> dict:
     duration = (end_time - start_time).total_seconds()
 
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    summary = build_summary(recon, hosts)
+    summary = build_summary(recon, hosts, dhcp_results)
 
     # ── Phase timing summary log ─────────────────────────────────────────
     logger.info("-" * 60)
