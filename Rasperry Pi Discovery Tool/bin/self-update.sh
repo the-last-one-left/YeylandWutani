@@ -157,6 +157,20 @@ fi
 chmod +x "${INSTALL_DIR}/bin/"*.py 2>/dev/null || true
 chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
 
+# ── Refresh OUI vendor database ──────────────────────────────────────────────
+# The IEEE MA-L database grows as new vendors register OUIs.  Refresh it on
+# every successful code update so vendor identification stays current.
+OUI_SCRIPT="${INSTALL_DIR}/bin/update-oui-db.py"
+VENV_PYTHON="${INSTALL_DIR}/venv/bin/python3"
+if [[ -f "${OUI_SCRIPT}" && -x "${VENV_PYTHON}" ]]; then
+    if "${VENV_PYTHON}" "${OUI_SCRIPT}" >>"${LOG_FILE}" 2>&1; then
+        chown network-discovery:network-discovery "${INSTALL_DIR}/data/oui.json" 2>/dev/null || true
+        log_ok "OUI vendor database refreshed."
+    else
+        log_warn "OUI database refresh failed (no internet?). Existing database retained."
+    fi
+fi
+
 # ── Restore nmap / python3 file capabilities ─────────────────────────────────
 # setcap grants CAP_NET_RAW on the binary so nmap can run SYN scans without
 # being root.  'apt-get upgrade' replaces the binary and silently clears file
