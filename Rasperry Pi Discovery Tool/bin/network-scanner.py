@@ -1473,112 +1473,6 @@ def _probe_ad_ldap(ip: str, timeout: int = 10) -> dict:
     return result
 
 
-# ── Scan Delta / Change Detection ─────────────────────────────────────────────
-
-def _compare_scan_to_last(current_hosts: list, data_dir: Path) -> dict:
-    """
-    Compare current scan results to the most recent previous scan.
-    Returns a dict describing new devices, gone devices, and changed devices.
-    Only runs if a previous scan JSON exists in data_dir/scans/ or data_dir/.
-    """
-    no_delta = {"has_changes": False}
-
-    # Find previous scan JSONs (sorted newest first, skip the current one being built)
-    scan_dir = data_dir
-    scan_files = sorted(
-        [f for f in scan_dir.glob("scan_*.json") if f.is_file()],
-        key=lambda f: f.stat().st_mtime,
-        reverse=True
-    )
-
-    if len(scan_files) < 1:
-        logger.debug("No previous scan files found for delta comparison.")
-        return no_delta
-
-    # Use the most recent existing scan file as baseline
-    prev_file = scan_files[0]
-    logger.info(f"Comparing against previous scan: {prev_file.name}")
-
-    try:
-        with open(prev_file, encoding="utf-8") as f:
-            prev_data = json.load(f)
-    except Exception as e:
-        logger.warning(f"Could not read previous scan file {prev_file}: {e}")
-        return no_delta
-
-    prev_hosts = prev_data.get("hosts", [])
-    prev_scan_date = prev_data.get("scan_start", "unknown")
-
-    # Build lookup dicts keyed by IP
-    curr_by_ip = {h["ip"]: h for h in current_hosts}
-    prev_by_ip = {h["ip"]: h for h in prev_hosts}
-
-    new_ips = set(curr_by_ip.keys()) - set(prev_by_ip.keys())
-    gone_ips = set(prev_by_ip.keys()) - set(curr_by_ip.keys())
-    common_ips = set(curr_by_ip.keys()) & set(prev_by_ip.keys())
-
-    new_devices = [curr_by_ip[ip] for ip in sorted(new_ips)]
-
-    gone_devices = [
-        {
-            "ip": ip,
-            "hostname": prev_by_ip[ip].get("hostname", ""),
-            "vendor": prev_by_ip[ip].get("vendor", ""),
-            "category": prev_by_ip[ip].get("category", "Unknown"),
-        }
-        for ip in sorted(gone_ips)
-    ]
-
-    changed_devices = []
-    for ip in sorted(common_ips):
-        curr_h = curr_by_ip[ip]
-        prev_h = prev_by_ip[ip]
-        changes = []
-
-        # Port changes
-        curr_ports = set(curr_h.get("open_ports", []))
-        prev_ports = set(prev_h.get("open_ports", []))
-        added_ports = curr_ports - prev_ports
-        removed_ports = prev_ports - curr_ports
-        if added_ports or removed_ports:
-            parts = []
-            if added_ports:
-                parts.append(f"+{','.join(str(p) for p in sorted(added_ports))}")
-            if removed_ports:
-                parts.append(f"-{','.join(str(p) for p in sorted(removed_ports))}")
-            changes.append(f"ports: {' '.join(parts)}")
-
-        # Category changes
-        curr_cat = curr_h.get("category", "Unknown")
-        prev_cat = prev_h.get("category", "Unknown")
-        if curr_cat != prev_cat:
-            changes.append(f"category: {prev_cat} → {curr_cat}")
-
-        # Hostname changes
-        curr_hn = curr_h.get("hostname", "")
-        prev_hn = prev_h.get("hostname", "")
-        if curr_hn != prev_hn and (curr_hn or prev_hn):
-            changes.append(f"hostname: {prev_hn or '(none)'} → {curr_hn or '(none)'}")
-
-        if changes:
-            changed_devices.append({
-                "ip": ip,
-                "hostname": curr_h.get("hostname", ""),
-                "category": curr_cat,
-                "vendor": curr_h.get("vendor", ""),
-                "changes": changes,
-            })
-
-    has_changes = bool(new_devices or gone_devices or changed_devices)
-    return {
-        "has_changes": has_changes,
-        "new_devices": new_devices,
-        "gone_devices": gone_devices,
-        "changed_devices": changed_devices,
-        "previous_scan_date": prev_scan_date,
-        "previous_scan_file": prev_file.name,
-    }
-
 
 def _check_ssh_version_outdated(banner: str) -> bool:
     """Return True if SSH banner indicates OpenSSH < 8.0."""
@@ -2587,13 +2481,11 @@ def _derive_domains(recon: dict, hosts: list, dhcp_results: dict) -> list:
         if dn and _is_public(dn):
             domains.add(_extract_registrable(dn))
 
-    # 3. Reverse hostname from public IP
-    pub = recon.get("public_ip_info", {})
-    rhost = pub.get("hostname", "")
-    if rhost and _is_public(rhost):
-        domains.add(_extract_registrable(rhost))
+    # NOTE: the public IP reverse PTR hostname is intentionally NOT used as a
+    # domain source — it resolves to the ISP's domain (e.g. telepacific.net),
+    # not the customer's business domain.
 
-    # 4. SSL cert common names (harvested during service enum)
+    # 3. SSL cert common names (harvested during service enum)
     for host in hosts:
         for svc in host.get("services", {}).values():
             ssl_cn = svc.get("ssl_cn", "")
@@ -3973,18 +3865,8 @@ def run_discovery(progress_callback=None) -> dict:
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
-    # Scan delta: compare against previous scan for change detection
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    scan_delta = _compare_scan_to_last(hosts, DATA_DIR)
-    if scan_delta.get("has_changes"):
-        logger.info(
-            f"Scan delta: {len(scan_delta.get('new_devices', []))} new, "
-            f"{len(scan_delta.get('gone_devices', []))} gone, "
-            f"{len(scan_delta.get('changed_devices', []))} changed"
-        )
-
     summary = build_summary(recon, hosts)
-    summary["scan_delta"] = scan_delta
 
     # ── Phase timing summary log ─────────────────────────────────────────
     logger.info("-" * 60)
