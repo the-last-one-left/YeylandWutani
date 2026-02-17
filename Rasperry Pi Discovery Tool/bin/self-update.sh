@@ -59,11 +59,25 @@ fi
 touch "${LOCK_FILE}"
 trap 'rm -f "${LOCK_FILE}"' EXIT
 
+# ── Find git binary ───────────────────────────────────────────────────────────
+# command -v can fail under a restricted sudo PATH even when git exists at a
+# well-known location, so fall back to checking common paths explicitly.
+GIT_BIN="$(command -v git 2>/dev/null)"
+if [[ -z "${GIT_BIN}" ]]; then
+    for _g in /usr/bin/git /usr/local/bin/git /bin/git; do
+        if [[ -x "${_g}" ]]; then GIT_BIN="${_g}"; break; fi
+    done
+fi
+if [[ -z "${GIT_BIN}" ]]; then
+    log_warn "git not found. Cannot self-update."
+    exit 0
+fi
+
 # ── Mark SRC_DIR as safe for git operations ──────────────────────────────────
 # Git 2.35.2+ rejects repos owned by a different uid (e.g. root-created clone
 # operated on by the service user or a sudo session).  Add it unconditionally
 # so self-update works regardless of which user invokes it.
-git config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
+"${GIT_BIN}" config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
 
 # ── Verify the persistent source clone exists ────────────────────────────────
 if [[ ! -d "${SRC_DIR}/.git" ]]; then
@@ -72,27 +86,21 @@ if [[ ! -d "${SRC_DIR}/.git" ]]; then
     exit 0
 fi
 
-# ── Check git is available ────────────────────────────────────────────────────
-if ! command -v git &>/dev/null; then
-    log_warn "git not found. Cannot self-update."
-    exit 0
-fi
-
 log "Starting self-update check (src: ${SRC_DIR}, install: ${INSTALL_DIR})..."
 
 # ── Get current commit hash ───────────────────────────────────────────────────
-BEFORE=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
+BEFORE=$("${GIT_BIN}" -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
 log "Current commit: ${BEFORE:0:8}"
 
 # ── Fetch latest from origin (no merge yet) ───────────────────────────────────
 log "Fetching from origin/main..."
-if ! git -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}"; then
+if ! "${GIT_BIN}" -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}"; then
     log_warn "git fetch failed — no internet access or repo unreachable. Continuing without update."
     exit 0
 fi
 
 # ── Check if there is anything new ───────────────────────────────────────────
-REMOTE=$(git -C "${SRC_DIR}" rev-parse origin/main 2>/dev/null || echo "unknown")
+REMOTE=$("${GIT_BIN}" -C "${SRC_DIR}" rev-parse origin/main 2>/dev/null || echo "unknown")
 
 if [[ "${BEFORE}" == "${REMOTE}" ]]; then
     log "Already up to date (commit: ${BEFORE:0:8}). No update needed."
@@ -107,15 +115,15 @@ log "Update available: ${BEFORE:0:8} -> ${REMOTE:0:8}"
 # after force-pushes or when the initial --depth=1 clone and a subsequent
 # --depth=1 fetch land on disconnected shallow roots), fall back to
 # reset --hard FETCH_HEAD which always works for shallow clones.
-if ! git -C "${SRC_DIR}" merge --ff-only FETCH_HEAD 2>>"${LOG_FILE}"; then
+if ! "${GIT_BIN}" -C "${SRC_DIR}" merge --ff-only FETCH_HEAD 2>>"${LOG_FILE}"; then
     log_warn "Fast-forward merge failed (shallow history mismatch) — resetting to FETCH_HEAD."
-    if ! git -C "${SRC_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}"; then
+    if ! "${GIT_BIN}" -C "${SRC_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}"; then
         log_warn "git reset --hard FETCH_HEAD also failed. Continuing without update."
         exit 0
     fi
 fi
 
-AFTER=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
+AFTER=$("${GIT_BIN}" -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
 log_ok "Source updated: ${BEFORE:0:8} -> ${AFTER:0:8}"
 
 # ── Rsync updated files from source clone to install directory ────────────────
@@ -124,7 +132,7 @@ rsync -a "${SRC_DIR}/${REPO_SUBFOLDER}/" "${INSTALL_DIR}/"
 log_ok "Files synced to ${INSTALL_DIR}."
 
 # ── Reinstall pip packages if requirements.txt changed ───────────────────────
-if git -C "${SRC_DIR}" diff "${BEFORE}" "${AFTER}" --name-only 2>/dev/null | grep -q "requirements.txt"; then
+if "${GIT_BIN}" -C "${SRC_DIR}" diff "${BEFORE}" "${AFTER}" --name-only 2>/dev/null | grep -q "requirements.txt"; then
     log "requirements.txt changed — updating Python packages..."
     if [[ -x "${VENV_PIP}" ]]; then
         "${VENV_PIP}" install -r "${INSTALL_DIR}/requirements.txt" --quiet 2>>"${LOG_FILE}" && \
