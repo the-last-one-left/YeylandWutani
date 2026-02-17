@@ -271,6 +271,24 @@ setup_directories() {
         chmod +s "$(which arp-scan)" 2>/dev/null || true
     fi
 
+    # Sudoers rule: allow the service user to run nmap as root without a password.
+    # This is the reliable fallback for SYN scan when file capabilities (setcap)
+    # are not inherited correctly under NoNewPrivileges=yes on older kernels (4.x).
+    local SUDOERS_FILE="/etc/sudoers.d/network-discovery-nmap"
+    local NMAP_BIN
+    NMAP_BIN="$(command -v nmap 2>/dev/null)"
+    if [[ -n "${NMAP_BIN}" ]]; then
+        echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${NMAP_BIN}" > "${SUDOERS_FILE}"
+        chmod 0440 "${SUDOERS_FILE}"
+        # Validate the rule won't break sudo
+        if visudo -c -f "${SUDOERS_FILE}" &>/dev/null; then
+            success "sudoers rule installed: ${SERVICE_USER} may run nmap as root."
+        else
+            warn "sudoers rule failed validation — removing."
+            rm -f "${SUDOERS_FILE}"
+        fi
+    fi
+
     success "Directory permissions configured."
 }
 
