@@ -240,33 +240,24 @@ setup_directories() {
     chmod +x "${INSTALL_DIR}/install.sh" 2>/dev/null || true
     chmod +x "${INSTALL_DIR}/uninstall.sh" 2>/dev/null || true
 
-    # nmap SYN scan (-sS) requires CAP_NET_RAW.
-    # Grant it directly on the nmap binary so it works regardless of how the
-    # scanner is invoked (systemd ambient caps cover the service, but manual
-    # runs as a non-root user also need it on the binary itself).
+    # nmap SYN scan (-sS) requires raw sockets (CAP_NET_RAW / root).
+    # The Debian/Raspberry Pi OS nmap package is NOT compiled with libcap, so
+    # file-capability grants (setcap) have no effect — nmap checks geteuid()==0
+    # only.  The reliable solution is to set the setuid-root bit, exactly as
+    # arp-scan uses below.  NoNewPrivileges=yes is intentionally absent from the
+    # service unit so that setuid binaries remain effective.
     local NMAP_REAL
     if command -v nmap &>/dev/null; then
         NMAP_REAL="$(readlink -f "$(which nmap)")"
-        if ! setcap cap_net_raw+eip "${NMAP_REAL}"; then
-            warn "Could not set cap_net_raw on nmap (${NMAP_REAL}). SYN scan will fall back to connect scan."
-            warn "Try manually: sudo setcap cap_net_raw+eip ${NMAP_REAL}"
+        if chmod +s "${NMAP_REAL}" 2>/dev/null; then
+            success "nmap setuid-root set — SYN scan enabled."
         else
-            success "cap_net_raw granted to nmap."
+            warn "Could not set setuid-root on nmap (${NMAP_REAL})."
+            warn "SYN scan will fall back to connect scan."
         fi
     fi
 
-    # Also grant CAP_NET_RAW to the venv python3 for any in-process raw socket use.
-    # Resolve symlinks: setcap requires a real file on some kernels/filesystems.
-    local PYTHON3_REAL
-    PYTHON3_REAL="$(readlink -f "${VENV_DIR}/bin/python3")"
-    if ! setcap cap_net_raw+eip "${PYTHON3_REAL}"; then
-        warn "Could not set cap_net_raw on python3 (${PYTHON3_REAL})."
-        warn "Try manually: sudo setcap cap_net_raw+eip ${PYTHON3_REAL}"
-    else
-        success "cap_net_raw granted to venv python3."
-    fi
-
-    # arp-scan needs setuid or capabilities
+    # arp-scan and nmap both need raw socket access
     if command -v arp-scan &>/dev/null; then
         chmod +s "$(which arp-scan)" 2>/dev/null || true
     fi
