@@ -529,128 +529,6 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600") -> str:
 """
 
 
-def _build_delta_section(summary: dict, company_color: str = "#FF6600") -> str:
-    """
-    Build a 'Changes Since Last Scan' section.
-    Only rendered if summary["scan_delta"]["has_changes"] is True.
-    Returns empty string otherwise.
-    """
-    delta = summary.get("scan_delta", {}) or {}
-    if not delta.get("has_changes"):
-        return ""
-
-    new_devices = delta.get("new_devices", [])
-    gone_devices = delta.get("gone_devices", [])
-    changed_devices = delta.get("changed_devices", [])
-    prev_date = delta.get("previous_scan_date", "unknown")
-    # Format date nicely if ISO format
-    try:
-        from datetime import datetime as _dt
-        prev_date_fmt = _dt.fromisoformat(prev_date).strftime("%Y-%m-%d %H:%M")
-    except Exception:
-        prev_date_fmt = prev_date
-
-    # Badge row
-    badges = ""
-    if new_devices:
-        badges += f'<span style="background:#dc3545; color:#fff; padding:3px 10px; border-radius:3px; font-size:12px; margin-right:8px; font-weight:bold;">+{len(new_devices)} New Device{"s" if len(new_devices) != 1 else ""}</span>'
-    if gone_devices:
-        badges += f'<span style="background:#fd7e14; color:#fff; padding:3px 10px; border-radius:3px; font-size:12px; margin-right:8px; font-weight:bold;">-{len(gone_devices)} Device{"s" if len(gone_devices) != 1 else ""} Gone</span>'
-    if changed_devices:
-        badges += f'<span style="background:#ffc107; color:#333; padding:3px 10px; border-radius:3px; font-size:12px; margin-right:8px; font-weight:bold;">&#9650; {len(changed_devices)} Change{"s" if len(changed_devices) != 1 else ""} Detected</span>'
-
-    # New devices table
-    new_rows = ""
-    for h in new_devices[:20]:  # cap at 20 rows
-        new_rows += f"""
-        <tr style="border-bottom:1px solid #ffd6d6;">
-          <td style="padding:5px 8px; font-size:12px; font-weight:bold; color:#333;">{h.get('ip', '')}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('hostname', '') or '—'}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('vendor', '') or '—'}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('category', 'Unknown')}</td>
-        </tr>"""
-
-    new_table = ""
-    if new_devices:
-        new_table = f"""
-      <div style="font-size:12px; font-weight:bold; color:#dc3545; margin:10px 0 4px 0;">New Devices</div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:12px; margin-bottom:12px;">
-        <tr style="background:#ffeaea;">
-          <th style="padding:5px 8px; text-align:left; color:#8b0000; font-size:11px;">IP</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b0000; font-size:11px;">Hostname</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b0000; font-size:11px;">Vendor</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b0000; font-size:11px;">Category</th>
-        </tr>
-        {new_rows}
-      </table>"""
-
-    # Gone devices table
-    gone_rows = ""
-    for h in gone_devices[:20]:
-        gone_rows += f"""
-        <tr style="border-bottom:1px solid #ffe8d6;">
-          <td style="padding:5px 8px; font-size:12px; font-weight:bold; color:#333;">{h.get('ip', '')}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('hostname', '') or '—'}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('vendor', '') or '—'}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('category', 'Unknown')}</td>
-        </tr>"""
-
-    gone_table = ""
-    if gone_devices:
-        gone_table = f"""
-      <div style="font-size:12px; font-weight:bold; color:#fd7e14; margin:10px 0 4px 0;">Devices No Longer Seen</div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:12px; margin-bottom:12px;">
-        <tr style="background:#fff3e6;">
-          <th style="padding:5px 8px; text-align:left; color:#8b4000; font-size:11px;">IP</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b4000; font-size:11px;">Hostname</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b4000; font-size:11px;">Vendor</th>
-          <th style="padding:5px 8px; text-align:left; color:#8b4000; font-size:11px;">Category</th>
-        </tr>
-        {gone_rows}
-      </table>"""
-
-    # Changed devices table
-    changed_rows = ""
-    for h in changed_devices[:20]:
-        changes_str = " &bull; ".join(h.get("changes", []))
-        changed_rows += f"""
-        <tr style="border-bottom:1px solid #fff3cd;">
-          <td style="padding:5px 8px; font-size:12px; font-weight:bold; color:#333;">{h.get('ip', '')}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('hostname', '') or '—'}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#555;">{h.get('category', 'Unknown')}</td>
-          <td style="padding:5px 8px; font-size:12px; color:#666;">{changes_str}</td>
-        </tr>"""
-
-    changed_table = ""
-    if changed_devices:
-        changed_table = f"""
-      <div style="font-size:12px; font-weight:bold; color:#856404; margin:10px 0 4px 0;">Changed Devices</div>
-      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:12px; margin-bottom:12px;">
-        <tr style="background:#fff8e0;">
-          <th style="padding:5px 8px; text-align:left; color:#5a4000; font-size:11px;">IP</th>
-          <th style="padding:5px 8px; text-align:left; color:#5a4000; font-size:11px;">Hostname</th>
-          <th style="padding:5px 8px; text-align:left; color:#5a4000; font-size:11px;">Category</th>
-          <th style="padding:5px 8px; text-align:left; color:#5a4000; font-size:11px;">Changes</th>
-        </tr>
-        {changed_rows}
-      </table>"""
-
-    return f"""
-  <!-- ═══ CHANGES SINCE LAST SCAN ═══ -->
-  <tr>
-    <td style="padding:24px 36px 0 36px;">
-      <h2 style="color:#856404; font-size:17px; margin:0 0 8px 0; border-bottom:2px solid #ffc107; padding-bottom:8px;">
-        &#9650; Changes Since Last Scan
-        <span style="font-size:12px; font-weight:normal; color:#888; margin-left:10px;">compared to {prev_date_fmt}</span>
-      </h2>
-      <div style="margin-bottom:10px;">{badges}</div>
-      {new_table}
-      {gone_table}
-      {changed_table}
-    </td>
-  </tr>
-"""
-
 
 def _build_security_section(hosts: list, company_color: str) -> str:
     flagged = [h for h in hosts if h.get("security_flags")]
@@ -2112,7 +1990,6 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     services_table = _build_services_table(summary)
     msp_summary = _build_msp_summary(hosts, summary, recon, company_color)
     ad_section = _build_ad_section(hosts, company_color)
-    delta_section = _build_delta_section(summary, company_color)
 
     # Extended discovery sections
     wifi_results = scan_results.get("wifi", {})
@@ -2276,8 +2153,6 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
       {services_table}
     </td>
   </tr>
-
-  {delta_section}
 
   {ad_section}
 
