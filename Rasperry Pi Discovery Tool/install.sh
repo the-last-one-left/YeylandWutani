@@ -581,6 +581,28 @@ print_next_steps() {
     echo ""
 }
 
+# ── OUI vendor database ───────────────────────────────────────────────────────
+
+download_oui_db() {
+    step "Downloading IEEE OUI vendor database"
+
+    local script="${INSTALL_DIR}/bin/update-oui-db.py"
+    local out="${INSTALL_DIR}/data/oui.json"
+
+    if [[ ! -f "${script}" ]]; then
+        warn "update-oui-db.py not found at ${script} — skipping OUI download."
+        return
+    fi
+
+    if "${VENV_DIR}/bin/python3" "${script}"; then
+        # chown so the service user can read it
+        chown network-discovery:network-discovery "${out}" 2>/dev/null || true
+    else
+        warn "OUI database download failed (no internet?). The built-in fallback"
+        warn "table will be used. Re-run: sudo ${script}"
+    fi
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
@@ -595,6 +617,7 @@ main() {
     clone_repo
     setup_venv
     setup_directories
+    download_oui_db
     install_services
     setup_logrotate
     run_config_wizard
