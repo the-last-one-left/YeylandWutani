@@ -70,7 +70,7 @@ DATA_DIR = Path("/opt/network-discovery/data")
 DEFAULT_CONFIG = {
     "scan_timeout": 600,
     "max_threads": 50,
-    "port_scan_top_ports": 100,
+    "port_scan_top_ports": 1000,
     "enable_dns_enumeration": True,
     "enable_dhcp_detection": True,
     "enable_arp_scan": True,
@@ -698,42 +698,45 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
 
 def _nmap_port_scan(
     ip: str,
-    top_ports: int = 100,
+    top_ports: int = 1000,
     service_versions: bool = True,
     os_detection: bool = True,
 ) -> dict:
     """
-    Run nmap TCP SYN scan on top N ports for a single host.
+    Run nmap port scan on top N ports for a single host.
+
+    Attempts a TCP SYN scan (-sS, requires CAP_NET_RAW / root) first.
+    If nmap reports a permission error it automatically falls back to a
+    TCP connect scan (-sT) which works as any unprivileged user.
 
     Returns:
         {
             "open_ports": list[int],
             "version_info": {port: {"version": str}, ...},
             "os_guess": str,
+            "scan_type": "SYN" | "connect",
         }
     """
-    result = {"open_ports": [], "version_info": {}, "os_guess": ""}
-    cmd = ["nmap", "-n", "-sS", "--open"]
+    result = {"open_ports": [], "version_info": {}, "os_guess": "", "scan_type": "SYN"}
 
-    if service_versions:
-        cmd += ["-sV", "--version-intensity", "4"]
-    if os_detection:
-        cmd += ["--osscan-guess"]
+    def _build_cmd(scan_flag: str) -> list:
+        cmd = ["nmap", "-n", scan_flag, "--open"]
+        if service_versions:
+            cmd += ["-sV", "--version-intensity", "7"]
+        if os_detection and scan_flag == "-sS":
+            # -O (OS detection) requires raw sockets — only attempt with SYN scan
+            cmd += ["-O", "--osscan-guess"]
+        cmd += [
+            "--top-ports", str(top_ports),
+            "--host-timeout", "90s",
+            "--min-parallelism", "20",
+            "-T4",
+            ip,
+        ]
+        return cmd
 
-    cmd += [
-        "--top-ports", str(top_ports),
-        "--host-timeout", "60s",
-        "--min-parallelism", "20",
-        "-T4",
-        ip,
-    ]
-
-    try:
-        output = subprocess.check_output(
-            cmd, text=True, timeout=90, stderr=subprocess.DEVNULL
-        )
+    def _parse_output(output: str) -> None:
         for line in output.splitlines():
-            # Open port with optional version string
             m = re.match(r"^(\d+)/tcp\s+open\s+\S+\s*(.*)", line)
             if m:
                 port = int(m.group(1))
@@ -741,19 +744,60 @@ def _nmap_port_scan(
                 version_str = m.group(2).strip()
                 if version_str:
                     result["version_info"][port] = {"version": version_str[:120]}
-
-            # OS guess line (first match wins)
             if not result["os_guess"]:
                 og = re.search(r"OS guess(?:es)?: (.+)", line, re.IGNORECASE)
                 if og:
                     result["os_guess"] = og.group(1).strip()[:100]
 
-    except subprocess.TimeoutExpired:
-        logger.warning(f"Port scan timeout (>90s): {ip}")
-    except FileNotFoundError:
+    def _run(cmd: list) -> tuple:
+        """Returns (stdout, stderr, timed_out)."""
+        try:
+            proc = subprocess.run(
+                cmd, text=True, timeout=120,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            )
+            return proc.stdout, proc.stderr, False
+        except subprocess.TimeoutExpired:
+            return "", "", True
+        except FileNotFoundError:
+            return None, None, False  # None sentinel = nmap missing
+
+    # ── First attempt: SYN scan ───────────────────────────────────────────
+    stdout, stderr, timed_out = _run(_build_cmd("-sS"))
+
+    if stdout is None:
         logger.error("nmap not found — is it installed?")
-    except Exception as e:
-        logger.warning(f"Port scan error for {ip}: {e}")
+        return result
+
+    if timed_out:
+        logger.warning(f"Port scan timeout (>120s) for {ip}")
+        return result
+
+    # Detect permission failure from stderr and fall back to connect scan
+    _needs_root = (
+        stderr and (
+            "requires root" in stderr.lower()
+            or "requires privileges" in stderr.lower()
+            or "operation not permitted" in stderr.lower()
+            or "you requested a scan" in stderr.lower()
+        )
+    )
+    if _needs_root:
+        logger.warning(
+            f"nmap SYN scan needs CAP_NET_RAW for {ip} — falling back to connect scan. "
+            f"Run: sudo setcap cap_net_raw+eip $(which nmap)"
+        )
+        result["scan_type"] = "connect"
+        stdout2, stderr2, timed_out2 = _run(_build_cmd("-sT"))
+        if timed_out2:
+            logger.warning(f"Connect scan timeout for {ip}")
+            return result
+        if stdout2:
+            _parse_output(stdout2)
+    else:
+        if stderr:
+            logger.debug(f"nmap stderr for {ip}: {stderr.strip()[:200]}")
+        _parse_output(stdout)
 
     return result
 
