@@ -38,7 +38,6 @@ from network_utils import (
 
 # Paths
 CONFIG_PATH = Path("/opt/network-discovery/config/config.json")
-FLAG_FILE = Path("/opt/network-discovery/data/.checkin_complete")
 LOG_FILE = Path("/opt/network-discovery/logs/initial-checkin.log")
 
 LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
@@ -57,15 +56,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger("initial-checkin")
 
-
-def already_checked_in() -> bool:
-    return FLAG_FILE.exists()
-
-
-def mark_checkin_complete():
-    FLAG_FILE.parent.mkdir(parents=True, exist_ok=True)
-    FLAG_FILE.write_text(datetime.now().isoformat())
-    logger.info(f"Check-in flag written: {FLAG_FILE}")
 
 
 def wait_for_connectivity(retries: int = 12, delay: int = 10) -> bool:
@@ -412,11 +402,6 @@ def main():
     logger.info("Yeyland Wutani - Network Discovery Pi: Initial Check-In")
     logger.info("=" * 60)
 
-    # Check if already done
-    if already_checked_in():
-        logger.info("Check-in already completed. Exiting.")
-        sys.exit(0)
-
     # Wait for connectivity
     if not wait_for_connectivity():
         logger.error("Network connectivity not established after waiting. Exiting.")
@@ -465,8 +450,6 @@ def main():
         logger.error(f"Unexpected error sending check-in email: {type(e).__name__}: {e}", exc_info=True)
         sys.exit(1)
 
-    # Mark complete — only reached on successful email send
-    mark_checkin_complete()
     total = time.time() - checkin_start
     logger.info(f"Initial check-in complete in {total:.1f}s total.")
     sys.exit(0)

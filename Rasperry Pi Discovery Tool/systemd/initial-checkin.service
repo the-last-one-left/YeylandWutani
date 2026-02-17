@@ -6,7 +6,6 @@ After=network-online.target
 Wants=network-online.target
 # Must run before the full discovery service
 Before=network-discovery.service
-ConditionPathExists=!/opt/network-discovery/data/.checkin_complete
 
 [Service]
 Type=oneshot
@@ -19,7 +18,6 @@ StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=nd-checkin
 TimeoutStartSec=300
-RemainAfterExit=yes
 
 # Security hardening
 NoNewPrivileges=yes
