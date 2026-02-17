@@ -640,6 +640,7 @@ def _make_empty_host(ip: str, subnet_source: str = "direct") -> dict:
         "mac": "",
         "vendor": "Unknown",
         "hostname": None,
+        "hostname_source": "",   # DNS | mDNS | SNMP | NetBIOS/SMB | SSDP
         "open_ports": [],
         "services": {},
         "category": "Unknown",
@@ -700,13 +701,17 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
             results_iter = ex.map(reverse_dns, ip_list)
             for ip, hostname in zip(ip_list, results_iter):
                 all_hosts[ip]["hostname"] = hostname or "N/A"
+                if hostname:
+                    all_hosts[ip]["hostname_source"] = "DNS"
 
     # ── Ensure gateway is present ─────────────────────────────────────────
     gw = recon.get("default_gateway")
     if gw and gw not in our_ips and gw not in all_hosts:
+        gw_hostname = reverse_dns(gw)
         all_hosts[gw] = {
             **_make_empty_host(gw, "direct"),
-            "hostname": reverse_dns(gw) or "N/A",
+            "hostname": gw_hostname or "N/A",
+            "hostname_source": "DNS" if gw_hostname else "",
             "category": "Network Infrastructure",
             "is_gateway": True,
         }
@@ -3980,6 +3985,80 @@ def phase16_eol_detection(hosts: list, config: dict) -> dict:
     }
 
 
+# ── Hostname Enrichment ────────────────────────────────────────────────────
+
+def _enrich_hostnames_from_discovery(
+    hosts: list, mdns_results: dict, ssdp_results: dict
+) -> list:
+    """
+    Enrich host hostname fields using data already collected by later phases.
+
+    Priority (highest → lowest):
+      1. NetBIOS/SMB  — smb_computer from smbclient (Windows machine name)
+      2. SNMP sysName — authoritative device name set by admin
+      3. mDNS / Bonjour — .local names from avahi-browse
+      4. UPnP / SSDP  — friendly_name from UPnP description XML
+
+    Only fills hostname where current value is "N/A" or unset.
+    Sets hostname_source so the report can show the origin of each name.
+    """
+    # Build IP → mDNS hostname lookup (first resolved name per IP)
+    mdns_by_ip: dict = {}
+    for svc in (mdns_results or {}).get("services", []):
+        ip = svc.get("ip", "")
+        hn = svc.get("hostname", "").rstrip(".")  # strip trailing dot from FQDN
+        if ip and hn and ip not in mdns_by_ip:
+            mdns_by_ip[ip] = hn
+
+    # Build IP → SSDP friendly_name lookup
+    ssdp_by_ip: dict = {}
+    for dev in (ssdp_results or {}).get("devices", []):
+        ip = dev.get("ip", "")
+        name = dev.get("friendly_name", "")
+        if ip and name and ip not in ssdp_by_ip:
+            ssdp_by_ip[ip] = name
+
+    named_new = 0
+    for host in hosts:
+        ip = host["ip"]
+        current = host.get("hostname")
+        is_unresolved = not current or current == "N/A"
+
+        # If already resolved by DNS, just ensure source is set
+        if not is_unresolved:
+            if not host.get("hostname_source"):
+                host["hostname_source"] = "DNS"
+            continue
+
+        services = host.get("services", {})
+        smb = services.get("smb", {}) or {}
+        snmp = services.get("snmp", {}) or {}
+
+        if smb.get("smb_computer"):
+            host["hostname"] = smb["smb_computer"]
+            host["hostname_source"] = "NetBIOS/SMB"
+            named_new += 1
+        elif snmp.get("sysName"):
+            host["hostname"] = snmp["sysName"]
+            host["hostname_source"] = "SNMP"
+            named_new += 1
+        elif ip in mdns_by_ip:
+            host["hostname"] = mdns_by_ip[ip]
+            host["hostname_source"] = "mDNS"
+            named_new += 1
+        elif ip in ssdp_by_ip:
+            host["hostname"] = ssdp_by_ip[ip]
+            host["hostname_source"] = "SSDP"
+            named_new += 1
+
+    if named_new:
+        logger.info(
+            f"  Hostname enrichment: resolved {named_new} additional host(s) "
+            f"from mDNS/SSDP/SNMP/SMB."
+        )
+    return hosts
+
+
 # ── Summary Statistics ─────────────────────────────────────────────────────
 
 def build_summary(recon: dict, hosts: list) -> dict:
@@ -4010,6 +4089,16 @@ def build_summary(recon: dict, hosts: list) -> dict:
         f["severity"] == "CRITICAL" for f in h.get("security_flags", [])
     )]
 
+    # Hostname resolution coverage
+    named_hosts = [
+        h for h in hosts
+        if h.get("hostname") and h["hostname"] not in ("N/A", "", None)
+    ]
+    hostname_source_breakdown: dict = {}
+    for h in named_hosts:
+        src = h.get("hostname_source", "DNS") or "DNS"
+        hostname_source_breakdown[src] = hostname_source_breakdown.get(src, 0) + 1
+
     pub = recon.get("public_ip_info", {})
 
     return {
@@ -4023,6 +4112,9 @@ def build_summary(recon: dict, hosts: list) -> dict:
         "security_observations": security_count,
         "critical_hosts": [h["ip"] for h in critical_hosts],
         "security_gaps": _aggregate_security_gaps(hosts),
+        # Hostname resolution stats
+        "named_hosts": len(named_hosts),
+        "hostname_source_breakdown": hostname_source_breakdown,
         # Convenience keys for report
         "public_ip": pub.get("public_ip", ""),
         "isp": pub.get("isp", ""),
@@ -4121,6 +4213,10 @@ def run_discovery(progress_callback=None) -> dict:
     ssdp_results = _run_phase(
         "9", "UPnP / SSDP discovery", phase9_ssdp_discovery, config,
         config_key="enable_ssdp_discovery")
+
+    # Enrich host hostname fields from mDNS / SSDP / SMB / SNMP now that all
+    # discovery phases with hostname data (4, 8, 9) have completed.
+    hosts = _enrich_hostnames_from_discovery(hosts, mdns_results, ssdp_results)
 
     dhcp_results = _run_phase(
         "10", "DHCP scope analysis", phase10_dhcp_analysis, recon, config,
