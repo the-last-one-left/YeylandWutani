@@ -582,14 +582,28 @@ def _run_arp_scan(subnet: str, iface: str = None) -> list:
 
 
 def _run_fping(subnet: str) -> list:
-    """Run fping to discover live hosts. Returns list of live IPs."""
+    """Run fping to discover live hosts. Returns list of live IPs.
+
+    fping exit codes:
+      0 — all hosts reachable
+      1 — at least one host unreachable (normal for subnet sweeps; most IPs
+          in a range are vacant, but alive hosts still appear on stdout)
+      2 — argument/runtime error
+
+    subprocess.check_output() raises CalledProcessError on any non-zero exit,
+    which incorrectly discards discovered alive hosts on the expected exit 1.
+    We use subprocess.run(check=False) and only warn on exit >= 2.
+    """
     live = []
     try:
-        output = subprocess.check_output(
+        proc = subprocess.run(
             ["fping", "-a", "-g", subnet, "-t", "500", "-r", "1"],
-            text=True, timeout=120, stderr=subprocess.DEVNULL
+            capture_output=True, text=True, timeout=120,
         )
-        for line in output.splitlines():
+        if proc.returncode >= 2:
+            logger.warning(f"fping error (exit {proc.returncode}): "
+                           f"{proc.stderr.strip()[:200]}")
+        for line in proc.stdout.splitlines():
             ip = line.strip()
             if re.match(r"^\d+\.\d+\.\d+\.\d+$", ip):
                 live.append(ip)
@@ -800,7 +814,9 @@ def _nmap_port_scan(
     if _needs_root:
         logger.warning(
             f"nmap SYN scan needs CAP_NET_RAW for {ip} — falling back to connect scan. "
-            f"Run: sudo setcap cap_net_raw+eip $(which nmap)"
+            f"This usually means 'apt upgrade' replaced the nmap binary and cleared its "
+            f"file capabilities. Restore with: "
+            f"sudo setcap cap_net_raw+eip $(readlink -f $(which nmap))"
         )
         result["scan_type"] = "connect"
         stdout2, stderr2, timed_out2 = _run(_build_cmd("-sT"))
