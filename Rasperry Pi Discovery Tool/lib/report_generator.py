@@ -1026,38 +1026,71 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
         return ""
 
     # ── Company Identification card ──
+    # Pull domain WHOIS (business registrant) separately from IP WHOIS (ISP).
+    domain_whois = osint_results.get("domain_whois", {})
     company_html = ""
-    if company.get("public_ip") or whois.get("organization"):
-        org_name = whois.get("organization") or company.get("isp", "")
+    if company.get("public_ip") or company.get("primary_domain") or whois.get("organization"):
         rows = ""
+
+        # Domain registrant — the actual business identity (most useful field)
+        if company.get("domain_registrant"):
+            rows += (
+                f'<tr style="background:#f0f7ff;"><td style="padding:4px 8px; font-size:12px; color:#555; width:160px;">'
+                f'Business (Domain Registrant)</td>'
+                f'<td style="padding:4px 8px; font-size:12px; font-weight:bold; color:#1a3c6e;">'
+                f'{company["domain_registrant"]}</td></tr>'
+            )
+
+        if company.get("primary_domain"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Business Domain</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace; font-weight:bold;">'
+                f'{company["primary_domain"]}</td></tr>'
+            )
+
+        if company.get("domain_registrar"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Domain Registrar</td>'
+                f'<td style="padding:3px 8px; font-size:12px;">'
+                f'{company["domain_registrar"]}</td></tr>'
+            )
+
+        if company.get("domain_created"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Domain Registered</td>'
+                f'<td style="padding:3px 8px; font-size:12px;">'
+                f'{company["domain_created"]}</td></tr>'
+            )
+
+        # Separator before ISP / network data
+        if rows:
+            rows += (
+                '<tr><td colspan="2" style="padding:2px 8px; font-size:10px; '
+                'color:#aaa; border-top:1px solid #e5e9ef; padding-top:6px;">'
+                'INTERNET / NETWORK</td></tr>'
+            )
+
         if company.get("public_ip"):
             rows += (
-                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555; width:140px;">'
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
                 f'Public IP</td>'
                 f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
                 f'{company["public_ip"]}</td></tr>'
             )
-        if org_name:
+
+        # IP WHOIS org is the ISP / netblock owner — label it clearly
+        isp_org = whois.get("organization") or ""
+        if isp_org:
             rows += (
                 f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
-                f'Organization (WHOIS)</td>'
-                f'<td style="padding:3px 8px; font-size:12px; font-weight:bold;">'
-                f'{org_name}</td></tr>'
-            )
-        if whois.get("net_name"):
-            rows += (
-                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
-                f'Network Name</td>'
+                f'ISP / Netblock Owner</td>'
                 f'<td style="padding:3px 8px; font-size:12px;">'
-                f'{whois["net_name"]}</td></tr>'
+                f'{isp_org}</td></tr>'
             )
-        if whois.get("cidr"):
-            rows += (
-                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
-                f'Netblock (CIDR)</td>'
-                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
-                f'{whois["cidr"]}</td></tr>'
-            )
+
         if company.get("isp"):
             rows += (
                 f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
@@ -1065,6 +1098,15 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
                 f'<td style="padding:3px 8px; font-size:12px;">'
                 f'{company["isp"]}</td></tr>'
             )
+
+        if whois.get("cidr"):
+            rows += (
+                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
+                f'Netblock (CIDR)</td>'
+                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
+                f'{whois["cidr"]}</td></tr>'
+            )
+
         loc_parts = [p for p in [company.get("city"), company.get("region"),
                                   company.get("country")] if p]
         if loc_parts:
@@ -1074,20 +1116,16 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
                 f'<td style="padding:3px 8px; font-size:12px;">'
                 f'{", ".join(loc_parts)}</td></tr>'
             )
-        if company.get("reverse_hostname"):
+
+        # Additional discovered domains (secondary, if any beyond the primary)
+        extra_domains = [d for d in company.get("domains", [])
+                         if d != company.get("primary_domain")]
+        if extra_domains:
             rows += (
                 f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
-                f'Reverse DNS</td>'
+                f'Additional Domains</td>'
                 f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
-                f'{company["reverse_hostname"]}</td></tr>'
-            )
-        domains = company.get("domains", [])
-        if domains:
-            rows += (
-                f'<tr><td style="padding:3px 8px; font-size:12px; color:#555;">'
-                f'Derived Domains</td>'
-                f'<td style="padding:3px 8px; font-size:12px; font-family:monospace;">'
-                f'{", ".join(domains)}</td></tr>'
+                f'{", ".join(extra_domains)}</td></tr>'
             )
 
         company_html = f"""

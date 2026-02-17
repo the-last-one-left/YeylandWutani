@@ -2444,21 +2444,29 @@ def phase12_nac_detection(config: dict) -> dict:
 # ── Phase 13: OSINT / External Reconnaissance ──────────────────────────────
 
 
-def _derive_domains(recon: dict, hosts: list, dhcp_results: dict) -> list:
+def _derive_domains(recon: dict, hosts: list, dhcp_results: dict,
+                    config: dict = None) -> list:
     """Derive likely company domain names from scan data.
 
     Sources (in priority order):
+      0. from_email in config — the M365-licensed sender address is admin-specified
+         and is by far the most reliable indicator of the actual business domain.
       1. AD domain names from LDAP probes (e.g. corp.contoso.com → contoso.com)
       2. DHCP domain name (e.g. office.local → skip, but office.acme.com → acme.com)
-      3. Public IP reverse hostname from ipinfo.io
-      4. SSL certificate common names / SANs from HTTPS services
-    Returns a deduplicated list of domain strings.
+      3. SSL certificate common names / SANs from HTTPS services on the LAN
+
+    NOTE: the public IP's reverse PTR hostname is NOT used — it resolves to the
+    ISP's domain, not the customer's business domain.
+
+    Returns a deduplicated list of domain strings with the from_email domain first.
     """
-    domains = set()
+    domains = []          # ordered list — from_email domain goes first
+    domains_seen = set()  # for dedup
+
     internal_tlds = {".local", ".internal", ".lan", ".home", ".corp", ".localdomain", ".test"}
 
     def _is_public(d: str) -> bool:
-        return d and not any(d.endswith(tld) for tld in internal_tlds)
+        return bool(d and not any(d.endswith(tld) for tld in internal_tlds))
 
     def _extract_registrable(fqdn: str) -> str:
         """Best-effort extraction of the registrable domain.
@@ -2468,18 +2476,31 @@ def _derive_domains(recon: dict, hosts: list, dhcp_results: dict) -> list:
             return ".".join(parts[-2:])
         return fqdn
 
+    def _add(domain: str) -> None:
+        if domain and domain not in domains_seen:
+            domains.append(domain)
+            domains_seen.add(domain)
+
+    # 0. From-email domain (highest confidence — admin-specified, M365-licensed)
+    if config:
+        from_email = (config.get("graph_api") or {}).get("from_email", "")
+        if from_email and "@" in from_email:
+            email_domain = from_email.split("@", 1)[1].strip().lower()
+            if email_domain and _is_public(email_domain):
+                _add(email_domain)
+
     # 1. AD domain names
     for host in hosts:
         ad = host.get("ad_info") or {}
         dn = ad.get("domain_name", "")
         if dn and _is_public(dn):
-            domains.add(_extract_registrable(dn))
+            _add(_extract_registrable(dn))
 
     # 2. DHCP domain
     for srv in (dhcp_results or {}).get("dhcp_servers", []):
         dn = srv.get("domain_name", "")
         if dn and _is_public(dn):
-            domains.add(_extract_registrable(dn))
+            _add(_extract_registrable(dn))
 
     # NOTE: the public IP reverse PTR hostname is intentionally NOT used as a
     # domain source — it resolves to the ISP's domain (e.g. telepacific.net),
@@ -2490,12 +2511,12 @@ def _derive_domains(recon: dict, hosts: list, dhcp_results: dict) -> list:
         for svc in host.get("services", {}).values():
             ssl_cn = svc.get("ssl_cn", "")
             if ssl_cn and _is_public(ssl_cn) and not ssl_cn.startswith("*"):
-                domains.add(_extract_registrable(ssl_cn))
+                _add(_extract_registrable(ssl_cn))
             for san in svc.get("ssl_sans", []):
                 if san and _is_public(san) and not san.startswith("*"):
-                    domains.add(_extract_registrable(san))
+                    _add(_extract_registrable(san))
 
-    return sorted(domains)
+    return domains  # ordered: from_email first, then discovery sources
 
 
 def _whois_rdap(ip: str, timeout: int = 8) -> dict:
@@ -2584,6 +2605,75 @@ def _whois_rdap(ip: str, timeout: int = 8) -> dict:
                     result["description"] = line.split(":", 1)[1].strip()
     except (FileNotFoundError, subprocess.TimeoutExpired):
         logger.debug("whois CLI not available")
+
+    return result
+
+
+def _whois_rdap_domain(domain: str, timeout: int = 8) -> dict:
+    """Query RDAP for domain-name registration data (registrant, registrar, dates).
+
+    Uses rdap.org as a generic redirect gateway — it routes to the correct
+    registry (Verisign, RIPE, ARIN, etc.) for any TLD automatically.
+
+    Unlike IP WHOIS (which returns the ISP/netblock owner), domain RDAP returns
+    the actual business that registered the domain name.
+    """
+    result = {
+        "domain": domain,
+        "registrant": "",
+        "registrar": "",
+        "created": "",
+        "expires": "",
+        "name_servers": [],
+    }
+    try:
+        url = f"https://rdap.org/domain/{domain}"
+        req = urllib.request.Request(
+            url,
+            headers={
+                "Accept": "application/rdap+json",
+                "User-Agent": "YeylandWutani-NetworkDiscovery/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            data = json.loads(resp.read())
+
+        # Registration / expiration dates
+        for event in data.get("events", []):
+            action = event.get("eventAction", "")
+            date = event.get("eventDate", "")[:10]  # ISO date only
+            if action == "registration":
+                result["created"] = date
+            elif action == "expiration":
+                result["expires"] = date
+
+        # Name servers
+        for ns in data.get("nameservers", []):
+            ldhname = ns.get("ldhName", "")
+            if ldhname:
+                result["name_servers"].append(ldhname.lower())
+
+        # Walk entities for registrant / registrar names
+        for entity in data.get("entities", []):
+            roles = entity.get("roles", [])
+            vcard = entity.get("vcardArray", [None, []])
+            name = ""
+            if isinstance(vcard, list) and len(vcard) > 1:
+                for item in vcard[1]:
+                    if isinstance(item, list) and len(item) >= 4 and item[0] == "fn":
+                        name = str(item[3])
+                        break
+            if "registrant" in roles and name and not result["registrant"]:
+                result["registrant"] = name
+            if "registrar" in roles and name and not result["registrar"]:
+                result["registrar"] = name
+
+        logger.debug(
+            f"Domain RDAP {domain}: registrant='{result['registrant']}' "
+            f"registrar='{result['registrar']}' created={result['created']}"
+        )
+    except Exception as e:
+        logger.debug(f"Domain RDAP lookup failed for {domain}: {e}")
 
     return result
 
@@ -2807,6 +2897,7 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
     result = {
         "public_ip": "",
         "whois": {},
+        "domain_whois": {},
         "shodan": {},
         "domains_discovered": [],
         "dns_security": [],
@@ -2825,35 +2916,55 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
     pub_ip = recon.get("public_ip_info", {}).get("public_ip", "")
     result["public_ip"] = pub_ip
 
-    # Derive company domains from scan data
-    domains = _derive_domains(recon, hosts, dhcp_results)
+    # Derive company domains — from_email is source #0 and goes first in the list
+    domains = _derive_domains(recon, hosts, dhcp_results, config)
     result["domains_discovered"] = domains
     result["summary"]["domains_found"] = len(domains)
     logger.info(f"  Derived {len(domains)} domain(s): {domains}")
 
-    # Compile company identification from public IP info
+    # Compile company identification
     pub_info = recon.get("public_ip_info", {})
     result["company_identification"] = {
         "public_ip": pub_ip,
+        "primary_domain": domains[0] if domains else "",
         "isp": pub_info.get("isp", ""),
         "city": pub_info.get("city", ""),
         "region": pub_info.get("region", ""),
         "country": pub_info.get("country", ""),
-        "reverse_hostname": pub_info.get("hostname", ""),
         "domains": domains,
+        "domain_registrant": "",
+        "domain_registrar": "",
+        "domain_created": "",
     }
 
-    # WHOIS / RDAP
+    # Domain WHOIS — look up the registrant of the business domain itself.
+    # This gives the actual business name, unlike IP WHOIS which returns the ISP.
+    if domains and config.get("enable_whois_lookup", True):
+        primary_domain = domains[0]
+        logger.info(f"  Domain WHOIS/RDAP for {primary_domain}...")
+        try:
+            domain_whois = _whois_rdap_domain(primary_domain, timeout=osint_timeout)
+            result["domain_whois"] = domain_whois
+            if domain_whois.get("registrant"):
+                result["company_identification"]["domain_registrant"] = domain_whois["registrant"]
+                logger.info(f"  Domain registrant: {domain_whois['registrant']}")
+            if domain_whois.get("registrar"):
+                result["company_identification"]["domain_registrar"] = domain_whois["registrar"]
+            if domain_whois.get("created"):
+                result["company_identification"]["domain_created"] = domain_whois["created"]
+        except Exception as e:
+            logger.error(f"  Domain WHOIS failed for {primary_domain}: {e}")
+
+    # IP WHOIS / RDAP — identifies the ISP / netblock owner (not the business)
     if pub_ip and config.get("enable_whois_lookup", True):
-        logger.info(f"  WHOIS/RDAP lookup for {pub_ip}...")
+        logger.info(f"  IP WHOIS/RDAP for {pub_ip}...")
         try:
             result["whois"] = _whois_rdap(pub_ip, timeout=osint_timeout)
             org = result["whois"].get("organization", "")
             if org:
-                result["company_identification"]["whois_org"] = org
-                logger.info(f"  WHOIS org: {org}")
+                logger.info(f"  IP WHOIS org (ISP): {org}")
         except Exception as e:
-            logger.error(f"  WHOIS lookup failed: {e}")
+            logger.error(f"  IP WHOIS lookup failed: {e}")
 
     # Shodan InternetDB (free, no API key)
     if pub_ip and config.get("enable_shodan_internetdb", True):
@@ -2867,8 +2978,16 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
             if ext_ports:
                 logger.info(f"  Shodan: {len(ext_ports)} external port(s), "
                             f"{len(ext_vulns)} CVE(s)")
-            # Merge Shodan hostnames into domain list
+            # Merge Shodan hostnames into domain list, skipping ISP-style PTR records.
+            # Reverse DNS hostnames for ISP-owned IPs follow patterns like
+            # "66-249-177-130.static-ip.telepacific.net" or
+            # "c-73-159-245-75.hsd1.wa.comcast.net" — the leftmost label contains
+            # sequences of IP octets separated by hyphens/dots.
+            _isp_ptr_re = re.compile(r'\b\d{1,3}[.\-]\d{1,3}[.\-]\d{1,3}')
             for hostname in result["shodan"].get("hostnames", []):
+                if _isp_ptr_re.search(hostname):
+                    logger.debug(f"  Skipping ISP PTR-style Shodan hostname: {hostname}")
+                    continue
                 parts = hostname.split(".")
                 if len(parts) >= 2:
                     reg_domain = ".".join(parts[-2:])
