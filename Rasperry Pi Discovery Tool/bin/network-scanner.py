@@ -2502,11 +2502,15 @@ def _derive_domains(recon: dict, hosts: list, dhcp_results: dict,
         if dn and _is_public(dn):
             _add(_extract_registrable(dn))
 
-    # NOTE: the public IP reverse PTR hostname is intentionally NOT used as a
-    # domain source — it resolves to the ISP's domain (e.g. telepacific.net),
-    # not the customer's business domain.
+    # 3. Public IP hostname from ipinfo.io.
+    # ipinfo.io populates this from PTR records, but for some business ISPs the
+    # PTR IS the customer's hostname (e.g. "wg.pacificoffice.com" set by the
+    # customer).  We filter out ISP-style PTR encodings via _ISP_PTR_RE.
+    pub_hostname = (recon.get("public_ip_info") or {}).get("hostname", "")
+    if pub_hostname and _is_public(pub_hostname) and not _ISP_PTR_RE.search(pub_hostname):
+        _add(_extract_registrable(pub_hostname))
 
-    # 3. SSL cert common names (harvested during service enum)
+    # 5. SSL cert common names (harvested during service enum)
     for host in hosts:
         for svc in host.get("services", {}).values():
             ssl_cn = svc.get("ssl_cn", "")
@@ -2880,6 +2884,54 @@ def _dns_security_check(domain: str, timeout: int = 5) -> dict:
     return result
 
 
+# Hostname patterns that indicate an ISP/cloud-provider PTR record rather
+# than a customer-owned domain.  Used in phase13 and _derive_domains.
+_ISP_PTR_RE = re.compile(
+    r'\b\d{1,3}[.\-]\d{1,3}[.\-]\d{1,3}'  # IP octets encoded in hostname
+    r'|\.googleusercontent\.com$'           # Google Fiber / GCP reverse PTR
+    r'|\.bc\.googleusercontent\.com$'
+    r'|\.amazonaws\.com$'                   # AWS EC2 public hostnames
+    r'|\.compute\.amazonaws\.com$'
+    r'|\.cloudfront\.net$'                  # AWS CloudFront
+    r'|\.azure\.com$|\.azurewebsites\.net$' # Azure
+    r'|\.comcast\.net$|\.comcastbiz\.net$'  # Comcast
+    r'|\.res\.spectrum\.com$'               # Charter / Spectrum
+    r'|\.cox\.net$'                         # Cox
+    r'|\.verizon\.net$'                     # Verizon
+    r'|\.att\.net$|\.sbcglobal\.net$'       # AT&T
+    r'|\.centurylink\.net$'                 # CenturyLink / Lumen
+    r'|\.telepacific\.net$'                 # TelePacific
+)
+
+
+def _hackertarget_reverse_ip(ip: str, timeout: int = 10) -> list:
+    """Query HackerTarget reverse-IP to find A records pointing at this IP.
+
+    Unlike PTR / reverse DNS (which only returns what the netblock owner
+    configured), HackerTarget's database is built from forward DNS crawls.
+    So if 'wg.pacificoffice.com' has an A record pointing at 66.249.177.130,
+    HackerTarget will return it even though the PTR says 'googleusercontent.com'.
+
+    Free tier: 100 req/day, no API key required.
+    Returns a list of hostname strings, empty on any failure.
+    """
+    hostnames: list = []
+    try:
+        url = f"https://api.hackertarget.com/reverseiplookup/?q={ip}"
+        req = urllib.request.Request(
+            url, headers={"User-Agent": "YeylandWutani-NetworkDiscovery/1.0"},
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8", errors="replace").strip()
+        # Response is one hostname per line; error/quota responses contain "error"
+        if body and not body.lower().startswith("error") and "api count" not in body.lower():
+            hostnames = [h.strip() for h in body.splitlines()
+                         if h.strip() and "." in h]
+    except Exception as e:
+        logger.debug(f"HackerTarget reverse IP lookup failed for {ip}: {e}")
+    return hostnames
+
+
 def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
                   config: dict) -> dict:
     """Phase 13: OSINT / External Reconnaissance.
@@ -2899,6 +2951,7 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
         "whois": {},
         "domain_whois": {},
         "shodan": {},
+        "hackertarget_hostnames": [],
         "domains_discovered": [],
         "dns_security": [],
         "crtsh_subdomains": {},
@@ -2922,8 +2975,33 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
     result["summary"]["domains_found"] = len(domains)
     logger.info(f"  Derived {len(domains)} domain(s): {domains}")
 
-    # Compile company identification
     pub_info = recon.get("public_ip_info", {})
+
+    # ── HackerTarget reverse IP — runs before domain WHOIS so found domains
+    # are included in the WHOIS lookup.  HackerTarget crawls forward DNS records
+    # (A records) not just PTR, so "wg.pacificoffice.com → 66.249.177.130" is
+    # returned even when the PTR only says "*.googleusercontent.com".
+    if pub_ip:
+        logger.info(f"  HackerTarget reverse IP for {pub_ip}...")
+        try:
+            ht_hostnames = _hackertarget_reverse_ip(pub_ip, timeout=osint_timeout)
+            result["hackertarget_hostnames"] = ht_hostnames
+            for hostname in ht_hostnames:
+                if _ISP_PTR_RE.search(hostname):
+                    logger.debug(f"  Skipping ISP-style HackerTarget hostname: {hostname}")
+                    continue
+                parts = hostname.split(".")
+                if len(parts) >= 2:
+                    reg = ".".join(parts[-2:])
+                    if reg not in domains:
+                        domains.append(reg)
+                        logger.info(f"  HackerTarget: added domain {reg} (from {hostname})")
+            result["domains_discovered"] = domains
+            result["summary"]["domains_found"] = len(domains)
+        except Exception as e:
+            logger.error(f"  HackerTarget lookup failed: {e}")
+
+    # Compile company identification (after HackerTarget enrichment)
     result["company_identification"] = {
         "public_ip": pub_ip,
         "primary_domain": domains[0] if domains else "",
@@ -2978,14 +3056,11 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
             if ext_ports:
                 logger.info(f"  Shodan: {len(ext_ports)} external port(s), "
                             f"{len(ext_vulns)} CVE(s)")
-            # Merge Shodan hostnames into domain list, skipping ISP-style PTR records.
-            # Reverse DNS hostnames for ISP-owned IPs follow patterns like
-            # "66-249-177-130.static-ip.telepacific.net" or
-            # "c-73-159-245-75.hsd1.wa.comcast.net" — the leftmost label contains
-            # sequences of IP octets separated by hyphens/dots.
-            _isp_ptr_re = re.compile(r'\b\d{1,3}[.\-]\d{1,3}[.\-]\d{1,3}')
+            # Merge Shodan hostnames into domain list, skipping ISP/cloud PTR records.
+            # Uses the module-level _ISP_PTR_RE which covers IP-octet patterns,
+            # Google, AWS, Azure, and major ISP reverse-DNS formats.
             for hostname in result["shodan"].get("hostnames", []):
-                if _isp_ptr_re.search(hostname):
+                if _ISP_PTR_RE.search(hostname):
                     logger.debug(f"  Skipping ISP PTR-style Shodan hostname: {hostname}")
                     continue
                 parts = hostname.split(".")
