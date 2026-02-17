@@ -19,6 +19,8 @@
 # =============================================================================
 
 INSTALL_DIR="/opt/network-discovery"
+SRC_DIR="/opt/network-discovery-src"       # persistent git clone managed by install.sh
+REPO_SUBFOLDER="Rasperry Pi Discovery Tool"
 LOG_FILE="${INSTALL_DIR}/logs/update.log"
 LOCK_FILE="${INSTALL_DIR}/data/.update_running"
 VENV_PIP="${INSTALL_DIR}/venv/bin/pip"
@@ -57,10 +59,10 @@ fi
 touch "${LOCK_FILE}"
 trap 'rm -f "${LOCK_FILE}"' EXIT
 
-# ── Verify install dir is a git repo ─────────────────────────────────────────
-if [[ ! -d "${INSTALL_DIR}/.git" ]]; then
-    log_warn "Install directory is not a git repository: ${INSTALL_DIR}"
-    log_warn "Self-update requires a git clone. Skipping."
+# ── Verify the persistent source clone exists ────────────────────────────────
+if [[ ! -d "${SRC_DIR}/.git" ]]; then
+    log_warn "Source clone not found at ${SRC_DIR}"
+    log_warn "Re-run install.sh to initialise the source repo, then self-update will work."
     exit 0
 fi
 
@@ -70,21 +72,21 @@ if ! command -v git &>/dev/null; then
     exit 0
 fi
 
-log "Starting self-update check (install dir: ${INSTALL_DIR})..."
+log "Starting self-update check (src: ${SRC_DIR}, install: ${INSTALL_DIR})..."
 
 # ── Get current commit hash ───────────────────────────────────────────────────
-BEFORE=$(git -C "${INSTALL_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
+BEFORE=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
 log "Current commit: ${BEFORE:0:8}"
 
 # ── Fetch latest from origin (no merge yet) ───────────────────────────────────
 log "Fetching from origin/main..."
-if ! git -C "${INSTALL_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}"; then
+if ! git -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}"; then
     log_warn "git fetch failed — no internet access or repo unreachable. Continuing without update."
     exit 0
 fi
 
 # ── Check if there is anything new ───────────────────────────────────────────
-REMOTE=$(git -C "${INSTALL_DIR}" rev-parse origin/main 2>/dev/null || echo "unknown")
+REMOTE=$(git -C "${SRC_DIR}" rev-parse origin/main 2>/dev/null || echo "unknown")
 
 if [[ "${BEFORE}" == "${REMOTE}" ]]; then
     log "Already up to date (commit: ${BEFORE:0:8}). No update needed."
@@ -94,21 +96,24 @@ fi
 log "Update available: ${BEFORE:0:8} -> ${REMOTE:0:8}"
 
 # ── Pull with fast-forward only ───────────────────────────────────────────────
-# --ff-only ensures we never create a merge commit.
-# If local files have been modified and diverged, this will fail safely.
-if ! git -C "${INSTALL_DIR}" pull --ff-only origin main 2>>"${LOG_FILE}"; then
+if ! git -C "${SRC_DIR}" pull --ff-only origin main 2>>"${LOG_FILE}"; then
     log_warn "git pull --ff-only failed."
-    log_warn "This usually means the local repo has been manually modified."
-    log_warn "Run 'git status' in ${INSTALL_DIR} to investigate."
+    log_warn "This usually means the source repo has been manually modified."
+    log_warn "Run 'git status' in ${SRC_DIR} to investigate."
     log_warn "Continuing without update."
     exit 0
 fi
 
-AFTER=$(git -C "${INSTALL_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
-log_ok "Update applied: ${BEFORE:0:8} -> ${AFTER:0:8}"
+AFTER=$(git -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
+log_ok "Source updated: ${BEFORE:0:8} -> ${AFTER:0:8}"
+
+# ── Rsync updated files from source clone to install directory ────────────────
+log "Syncing updated files to ${INSTALL_DIR}..."
+rsync -a "${SRC_DIR}/${REPO_SUBFOLDER}/" "${INSTALL_DIR}/"
+log_ok "Files synced to ${INSTALL_DIR}."
 
 # ── Reinstall pip packages if requirements.txt changed ───────────────────────
-if git -C "${INSTALL_DIR}" diff "${BEFORE}" "${AFTER}" --name-only 2>/dev/null | grep -q "requirements.txt"; then
+if git -C "${SRC_DIR}" diff "${BEFORE}" "${AFTER}" --name-only 2>/dev/null | grep -q "requirements.txt"; then
     log "requirements.txt changed — updating Python packages..."
     if [[ -x "${VENV_PIP}" ]]; then
         "${VENV_PIP}" install -r "${INSTALL_DIR}/requirements.txt" --quiet 2>>"${LOG_FILE}" && \
