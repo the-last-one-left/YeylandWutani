@@ -210,6 +210,11 @@ setup_directories() {
         "${INSTALL_DIR}/logs" \
         "${INSTALL_DIR}/data"
 
+    # Clear the initial check-in flag on every (re-)install.
+    # Without this, the check-in service silently exits on subsequent installs
+    # because the flag from the previous run is still present.
+    rm -f "${INSTALL_DIR}/data/.checkin_complete"
+
     # Ownership: root owns install dir; service user can write logs + data
     chown -R root:root "${INSTALL_DIR}"
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "${INSTALL_DIR}/logs" "${INSTALL_DIR}/data"
