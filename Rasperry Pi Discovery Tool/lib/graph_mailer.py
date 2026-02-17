@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
 MAX_RETRIES = 4
 RETRY_BASE_DELAY = 2  # seconds
+# How long to wait for NTP to sync before retrying after a clock-skew 401
+_NTP_SYNC_WAIT = 15  # seconds
 
 # ── Large attachment constants ────────────────────────────────────────────
 # Graph API sendMail has a 4 MB limit (including JSON envelope + base64
@@ -204,6 +206,23 @@ class GraphMailer:
 
                 if response.status_code in (401, 403):
                     error_body = response.text[:500]
+                    # Azure AD rejects tokens whose timestamps don't align with
+                    # real time — common on Pi boot before NTP has synced the
+                    # clock.  Wait briefly, force MSAL to drop the bad cached
+                    # token, and retry rather than giving up immediately.
+                    if (response.status_code == 401
+                            and "InvalidAuthenticationToken" in error_body
+                            and "Lifetime" in error_body
+                            and attempt < MAX_RETRIES):
+                        logger.warning(
+                            f"Token rejected (Lifetime validation) on attempt {attempt} "
+                            f"— likely clock skew before NTP sync. "
+                            f"Waiting {_NTP_SYNC_WAIT}s then retrying with a fresh token..."
+                        )
+                        time.sleep(_NTP_SYNC_WAIT)
+                        self.auth._app = None  # force MSAL to rebuild + re-acquire
+                        last_error = f"InvalidAuthenticationToken attempt {attempt}"
+                        continue
                     raise GraphMailerError(
                         f"Authentication/authorization error ({response.status_code}): {error_body}"
                     )
