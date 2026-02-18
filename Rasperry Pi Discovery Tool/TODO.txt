@@ -1,4 +1,4 @@
-[ ] Getting these errors despite the tools being installed -- 
+[x] Getting these errors despite the tools being installed --
 
 [WARNING] network_scanner -   speedtest-cli not found — skipping bandwidth test
 [WARNING] network_scanner -   kismet not found — skipping (see install.sh)
