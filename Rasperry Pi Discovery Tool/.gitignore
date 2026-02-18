@@ -55,3 +55,18 @@ $RECYCLE.BIN/
 # Installer generated files
 *.log
 nohup.out
+
+# Override root repo ignores: force-include project documentation
+!TODO.txt
+!existing_pi.txt
+!ADDITIONAL_TOOLS.md
+!README.md
+!TROUBLESHOOTING.md
+!GRAPH_API_SETUP.md
+
+#Claude-Code
+.claude-auto.lock
+claude-auto.lock
+claude-auto.log
+claude_flight_recorder.jsonl
+.claude-session-id

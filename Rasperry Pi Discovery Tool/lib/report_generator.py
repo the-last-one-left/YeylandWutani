@@ -2252,6 +2252,11 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
+  <!-- Network Infrastructure group: DHCP + NTP/NAC -->
+  {dhcp_section}
+
+  {infra_section}
+
   <!-- ═══ DEVICE CATEGORIES ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2272,26 +2277,7 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
-  {ad_section}
-
-  {wifi_section}
-
-  {protocol_section}
-
-  {dhcp_section}
-
-  {infra_section}
-
-  {osint_section}
-
-  {ssl_audit_section}
-
-  {backup_section}
-
-  {eol_section}
-
-  {ops_stats_section}
-
+  <!-- Security group: Observations + EOL + SSL Audit -->
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2339,6 +2325,24 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
+  {eol_section}
+
+  {ssl_audit_section}
+
+  <!-- External reconnaissance -->
+  {osint_section}
+
+  <!-- Identity infrastructure -->
+  {ad_section}
+
+  <!-- Wireless & protocol discovery -->
+  {wifi_section}
+
+  {protocol_section}
+
+  <!-- Business continuity -->
+  {backup_section}
+
   <!-- ═══ ALL DISCOVERED DEVICES ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2364,6 +2368,9 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
       </table>
     </td>
   </tr>
+
+  <!-- ═══ OPERATIONAL STATISTICS (always last) ═══ -->
+  {ops_stats_section}
 
   <!-- ═══ FOOTER ═══ -->
   <tr>

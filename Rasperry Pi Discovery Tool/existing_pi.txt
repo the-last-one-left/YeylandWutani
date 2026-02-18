@@ -1,0 +1,163 @@
+================================================================
+  Yeyland Wutani - Network Discovery Pi
+  Updating an Existing Pi to Current Version
+================================================================
+
+Use this guide if your Pi was installed BEFORE 2026-02-18 and
+you need to bring it up to date with the current codebase and
+any new tool prerequisites.
+
+----------------------------------------------------------------
+WHAT CHANGED (2026-02-18 and later)
+----------------------------------------------------------------
+
+1. Report reorganization — sections are now grouped logically:
+   - Network Overview + DHCP + Infrastructure Services (together)
+   - Device Breakdown + Services Summary (together)
+   - Security Observations + EOL + SSL Audit (together)
+   - OSINT, AD, WiFi, Network Services, Backup/DR
+   - All Discovered Devices
+   - Operational Statistics (always last)
+   No configuration changes required; the report rebuilds
+   automatically on the next scan.
+
+2. New optional tool integrations — see ADDITIONAL_TOOLS.md and
+   the new TODO.txt tasks for details on each. As each TODO item
+   is completed, this file will be updated with the corresponding
+   update steps.
+
+----------------------------------------------------------------
+STEP 1 — SELF-UPDATE (pulls latest code from GitHub)
+----------------------------------------------------------------
+
+If self-update is configured and working, just run:
+
+  sudo /opt/network-discovery/bin/self-update.sh
+
+This pulls the latest code from the GitHub repo and restarts
+the services automatically.
+
+If self-update is NOT available or fails, proceed to Step 2.
+
+----------------------------------------------------------------
+STEP 2 — MANUAL CODE UPDATE
+----------------------------------------------------------------
+
+SSH into your Pi, then:
+
+  # Pull latest code
+  sudo git -C /opt/network-discovery-src fetch --depth=1 origin main
+  sudo git -C /opt/network-discovery-src reset --hard FETCH_HEAD
+
+  # Sync updated files to install directory
+  sudo rsync -a "/opt/network-discovery-src/Rasperry Pi Discovery Tool/" \
+    /opt/network-discovery/
+
+  # Fix ownership
+  sudo chown -R network-discovery:network-discovery /opt/network-discovery
+  sudo chmod +x /opt/network-discovery/bin/*.py \
+                /opt/network-discovery/bin/*.sh
+
+----------------------------------------------------------------
+STEP 3 — UPDATE PYTHON DEPENDENCIES (if new pip packages added)
+----------------------------------------------------------------
+
+  sudo -u network-discovery /opt/network-discovery/venv/bin/pip install \
+    --upgrade msal requests python-nmap netifaces scapy dnspython \
+    python-dotenv jinja2
+
+  # If enum4linux-ng tasks are implemented:
+  # sudo /opt/network-discovery/venv/bin/pip install impacket ldap3
+
+  # If speedtest tasks are implemented:
+  # sudo /opt/network-discovery/venv/bin/pip install speedtest-cli
+
+----------------------------------------------------------------
+STEP 4 — INSTALL NEW SYSTEM PACKAGES (if new apt packages added)
+----------------------------------------------------------------
+
+Run only the lines for features you want to enable.
+All are optional unless the corresponding TODO task is complete.
+
+  # Currently required (should already be installed):
+  sudo apt-get update
+  sudo apt-get install -y nmap arp-scan fping traceroute dnsutils \
+    net-tools curl git jq logrotate snmp ldap-utils iw \
+    wireless-tools avahi-utils whois
+
+  # For Netdiscover (passive ARP) - TODO: NETDISCOVER-1
+  sudo apt-get install -y netdiscover
+
+  # For Nikto (web vulnerability scanning) - TODO: NIKTO-1
+  sudo apt-get install -y nikto
+
+  # For p0f (passive OS fingerprinting) - TODO: P0F-1
+  sudo apt-get install -y p0f
+
+  # For testssl.sh TLS analysis - TODO: TESTSSL-1
+  sudo apt-get install -y openssl bsdmainutils
+  sudo curl -sL https://testssl.sh/testssl.sh \
+    -o /opt/network-discovery/bin/testssl.sh
+  sudo chmod +x /opt/network-discovery/bin/testssl.sh
+
+  # For Kismet wireless IDS (Pi 4+ only) - TODO: KISMET-1
+  sudo apt-get install -y kismet
+  sudo usermod -aG kismet network-discovery
+
+----------------------------------------------------------------
+STEP 5 — RESTART SERVICES
+----------------------------------------------------------------
+
+  sudo systemctl daemon-reload
+  sudo systemctl restart network-discovery.service
+  sudo systemctl restart initial-checkin.service 2>/dev/null || true
+
+----------------------------------------------------------------
+STEP 6 — VERIFY OPERATION
+----------------------------------------------------------------
+
+Check the service status:
+
+  sudo systemctl status network-discovery.service
+  sudo journalctl -u network-discovery.service -n 50
+
+Run a manual test scan (sends a test email):
+
+  sudo -u network-discovery \
+    /opt/network-discovery/venv/bin/python \
+    /opt/network-discovery/bin/test-email.py
+
+Trigger a manual discovery scan:
+
+  sudo bash /opt/network-discovery/bin/manual-scan.sh
+
+----------------------------------------------------------------
+TROUBLESHOOTING
+----------------------------------------------------------------
+
+See TROUBLESHOOTING.md for common issues and solutions.
+
+Key log locations:
+  /opt/network-discovery/logs/discovery.log   — scan log
+  /opt/network-discovery/logs/health.log      — health check log
+  /tmp/nd-install-*.log                       — installer log
+
+Config file (edit with update-config.sh or manually):
+  /opt/network-discovery/config/config.json
+
+Credentials (Azure / Graph API):
+  /opt/network-discovery/config/.env
+
+----------------------------------------------------------------
+CONFIGURATION CHANGES BETWEEN VERSIONS
+----------------------------------------------------------------
+
+No new required config.json keys as of 2026-02-18.
+
+If future tool integrations add optional config keys, they will
+have safe defaults and will be noted here with the date added.
+
+Example of adding a new optional key manually:
+  sudo /opt/network-discovery/bin/update-config.sh
+
+================================================================
