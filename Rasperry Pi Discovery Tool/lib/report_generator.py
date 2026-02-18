@@ -2763,12 +2763,6 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
 
   {ssl_audit_section}
 
-  <!-- Deep TLS analysis (testssl.sh) sub-section of security -->
-  {testssl_section}
-
-  <!-- Nikto web vulnerability scanning -->
-  {nikto_section}
-
   <!-- External reconnaissance -->
   {osint_section}
 
@@ -2817,6 +2811,14 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
       </table>
     </td>
   </tr>
+
+  <!-- ═══ CVE DETECTIONS (long lists) ═══ -->
+
+  <!-- Deep TLS analysis (testssl.sh) -->
+  {testssl_section}
+
+  <!-- Nikto web vulnerability scanning -->
+  {nikto_section}
 
   <!-- ═══ OPERATIONAL STATISTICS (always last) ═══ -->
   {ops_stats_section}

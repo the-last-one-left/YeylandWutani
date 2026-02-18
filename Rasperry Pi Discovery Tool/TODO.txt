@@ -1,1 +1,1 @@
-[ ] Reorganize HTML report, putting CVE detections (long lists) at bottom, put operational stats at very bottom
+[x] Reorganize HTML report, putting CVE detections (long lists) at bottom, put operational stats at very bottom
