@@ -319,6 +319,16 @@ def main():
         "SSL audit": nd.get("enable_ssl_audit", True),
         "Backup/DR posture": nd.get("enable_backup_posture", True),
         "EOL detection": nd.get("enable_eol_detection", True),
+        "NSE vulners": nd.get("enable_nse_vulners", True),
+        "testssl.sh": nd.get("enable_testssl", True),
+        "Nikto": nd.get("enable_nikto", True),
+        "Speedtest": nd.get("enable_speedtest", True),
+        "enum4linux-ng": nd.get("enable_enum4linux", True),
+        "netdiscover": nd.get("enable_netdiscover", True),
+        "RustScan": nd.get("enable_rustscan", True),
+        "p0f": nd.get("enable_p0f", True),
+        "Kismet": nd.get("enable_kismet", False),
+        "Delta reporting": nd.get("enable_delta_reporting", True),
     }
     enabled = [k for k, v in features.items() if v]
     disabled = [k for k, v in features.items() if not v]
@@ -354,6 +364,30 @@ def main():
             logger.info("Shutdown requested before scan start. Exiting cleanly.")
             sys.exit(0)
 
+        # ── P0F-1: Start p0f passive OS fingerprinting daemon ─────────────
+        p0f_proc = None
+        p0f_log = DATA_DIR / "p0f.log"
+        nd_cfg = config.get("network_discovery", {})
+        if nd_cfg.get("enable_p0f", True):
+            try:
+                import shutil as _shutil
+                p0f_bin = _shutil.which("p0f")
+                if p0f_bin:
+                    # Rotate previous log
+                    if p0f_log.exists():
+                        p0f_log.unlink()
+                    import subprocess as _sp
+                    p0f_proc = _sp.Popen(
+                        ["sudo", "--non-interactive", p0f_bin, "-o", str(p0f_log)],
+                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                    )
+                    logger.info(f"p0f started (PID {p0f_proc.pid}) — passive OS fingerprinting active.")
+                    time.sleep(1)  # Give p0f a moment to initialize
+                else:
+                    logger.info("p0f not found — passive OS fingerprinting will be skipped.")
+            except Exception as e:
+                logger.warning(f"Could not start p0f: {e}")
+
         # Run discovery
         logger.info("Starting network scanner...")
         # Import here to avoid import overhead before credentials are validated
@@ -368,6 +402,19 @@ def main():
             progress_callback=lambda msg: logger.info(f"[Scanner] {msg}")
         )
         scan_duration = time.time() - scan_start
+
+        # ── Stop p0f after scan completes ────────────────────────────────
+        if p0f_proc is not None:
+            try:
+                p0f_proc.terminate()
+                p0f_proc.wait(timeout=5)
+                logger.info("p0f stopped.")
+            except Exception as e:
+                logger.debug(f"p0f cleanup error: {e}")
+                try:
+                    p0f_proc.kill()
+                except Exception:
+                    pass
         host_count = len(scan_results.get("hosts", []))
         logger.info(f"Network scan completed in {scan_duration:.1f}s — {host_count} host(s) found")
 

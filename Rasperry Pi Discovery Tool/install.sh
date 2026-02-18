@@ -133,8 +133,28 @@ install_packages() {
         iw \
         wireless-tools \
         avahi-utils \
-        whois
+        whois \
+        netdiscover \
+        p0f \
+        nikto \
+        openssl \
+        bsdmainutils
     success "System packages installed."
+
+    # Kismet (optional; only on Pi 4+ with a monitor-mode adapter)
+    # Installed separately to avoid blocking on unsupported hardware
+    local PI_MODEL
+    PI_MODEL="$(cat /proc/cpuinfo 2>/dev/null | grep -i "Raspberry Pi 4\|Raspberry Pi 5" | head -1 || true)"
+    if [[ -n "${PI_MODEL}" ]]; then
+        info "Pi 4/5 detected — installing Kismet wireless IDS (optional)..."
+        apt-get install -y kismet 2>/dev/null || warn "Kismet install failed — continuing without it."
+        if id -u kismet &>/dev/null 2>&1; then
+            usermod -aG kismet "${SERVICE_USER}" 2>/dev/null || true
+            success "Service user added to kismet group."
+        fi
+    else
+        info "Kismet skipped (requires Pi 4 or newer + monitor-mode adapter)."
+    fi
 }
 
 # ── Sparse clone from GitHub ──────────────────────────────────────────────────
@@ -196,9 +216,80 @@ setup_venv() {
         scapy \
         dnspython \
         python-dotenv \
-        jinja2
+        jinja2 \
+        speedtest-cli \
+        impacket \
+        ldap3
 
     success "Python virtual environment ready at ${VENV_DIR}."
+}
+
+# ── Additional security tools ─────────────────────────────────────────────────
+
+install_security_tools() {
+    step "Installing additional security tools"
+
+    local BIN_DIR="${INSTALL_DIR}/bin"
+    mkdir -p "${BIN_DIR}"
+
+    # ── testssl.sh ─────────────────────────────────────────────────────────
+    info "Installing testssl.sh..."
+    if curl -sSL --max-time 30 \
+        "https://testssl.sh/testssl.sh" \
+        -o "${BIN_DIR}/testssl.sh" 2>>"${LOG_FILE}"; then
+        chmod +x "${BIN_DIR}/testssl.sh"
+        success "testssl.sh installed at ${BIN_DIR}/testssl.sh"
+    else
+        warn "testssl.sh download failed — TLS deep-audit phase will be skipped."
+    fi
+
+    # ── enum4linux-ng ──────────────────────────────────────────────────────
+    info "Installing enum4linux-ng..."
+    local ENUM4LINUX_DIR="${BIN_DIR}/enum4linux-ng"
+    if [[ -d "${ENUM4LINUX_DIR}/.git" ]]; then
+        git -C "${ENUM4LINUX_DIR}" pull --quiet 2>>"${LOG_FILE}" || true
+        success "enum4linux-ng updated."
+    elif git clone --depth=1 \
+        "https://github.com/cddmp/enum4linux-ng.git" \
+        "${ENUM4LINUX_DIR}" 2>>"${LOG_FILE}"; then
+        success "enum4linux-ng cloned to ${ENUM4LINUX_DIR}"
+    else
+        warn "enum4linux-ng clone failed — SMB enumeration phase will be skipped."
+    fi
+
+    # ── RustScan ───────────────────────────────────────────────────────────
+    info "Installing RustScan..."
+    local ARCH
+    ARCH="$(uname -m)"
+    local RUSTSCAN_URL=""
+    case "${ARCH}" in
+        aarch64)
+            # ARM 64-bit (Pi 4 64-bit OS)
+            RUSTSCAN_URL="https://github.com/RustScan/RustScan/releases/latest/download/rustscan_aarch64-unknown-linux-musl"
+            ;;
+        armv7l|armv6l)
+            # ARM 32-bit (Pi OS Lite 32-bit)
+            RUSTSCAN_URL="https://github.com/RustScan/RustScan/releases/latest/download/rustscan_armv7-unknown-linux-musleabihf"
+            ;;
+        x86_64)
+            # x86 (dev/testing on PC)
+            RUSTSCAN_URL="https://github.com/RustScan/RustScan/releases/latest/download/rustscan_x86_64-unknown-linux-musl"
+            ;;
+    esac
+
+    if [[ -n "${RUSTSCAN_URL}" ]]; then
+        if curl -sSL --max-time 60 "${RUSTSCAN_URL}" \
+            -o "${BIN_DIR}/rustscan" 2>>"${LOG_FILE}"; then
+            chmod +x "${BIN_DIR}/rustscan"
+            success "RustScan installed at ${BIN_DIR}/rustscan (${ARCH})"
+        else
+            warn "RustScan download failed (${ARCH}) — will use nmap-only port scanning."
+        fi
+    else
+        warn "RustScan: unsupported architecture (${ARCH}) — skipping."
+    fi
+
+    success "Additional security tools installation complete."
 }
 
 # ── Directory permissions ─────────────────────────────────────────────────────
@@ -262,22 +353,39 @@ setup_directories() {
         chmod +s "$(which arp-scan)" 2>/dev/null || true
     fi
 
-    # Sudoers rule: allow the service user to run nmap as root without a password.
-    # This is the reliable fallback for SYN scan when file capabilities (setcap)
-    # are not inherited correctly under NoNewPrivileges=yes on older kernels (4.x).
-    local SUDOERS_FILE="/etc/sudoers.d/network-discovery-nmap"
-    local NMAP_BIN
-    NMAP_BIN="$(command -v nmap 2>/dev/null)"
-    if [[ -n "${NMAP_BIN}" ]]; then
-        echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${NMAP_BIN}" > "${SUDOERS_FILE}"
-        chmod 0440 "${SUDOERS_FILE}"
-        # Validate the rule won't break sudo
-        if visudo -c -f "${SUDOERS_FILE}" &>/dev/null; then
-            success "sudoers rule installed: ${SERVICE_USER} may run nmap as root."
-        else
-            warn "sudoers rule failed validation — removing."
-            rm -f "${SUDOERS_FILE}"
-        fi
+    # Sudoers rules: allow the service user to run privileged tools without a password.
+    local SUDOERS_FILE="/etc/sudoers.d/network-discovery-tools"
+    {
+        # nmap (SYN scan requires raw sockets)
+        local NMAP_BIN
+        NMAP_BIN="$(command -v nmap 2>/dev/null)"
+        [[ -n "${NMAP_BIN}" ]] && echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${NMAP_BIN}"
+
+        # p0f (passive fingerprinting daemon - raw socket capture)
+        local P0F_BIN
+        P0F_BIN="$(command -v p0f 2>/dev/null)"
+        [[ -n "${P0F_BIN}" ]] && echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${P0F_BIN}"
+
+        # netdiscover (passive ARP - raw sockets)
+        local ND_BIN
+        ND_BIN="$(command -v netdiscover 2>/dev/null)"
+        [[ -n "${ND_BIN}" ]] && echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${ND_BIN}"
+
+        # RustScan (raw socket access)
+        local RS_BIN="${INSTALL_DIR}/bin/rustscan"
+        [[ -f "${RS_BIN}" ]] && echo "${SERVICE_USER} ALL=(root) NOPASSWD: ${RS_BIN}"
+    } > "${SUDOERS_FILE}"
+    chmod 0440 "${SUDOERS_FILE}"
+    if visudo -c -f "${SUDOERS_FILE}" &>/dev/null; then
+        success "sudoers rules installed for network-discovery tools."
+    else
+        warn "sudoers file failed validation — removing."
+        rm -f "${SUDOERS_FILE}"
+    fi
+
+    # p0f setuid-root so the service user can run it directly (alternative to sudo)
+    if command -v p0f &>/dev/null; then
+        chmod +s "$(command -v p0f)" 2>/dev/null || true
     fi
 
     success "Directory permissions configured."
@@ -475,7 +583,25 @@ run_config_wizard() {
     "ssl_cert_critical_days": 7,
     "enable_backup_posture": true,
     "enable_eol_detection": true,
-    "eol_warning_months": 12
+    "eol_warning_months": 12,
+    "enable_nse_vulners": true,
+    "enable_testssl": true,
+    "testssl_ports": [443, 8443, 636, 993, 995],
+    "enable_nikto": true,
+    "nikto_max_time": 300,
+    "nikto_scan_budget": 1800,
+    "enable_speedtest": true,
+    "speedtest_timeout": 60,
+    "enable_enum4linux": true,
+    "enable_netdiscover": true,
+    "netdiscover_timeout": 30,
+    "enable_rustscan": true,
+    "rustscan_threshold_hosts": 50,
+    "enable_p0f": true,
+    "p0f_duration": 30,
+    "enable_kismet": false,
+    "kismet_duration": 90,
+    "enable_delta_reporting": true
   },
   "reporting": {
     "company_name": "${COMPANY_NAME}",
@@ -625,6 +751,7 @@ main() {
     install_packages
     clone_repo
     setup_venv
+    install_security_tools
     setup_directories
     download_oui_db
     install_services
