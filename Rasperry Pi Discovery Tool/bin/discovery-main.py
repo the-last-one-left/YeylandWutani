@@ -371,18 +371,41 @@ def main():
         if nd_cfg.get("enable_p0f", True):
             try:
                 import shutil as _shutil
+                import subprocess as _sp
                 p0f_bin = _shutil.which("p0f")
                 if p0f_bin:
-                    # Rotate previous log
-                    if p0f_log.exists():
-                        p0f_log.unlink()
-                    import subprocess as _sp
-                    p0f_proc = _sp.Popen(
-                        ["sudo", "--non-interactive", p0f_bin, "-o", str(p0f_log)],
-                        stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
-                    )
-                    logger.info(f"p0f started (PID {p0f_proc.pid}) — passive OS fingerprinting active.")
-                    time.sleep(1)  # Give p0f a moment to initialize
+                    # Detect the primary network interface so p0f knows what
+                    # to sniff.  p0f requires -i on Linux; without it the tool
+                    # exits immediately and never creates the log file.
+                    _iface = None
+                    try:
+                        _ip_out = _sp.check_output(
+                            ["ip", "route", "show", "default"],
+                            text=True, timeout=5, stderr=_sp.DEVNULL,
+                        )
+                        for _line in _ip_out.splitlines():
+                            _parts = _line.split()
+                            if "dev" in _parts:
+                                _iface = _parts[_parts.index("dev") + 1]
+                                break
+                    except Exception:
+                        pass
+                    if not _iface:
+                        logger.warning("p0f: cannot detect primary interface — skipping.")
+                    else:
+                        # Rotate previous log
+                        if p0f_log.exists():
+                            p0f_log.unlink()
+                        p0f_proc = _sp.Popen(
+                            ["sudo", "--non-interactive", p0f_bin,
+                             "-i", _iface, "-o", str(p0f_log)],
+                            stdout=_sp.DEVNULL, stderr=_sp.DEVNULL,
+                        )
+                        logger.info(
+                            f"p0f started (PID {p0f_proc.pid}) on {_iface} "
+                            "— passive OS fingerprinting active."
+                        )
+                        time.sleep(1)  # Give p0f a moment to initialize
                 else:
                     logger.info("p0f not found — passive OS fingerprinting will be skipped.")
             except Exception as e:

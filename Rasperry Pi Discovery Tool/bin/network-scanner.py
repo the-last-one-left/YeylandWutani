@@ -4577,8 +4577,15 @@ def phase19_speedtest(config: dict) -> dict:
         "error": "",
     }
 
-    # Try speedtest-cli (pip) first, then the Ookla CLI
-    for cmd in (["speedtest-cli", "--json"], ["speedtest", "--format=json"]):
+    # Try speedtest-cli (pip) first, then the Ookla CLI.
+    # The venv path is probed explicitly because the systemd service does not
+    # add /opt/network-discovery/venv/bin to PATH.
+    _venv_speedtest = "/opt/network-discovery/venv/bin/speedtest-cli"
+    for cmd in (
+        ["speedtest-cli", "--json"],
+        [_venv_speedtest, "--json"],
+        ["speedtest", "--format=json"],
+    ):
         try:
             proc = subprocess.run(
                 cmd, capture_output=True, text=True, timeout=timeout,
@@ -4801,10 +4808,15 @@ def phase22_kismet(wifi_results: dict, config: dict) -> dict:
         "error": "",
     }
 
-    # Check prerequisites
-    try:
-        subprocess.run(["kismet", "--version"], capture_output=True, timeout=5)
-    except (FileNotFoundError, Exception):
+    # Check prerequisites — use shutil.which so the check works even when
+    # /usr/bin is absent from the service user's minimal PATH.
+    import shutil as _shutil_kismet
+    kismet_bin = (
+        _shutil_kismet.which("kismet")
+        or _shutil_kismet.which("kismet_server")
+        or ("/usr/bin/kismet" if Path("/usr/bin/kismet").exists() else None)
+    )
+    if not kismet_bin:
         logger.warning("  kismet not found — skipping (see install.sh)")
         result["error"] = "kismet not installed"
         return result
@@ -4837,7 +4849,7 @@ def phase22_kismet(wifi_results: dict, config: dict) -> dict:
         try:
             # Start Kismet in background (non-interactive daemon mode)
             proc = subprocess.Popen(
-                ["kismet", "--no-ncurses-wrapper", "--daemonize",
+                [kismet_bin, "--no-ncurses-wrapper", "--daemonize",
                  "--pid-file", kismet_pid_file,
                  "--log-prefix", kismet_log_prefix,
                  "-c", iface],
