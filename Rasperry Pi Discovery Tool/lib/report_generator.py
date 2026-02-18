@@ -2023,6 +2023,425 @@ def _build_ops_stats_section(scan_results: dict, company_color: str) -> str:
   </tr>"""
 
 
+# ── SPEEDTEST-1: WAN Bandwidth Section ────────────────────────────────────
+
+def _build_speedtest_section(speedtest_results: dict, company_color: str) -> str:
+    """Build WAN bandwidth test section for inclusion in Network Overview."""
+    if not speedtest_results or not speedtest_results.get("available"):
+        return ""
+    dl = speedtest_results.get("download_mbps")
+    ul = speedtest_results.get("upload_mbps")
+    ping = speedtest_results.get("ping_ms")
+    server = speedtest_results.get("server", "")
+    if dl is None and ul is None:
+        return ""
+    dl_str = f"{dl} Mbps" if dl is not None else "N/A"
+    ul_str = f"{ul} Mbps" if ul is not None else "N/A"
+    ping_str = f"{ping} ms" if ping is not None else "N/A"
+    return f"""
+  <!-- ═══ WAN BANDWIDTH ═══ -->
+  <tr>
+    <td style="padding:16px 36px 0 36px;">
+      <h3 style="color:{company_color}; font-size:14px; margin:0 0 10px 0;
+                 border-bottom:1px solid {company_color}; padding-bottom:6px;">
+        WAN Bandwidth Baseline
+      </h3>
+      <table width="100%" cellpadding="0" cellspacing="0">
+        <tr>
+          <td style="width:33%; text-align:center; padding:8px 4px;">
+            <div style="background:#e8f4fb; border-radius:6px; padding:10px;">
+              <div style="font-size:24px; font-weight:bold; color:{company_color};">{dl_str}</div>
+              <div style="font-size:11px; color:#555; margin-top:3px;">Download</div>
+            </div>
+          </td>
+          <td style="width:33%; text-align:center; padding:8px 4px;">
+            <div style="background:#f0f8e8; border-radius:6px; padding:10px;">
+              <div style="font-size:24px; font-weight:bold; color:#5a9a2b;">{ul_str}</div>
+              <div style="font-size:11px; color:#555; margin-top:3px;">Upload</div>
+            </div>
+          </td>
+          <td style="width:33%; text-align:center; padding:8px 4px;">
+            <div style="background:#f5f0ff; border-radius:6px; padding:10px;">
+              <div style="font-size:24px; font-weight:bold; color:#7b4fa6;">{ping_str}</div>
+              <div style="font-size:11px; color:#555; margin-top:3px;">Ping Latency</div>
+            </div>
+          </td>
+        </tr>
+      </table>
+      {"" if not server else f'<p style="color:#888; font-size:11px; margin:4px 0 0 0;">Test server: {server}</p>'}
+    </td>
+  </tr>"""
+
+
+# ── ENUM4LINUX-1: Windows Environment Section ─────────────────────────────
+
+def _build_windows_env_section(hosts: list, company_color: str) -> str:
+    """Build Windows Environment section from enum4linux-ng SMB enumeration data."""
+    smb_hosts = [h for h in hosts if h.get("smb_enumeration")]
+    if not smb_hosts:
+        return ""
+
+    rows = ""
+    for host in smb_hosts:
+        ip = host.get("ip", "")
+        hostname = host.get("hostname", "N/A") or "N/A"
+        enum = host.get("smb_enumeration", {})
+        domain = enum.get("domain") or enum.get("workgroup") or ""
+        shares = enum.get("shares", [])
+        users = enum.get("users", [])
+        groups = enum.get("groups", [])
+        pp = enum.get("password_policy", {})
+        share_str = ", ".join(shares[:6]) + ("..." if len(shares) > 6 else "") if shares else "—"
+        user_count = len(users)
+        group_count = len(groups)
+        min_len = pp.get("min_length", "")
+        lockout = pp.get("lockout_threshold", "")
+        pp_str = ""
+        if min_len:
+            pp_str += f"Min length: {min_len}. "
+        if lockout:
+            pp_str += f"Lockout: {lockout}."
+        rows += f"""
+        <tr style="border-bottom:1px solid #f0f0f0;">
+          <td style="padding:6px 10px; font-size:12px; font-family:monospace;">{ip}</td>
+          <td style="padding:6px 10px; font-size:12px;">{hostname[:25]}</td>
+          <td style="padding:6px 10px; font-size:12px;">{domain[:20]}</td>
+          <td style="padding:6px 10px; font-size:11px; color:#555;">{share_str[:60]}</td>
+          <td style="padding:6px 10px; font-size:12px; text-align:center;">{user_count}</td>
+          <td style="padding:6px 10px; font-size:12px; text-align:center;">{group_count}</td>
+          <td style="padding:6px 10px; font-size:11px; color:#777;">{pp_str[:50]}</td>
+        </tr>"""
+
+    if not rows:
+        return ""
+
+    return f"""
+  <!-- ═══ WINDOWS ENVIRONMENT ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        Windows Environment
+      </h2>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; font-size:12px;">
+        <tr style="background:{company_color}; color:#fff;">
+          <th style="padding:8px 10px; text-align:left; width:110px;">IP</th>
+          <th style="padding:8px 10px; text-align:left; width:130px;">Hostname</th>
+          <th style="padding:8px 10px; text-align:left; width:100px;">Domain</th>
+          <th style="padding:8px 10px; text-align:left;">Shares</th>
+          <th style="padding:8px 10px; text-align:center; width:55px;">Users</th>
+          <th style="padding:8px 10px; text-align:center; width:55px;">Groups</th>
+          <th style="padding:8px 10px; text-align:left;">Password Policy</th>
+        </tr>
+        {rows}
+      </table>
+      <p style="color:#888; font-size:11px; margin:6px 0 0 0; font-style:italic;">
+        Enumerated via enum4linux-ng anonymous SMB session (read-only).
+      </p>
+    </td>
+  </tr>"""
+
+
+# ── TESTSSL-1: Deep TLS Analysis Section ──────────────────────────────────
+
+def _build_testssl_section(testssl_results: dict, company_color: str) -> str:
+    """Build testssl.sh deep TLS analysis report section."""
+    if not testssl_results or not testssl_results.get("available"):
+        return ""
+    findings = testssl_results.get("findings", [])
+    hosts_audited = testssl_results.get("hosts_audited", 0)
+    if not findings and not hosts_audited:
+        return ""
+
+    if not findings:
+        return f"""
+  <tr>
+    <td style="padding:16px 36px 0 36px;">
+      <h3 style="color:{company_color}; font-size:14px; margin:0 0 8px 0;">
+        Deep TLS Analysis (testssl.sh)
+      </h3>
+      <p style="font-size:12px; color:#2d6a4f; background:#d8f3dc; border-radius:4px;
+                padding:8px 12px; margin:0;">
+        &#10003; {hosts_audited} host(s) audited — no significant TLS issues found.
+      </p>
+    </td>
+  </tr>"""
+
+    sev_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2}
+    sorted_findings = sorted(findings, key=lambda f: sev_order.get(f.get("severity", "MEDIUM"), 2))
+
+    rows = ""
+    for f in sorted_findings[:30]:
+        sev = f.get("severity", "MEDIUM")
+        rows += f"""
+        <tr style="border-bottom:1px solid #f5e6e6;">
+          <td style="padding:5px 10px;">{_severity_badge(sev)}</td>
+          <td style="padding:5px 10px; font-size:11px; color:#666; font-family:monospace;">
+            :{f.get('port', '')}</td>
+          <td style="padding:5px 10px; font-size:11px; color:#777; font-style:italic;">
+            {f.get('id', '')[:30]}</td>
+          <td style="padding:5px 10px; font-size:12px;">{f.get('finding', '')[:120]}</td>
+        </tr>"""
+
+    return f"""
+  <!-- ═══ TESTSSL TLS ANALYSIS ═══ -->
+  <tr>
+    <td style="padding:16px 36px 0 36px;">
+      <h3 style="color:{company_color}; font-size:14px; margin:0 0 8px 0;
+                 border-bottom:1px solid {company_color}; padding-bottom:5px;">
+        Deep TLS Analysis (testssl.sh) — {hosts_audited} hosts audited
+      </h3>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; font-size:12px;">
+        <tr style="background:#f5e6e6; color:#8b0000;">
+          <th style="padding:6px 10px; text-align:left; width:80px;">Severity</th>
+          <th style="padding:6px 10px; text-align:left; width:60px;">Port</th>
+          <th style="padding:6px 10px; text-align:left; width:120px;">Check</th>
+          <th style="padding:6px 10px; text-align:left;">Finding</th>
+        </tr>
+        {rows}
+      </table>
+    </td>
+  </tr>"""
+
+
+# ── NIKTO-1: Web Vulnerabilities Section ──────────────────────────────────
+
+def _build_nikto_section(nikto_results: dict, company_color: str) -> str:
+    """Build Nikto web vulnerability scanning report section."""
+    if not nikto_results or not nikto_results.get("available"):
+        return ""
+    findings = nikto_results.get("findings", [])
+    hosts_scanned = nikto_results.get("hosts_scanned", 0)
+    budget_used = nikto_results.get("budget_used_seconds", 0)
+    if not findings and not hosts_scanned:
+        return ""
+
+    if not findings:
+        return f"""
+  <tr>
+    <td style="padding:16px 36px 0 36px;">
+      <h3 style="color:{company_color}; font-size:14px; margin:0 0 8px 0;">
+        Web Vulnerabilities (Nikto)
+      </h3>
+      <p style="font-size:12px; color:#2d6a4f; background:#d8f3dc; border-radius:4px;
+                padding:8px 12px; margin:0;">
+        &#10003; {hosts_scanned} web host(s) scanned — no significant vulnerabilities found.
+      </p>
+    </td>
+  </tr>"""
+
+    sev_order = {"HIGH": 0, "MEDIUM": 1, "LOW": 2}
+    sorted_findings = sorted(findings, key=lambda f: sev_order.get(f.get("severity", "MEDIUM"), 1))
+
+    rows = ""
+    for f in sorted_findings[:30]:
+        sev = f.get("severity", "MEDIUM")
+        proto = f.get("protocol", "http")
+        port = f.get("port", 80)
+        rows += f"""
+        <tr style="border-bottom:1px solid #f0e0e0;">
+          <td style="padding:5px 10px;">{_severity_badge(sev)}</td>
+          <td style="padding:5px 10px; font-size:11px; color:#666; font-family:monospace;">
+            {proto}:{port}</td>
+          <td style="padding:5px 10px; font-size:12px;">{f.get('finding', '')[:160]}</td>
+        </tr>"""
+
+    return f"""
+  <!-- ═══ NIKTO WEB VULNERABILITIES ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:#c0392b; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid #c0392b; padding-bottom:8px;">
+        Web Vulnerabilities (Nikto) — {hosts_scanned} host(s) scanned
+      </h2>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; font-size:12px;">
+        <tr style="background:#f5e6e6; color:#8b0000;">
+          <th style="padding:6px 10px; text-align:left; width:80px;">Severity</th>
+          <th style="padding:6px 10px; text-align:left; width:90px;">Service</th>
+          <th style="padding:6px 10px; text-align:left;">Finding</th>
+        </tr>
+        {rows}
+      </table>
+      <p style="color:#888; font-size:11px; margin:6px 0 0 0; font-style:italic;">
+        Scan time: {round(budget_used / 60, 1)} minutes. Findings are informational.
+      </p>
+    </td>
+  </tr>"""
+
+
+# ── REPORT-1: Delta Reporting Section ─────────────────────────────────────
+
+def _build_delta_section(delta_results: dict, company_color: str) -> str:
+    """Build 'New This Scan' delta report section showing changes since last scan."""
+    if not delta_results or not delta_results.get("has_previous"):
+        return ""
+
+    new_devices = delta_results.get("new_devices", [])
+    removed_devices = delta_results.get("removed_devices", [])
+    new_ports = delta_results.get("new_ports", {})
+    new_flags = delta_results.get("new_flags", {})
+    prev_time = delta_results.get("previous_scan_time", "")
+
+    has_changes = new_devices or removed_devices or new_ports or new_flags
+    if not has_changes:
+        return f"""
+  <!-- ═══ DELTA REPORTING ═══ -->
+  <tr>
+    <td style="padding:16px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#x394; Changes Since Last Scan
+      </h2>
+      <p style="font-size:12px; color:#2d6a4f; background:#d8f3dc; border-radius:4px;
+                padding:8px 12px; margin:0;">
+        &#10003; No changes detected since previous scan
+        {"(" + prev_time[:19] + ")" if prev_time else ""}.
+      </p>
+    </td>
+  </tr>"""
+
+    html = f"""
+  <!-- ═══ DELTA REPORTING ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#x394; Changes Since Last Scan
+        {"" if not prev_time else f'<span style="font-size:12px; font-weight:normal; color:#888; margin-left:12px;">vs. {prev_time[:19]}</span>'}
+      </h2>"""
+
+    # New devices
+    if new_devices:
+        html += f"""
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:bold; color:#155724; background:#d4edda;
+                    padding:6px 10px; border-radius:4px; margin-bottom:6px;">
+          &#x2795; {len(new_devices)} New Device(s) Discovered
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; font-size:12px;">"""
+        for d in new_devices[:15]:
+            ports_preview = ", ".join(str(p) for p in (d.get("open_ports", []))[:6])
+            if len(d.get("open_ports", [])) > 6:
+                ports_preview += "..."
+            html += f"""
+          <tr style="border-bottom:1px solid #d4edda;">
+            <td style="padding:4px 10px; font-family:monospace; color:#155724;">{d["ip"]}</td>
+            <td style="padding:4px 10px;">{(d.get("hostname") or "N/A")[:25]}</td>
+            <td style="padding:4px 10px; color:#555;">{d.get("vendor", "Unknown")[:25]}</td>
+            <td style="padding:4px 10px; color:#555;">{d.get("category", "Unknown")[:20]}</td>
+            <td style="padding:4px 10px; font-size:11px; color:#888; font-family:monospace;">{ports_preview}</td>
+          </tr>"""
+        html += "</table></div>"
+
+    # Removed devices
+    if removed_devices:
+        html += f"""
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:bold; color:#721c24; background:#f8d7da;
+                    padding:6px 10px; border-radius:4px; margin-bottom:6px;">
+          &#x2796; {len(removed_devices)} Device(s) No Longer Visible
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; font-size:12px;">"""
+        for d in removed_devices[:10]:
+            html += f"""
+          <tr style="border-bottom:1px solid #f8d7da;">
+            <td style="padding:4px 10px; font-family:monospace; color:#721c24;">{d["ip"]}</td>
+            <td style="padding:4px 10px;">{(d.get("hostname") or "N/A")[:30]}</td>
+            <td style="padding:4px 10px; color:#555;">{d.get("vendor", "Unknown")[:30]}</td>
+          </tr>"""
+        html += "</table></div>"
+
+    # New ports on existing hosts
+    if new_ports:
+        html += f"""
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:bold; color:#856404; background:#fff3cd;
+                    padding:6px 10px; border-radius:4px; margin-bottom:6px;">
+          &#x26A0; {len(new_ports)} Host(s) with New Open Ports
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; font-size:12px;">"""
+        for ip, ports in list(new_ports.items())[:10]:
+            ports_str = ", ".join(str(p) for p in ports)
+            html += f"""
+          <tr style="border-bottom:1px solid #fff3cd;">
+            <td style="padding:4px 10px; font-family:monospace; color:#856404;">{ip}</td>
+            <td style="padding:4px 10px; font-size:11px; color:#555;">{ports_str}</td>
+          </tr>"""
+        html += "</table></div>"
+
+    # New security flags
+    if new_flags:
+        html += f"""
+      <div style="margin-bottom:14px;">
+        <div style="font-size:13px; font-weight:bold; color:#721c24; background:#f8d7da;
+                    padding:6px 10px; border-radius:4px; margin-bottom:6px;">
+          &#x1F6A8; {sum(len(v) for v in new_flags.values())} New Security Flag(s)
+        </div>
+        <table width="100%" cellpadding="0" cellspacing="0"
+               style="border-collapse:collapse; font-size:12px;">"""
+        for ip, flags in list(new_flags.items())[:10]:
+            for f in flags[:3]:
+                sev = f.get("severity", "LOW")
+                html += f"""
+          <tr style="border-bottom:1px solid #f8d7da;">
+            <td style="padding:4px 10px; font-family:monospace; color:#721c24; width:120px;">{ip}</td>
+            <td style="padding:4px 10px; width:80px;">{_severity_badge(sev)}</td>
+            <td style="padding:4px 10px;">{f.get("flag", "")[:100]}</td>
+          </tr>"""
+        html += "</table></div>"
+
+    html += "    </td>\n  </tr>"
+    return html
+
+
+# ── REPORT-2: Network Topology Diagram Section ─────────────────────────────
+
+def _build_topology_diagram_section(topology_diagram: dict, company_color: str) -> str:
+    """Build network topology ASCII map section."""
+    if not topology_diagram:
+        return ""
+    ascii_map = topology_diagram.get("ascii_map", "")
+    if not ascii_map:
+        return ""
+    tier_counts = topology_diagram.get("tier_counts", {})
+    tier_str = ""
+    if tier_counts:
+        parts = []
+        if tier_counts.get("gateways"):
+            parts.append(f"{tier_counts['gateways']} gateway(s)")
+        if tier_counts.get("infrastructure"):
+            parts.append(f"{tier_counts['infrastructure']} infrastructure")
+        if tier_counts.get("servers"):
+            parts.append(f"{tier_counts['servers']} server(s)")
+        if tier_counts.get("endpoints"):
+            parts.append(f"{tier_counts['endpoints']} endpoint(s)")
+        if tier_counts.get("unknown"):
+            parts.append(f"{tier_counts['unknown']} unknown")
+        tier_str = " &bull; ".join(parts)
+
+    escaped = ascii_map.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    return f"""
+  <!-- ═══ NETWORK TOPOLOGY DIAGRAM ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        Network Topology Map
+      </h2>
+      {"" if not tier_str else f'<p style="font-size:12px; color:#888; margin:0 0 10px 0;">{tier_str}</p>'}
+      <pre style="background:#1e1e2e; color:#cdd6f4; font-size:11px; font-family:monospace;
+                  padding:14px 16px; border-radius:6px; overflow-x:auto; line-height:1.5;
+                  border:1px solid #3c3c5c; white-space:pre-wrap; word-break:break-all;">{escaped}</pre>
+    </td>
+  </tr>"""
+
+
 # ── Main report builder ────────────────────────────────────────────────────
 
 def build_discovery_report(scan_results: dict, config: dict) -> tuple:
@@ -2120,6 +2539,12 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     ssl_audit_results = scan_results.get("ssl_audit", {})
     backup_results = scan_results.get("backup_posture", {})
     eol_results = scan_results.get("eol_detection", {})
+    # New tool results
+    testssl_results = scan_results.get("testssl", {})
+    nikto_results = scan_results.get("nikto", {})
+    speedtest_results = scan_results.get("speedtest", {})
+    delta_results = scan_results.get("delta", {})
+    topology_diagram = scan_results.get("topology_diagram", {})
 
     logger.debug("  Building extended discovery sections...")
     wifi_section = _build_wifi_section(wifi_results, company_color)
@@ -2130,6 +2555,12 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     ssl_audit_section = _build_ssl_audit_section(ssl_audit_results, company_color)
     backup_section = _build_backup_section(backup_results, company_color)
     eol_section = _build_eol_section(eol_results, company_color)
+    speedtest_section = _build_speedtest_section(speedtest_results, company_color)
+    windows_env_section = _build_windows_env_section(hosts, company_color)
+    testssl_section = _build_testssl_section(testssl_results, company_color)
+    nikto_section = _build_nikto_section(nikto_results, company_color)
+    delta_section = _build_delta_section(delta_results, company_color)
+    topology_diagram_section = _build_topology_diagram_section(topology_diagram, company_color)
     ops_stats_section = _build_ops_stats_section(scan_results, company_color)
 
     critical_count = len(summary.get("critical_hosts", []))
@@ -2252,6 +2683,14 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
+  <!-- Network Infrastructure group: DHCP + NTP/NAC -->
+  {dhcp_section}
+
+  {infra_section}
+
+  <!-- WAN bandwidth baseline -->
+  {speedtest_section}
+
   <!-- ═══ DEVICE CATEGORIES ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2272,26 +2711,7 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
-  {ad_section}
-
-  {wifi_section}
-
-  {protocol_section}
-
-  {dhcp_section}
-
-  {infra_section}
-
-  {osint_section}
-
-  {ssl_audit_section}
-
-  {backup_section}
-
-  {eol_section}
-
-  {ops_stats_section}
-
+  <!-- Security group: Observations + EOL + SSL Audit -->
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2339,6 +2759,39 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     </td>
   </tr>
 
+  {eol_section}
+
+  {ssl_audit_section}
+
+  <!-- Deep TLS analysis (testssl.sh) sub-section of security -->
+  {testssl_section}
+
+  <!-- Nikto web vulnerability scanning -->
+  {nikto_section}
+
+  <!-- External reconnaissance -->
+  {osint_section}
+
+  <!-- Identity infrastructure -->
+  {ad_section}
+
+  <!-- Windows environment (enum4linux-ng) -->
+  {windows_env_section}
+
+  <!-- Wireless & protocol discovery -->
+  {wifi_section}
+
+  {protocol_section}
+
+  <!-- Business continuity -->
+  {backup_section}
+
+  <!-- Topology diagram -->
+  {topology_diagram_section}
+
+  <!-- Delta reporting (changes since last scan) -->
+  {delta_section}
+
   <!-- ═══ ALL DISCOVERED DEVICES ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2364,6 +2817,9 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
       </table>
     </td>
   </tr>
+
+  <!-- ═══ OPERATIONAL STATISTICS (always last) ═══ -->
+  {ops_stats_section}
 
   <!-- ═══ FOOTER ═══ -->
   <tr>

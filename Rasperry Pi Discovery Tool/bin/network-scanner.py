@@ -3,11 +3,12 @@
 Yeyland Wutani - Network Discovery Pi
 network-scanner.py - Comprehensive Network Discovery Engine
 
-Seventeen-phase discovery:
+Twenty-four-phase discovery:
   Phase 1:   Network Reconnaissance
   Phase 1b:  Alternate Subnet Detection (probe common gateways)
-  Phase 2:   Host Discovery (ARP + ping sweep, including additional subnets)
-  Phase 3:   Port Scanning (nmap top-100 with -sV and --osscan-guess)
+  Phase 1c:  DHCP-seeded Subnet Discovery
+  Phase 2:   Host Discovery (ARP + netdiscover passive ARP + ping sweep)
+  Phase 3:   Port Scanning (nmap top-N with -sV and --osscan-guess; RustScan pre-discovery)
   Phase 4:   Service Enumeration (HTTP, SMB, SNMP enhanced, banners, NSE scripts)
   Phase 5:   Network Topology (traceroute)
   Phase 6:   Security Observations
@@ -21,6 +22,14 @@ Seventeen-phase discovery:
   Phase 14:  SSL/TLS Certificate Health Audit
   Phase 15:  Backup & DR Posture Inference
   Phase 16:  End-of-Life / End-of-Support Detection
+  Phase 17:  testssl.sh Deep TLS Analysis (HEARTBLEED, POODLE, weak ciphers)
+  Phase 18:  Nikto Web Vulnerability Scanning
+  Phase 19:  WAN Bandwidth Test (speedtest-cli)
+  Phase 20:  Deep SMB/Windows Enumeration (enum4linux-ng)
+  Phase 21:  Passive OS Fingerprinting (p0f)
+  Phase 22:  Kismet Passive Wireless IDS (Pi 4+, opt-in)
+  Phase 23:  Delta Reporting (new/removed devices since last scan)
+  Phase 24:  Network Topology Diagram (ASCII map)
 """
 
 import concurrent.futures
@@ -148,6 +157,34 @@ DEFAULT_CONFIG = {
     # ── End-of-Life / End-of-Support Detection ────────────────────────────
     "enable_eol_detection": True,
     "eol_warning_months": 12,
+    # ── NSE vulnerability scanning ─────────────────────────────────────────
+    "enable_nse_vulners": True,       # NSE-2: vulners CVE correlation (requires internet)
+    # ── testssl.sh deep TLS analysis ──────────────────────────────────────
+    "enable_testssl": True,
+    "testssl_ports": [443, 8443, 636, 993, 995],
+    # ── Nikto web vulnerability scanning ──────────────────────────────────
+    "enable_nikto": True,
+    "nikto_max_time": 300,            # max seconds per host (default 5 min)
+    "nikto_scan_budget": 1800,        # total time budget across all hosts (30 min)
+    # ── WAN bandwidth test ─────────────────────────────────────────────────
+    "enable_speedtest": True,
+    "speedtest_timeout": 60,
+    # ── enum4linux-ng SMB/Windows enumeration ──────────────────────────────
+    "enable_enum4linux": True,
+    # ── netdiscover passive ARP ────────────────────────────────────────────
+    "enable_netdiscover": True,
+    "netdiscover_timeout": 30,
+    # ── RustScan fast port discovery ──────────────────────────────────────
+    "enable_rustscan": True,
+    "rustscan_threshold_hosts": 50,   # use RustScan when host count exceeds this
+    # ── p0f passive OS fingerprinting ─────────────────────────────────────
+    "enable_p0f": True,
+    "p0f_duration": 30,               # seconds to run p0f capture
+    # ── Kismet passive wireless IDS ───────────────────────────────────────
+    "enable_kismet": False,           # opt-in: requires monitor-mode adapter + Pi 4+
+    "kismet_duration": 90,
+    # ── Delta reporting (new/removed devices since last scan) ─────────────
+    "enable_delta_reporting": True,
 }
 
 
@@ -698,6 +735,39 @@ def phase1c_dhcp_subnet_seeding(recon: dict, config: dict) -> dict:
 
 # ── Phase 2: Host Discovery ────────────────────────────────────────────────
 
+def _run_netdiscover(subnet: str, iface: str = None) -> list:
+    """Run netdiscover passive ARP on a subnet. Returns list of {ip, mac, vendor}.
+
+    Uses -P (print mode) -N (no header) so it runs non-interactively.
+    netdiscover is especially useful for hosts that rate-limit ICMP/ARP-ping.
+    """
+    hosts = []
+    cmd = ["netdiscover", "-r", subnet, "-P", "-N"]
+    if iface:
+        cmd += ["-i", iface]
+    try:
+        proc = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=60,
+        )
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split()
+            if len(parts) >= 2 and re.match(r"^\d+\.\d+\.\d+\.\d+$", parts[0]):
+                ip = parts[0]
+                mac = parts[1] if len(parts) > 1 else ""
+                vendor = " ".join(parts[3:]) if len(parts) > 3 else ""
+                hosts.append({"ip": ip, "mac": normalize_mac(mac), "vendor_nd": vendor})
+    except subprocess.TimeoutExpired:
+        logger.warning("netdiscover timed out")
+    except FileNotFoundError:
+        logger.debug("netdiscover not found — skipping passive ARP phase")
+    except Exception as e:
+        logger.debug(f"netdiscover error: {e}")
+    return hosts
+
+
 def _run_arp_scan(subnet: str, iface: str = None) -> list:
     """Run arp-scan on a subnet. Returns list of {ip, mac, vendor}."""
     hosts = []
@@ -819,6 +889,18 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
                         "vendor": get_mac_vendor(h.get("mac", "")) or h.get("vendor_arp", "Unknown"),
                     }
 
+        # NETDISCOVER-1: passive ARP discovery (merges before fping to catch rate-limiters)
+        if config.get("enable_netdiscover", True):
+            nd_hosts = _run_netdiscover(subnet, iface=iface.get("name"))
+            for h in nd_hosts:
+                ip = h["ip"]
+                if ip not in our_ips and ip not in all_hosts:
+                    all_hosts[ip] = {
+                        **_make_empty_host(ip, "direct"),
+                        "mac": h.get("mac", ""),
+                        "vendor": get_mac_vendor(h.get("mac", "")) or h.get("vendor_nd", "Unknown"),
+                    }
+
         logger.info(f"  Ping sweep: {subnet}")
         live_ips = _run_fping(subnet)
         for ip in live_ips:
@@ -871,6 +953,37 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
 
 
 # ── Phase 3: Port Scanning ─────────────────────────────────────────────────
+
+RUSTSCAN_BIN = Path("/opt/network-discovery/bin/rustscan")
+
+
+def _rustscan_open_ports(ip: str, timeout: int = 60) -> list:
+    """Use RustScan to quickly discover open ports on a single host.
+
+    Returns a list of open port integers, or empty list on any failure.
+    RustScan is much faster than nmap for port discovery on large /24+ subnets.
+    """
+    if not RUSTSCAN_BIN.exists():
+        return []
+    ports = []
+    try:
+        proc = subprocess.run(
+            [str(RUSTSCAN_BIN), "-a", ip, "--ulimit", "5000",
+             "--batch-size", "2000", "--timeout", "3000",
+             "--", "-sV", "--open"],  # pass remaining args to nmap
+            capture_output=True, text=True, timeout=timeout,
+        )
+        # RustScan outputs nmap-style results; parse open ports
+        for line in proc.stdout.splitlines():
+            m = re.match(r"^(\d+)/tcp\s+open", line)
+            if m:
+                ports.append(int(m.group(1)))
+    except subprocess.TimeoutExpired:
+        logger.debug(f"RustScan timeout for {ip}")
+    except Exception as e:
+        logger.debug(f"RustScan error for {ip}: {e}")
+    return ports
+
 
 def _nmap_port_scan(
     ip: str,
@@ -1028,7 +1141,33 @@ def phase3_port_scan(hosts: list, config: dict) -> list:
     svc_versions = config.get("enable_service_versions", True)
     os_det = config.get("enable_os_detection", True)
 
+    # RUSTSCAN-1: use RustScan for fast port pre-discovery on large networks
+    rustscan_threshold = int(config.get("rustscan_threshold_hosts", 50))
+    use_rustscan = (
+        config.get("enable_rustscan", True)
+        and RUSTSCAN_BIN.exists()
+        and len(hosts) > rustscan_threshold
+    )
+    if use_rustscan:
+        logger.info(
+            f"  RustScan enabled ({len(hosts)} hosts > threshold {rustscan_threshold}): "
+            "pre-discovering open ports before nmap service detection."
+        )
+
     def scan_host(host: dict) -> dict:
+        ip = host["ip"]
+
+        # If RustScan is enabled, pre-discover ports to feed to nmap
+        if use_rustscan:
+            rustscan_ports = _rustscan_open_ports(ip)
+            if rustscan_ports:
+                # Run nmap only on confirmed-open ports for service version detection
+                host["open_ports"] = rustscan_ports
+                if svc_versions and "services" not in host:
+                    host["services"] = {}
+                logger.debug(f"  RustScan {ip}: {rustscan_ports}")
+                return host
+
         scan_result = _nmap_port_scan(
             host["ip"],
             top_ports=top_ports,
@@ -1379,6 +1518,152 @@ def _run_nse_scripts(ip: str, open_ports: list, config: dict) -> dict:
                         results[port] = {}
                     if "nse_title" not in results.get(port, {}):
                         results[port]["nse_title"] = title
+
+    # ── NSE-2: Vulners CVE correlation (requires internet) ────────────────
+    if config.get("enable_nse_vulners", True) and ports_set:
+        # Only attempt vulners if we have version info (sV already ran in Phase 3)
+        all_ports_str = ",".join(str(p) for p in sorted(ports_set)[:20])  # limit port count
+        vulners_timeout = max(proc_timeout, 30)
+        out = ""
+        try:
+            out = subprocess.check_output(
+                ["nmap", "-n", "-p", all_ports_str, "-sV",
+                 "--script", "vulners",
+                 "--host-timeout", "25s", ip],
+                text=True, timeout=vulners_timeout, stderr=subprocess.DEVNULL,
+            )
+        except Exception:
+            pass
+        if out:
+            cves = []
+            current_port_v = None
+            for line in out.splitlines():
+                pm = re.match(r"^(\d+)/tcp", line)
+                if pm:
+                    current_port_v = int(pm.group(1))
+                # vulners output: "|       CVE-XXXX-YYYY   9.8   https://..."
+                m = re.search(r"\|\s+(CVE-\d{4}-\d+)\s+([\d.]+)", line)
+                if m:
+                    cve_id = m.group(1)
+                    try:
+                        cvss = float(m.group(2))
+                    except ValueError:
+                        cvss = 0.0
+                    cves.append({"cve": cve_id, "cvss": cvss, "port": current_port_v})
+            if cves:
+                results["vulners_cves"] = cves
+                # Surface high/critical CVEs as nse_vulns
+                nse_vulns = results.setdefault("nse_vulns", [])
+                for cve in cves:
+                    if cve["cvss"] >= 9.0:
+                        nse_vulns.append({
+                            "name": f"{cve['cve']} (CVSS {cve['cvss']}) on port {cve['port']}",
+                            "severity": "CRITICAL",
+                        })
+                    elif cve["cvss"] >= 7.0:
+                        nse_vulns.append({
+                            "name": f"{cve['cve']} (CVSS {cve['cvss']}) on port {cve['port']}",
+                            "severity": "HIGH",
+                        })
+
+    # ── NSE-1: Vulnerability scripts ──────────────────────────────────────
+    # SMB vulnerability checks (EternalBlue MS17-010, MS08-067, RDP encryption)
+    smb_vuln_ports = [p for p in (445, 139) if p in ports_set]
+    if smb_vuln_ports:
+        vuln_scripts = "smb-vuln-ms17-010,smb-vuln-ms08-067"
+        out = _run([
+            "nmap", "-n", "-p", ",".join(str(p) for p in smb_vuln_ports),
+            "--script", vuln_scripts,
+            "--host-timeout", timeout_flag, ip,
+        ])
+        nse_vulns = results.setdefault("nse_vulns", [])
+        for line in out.splitlines():
+            line = line.strip()
+            if "VULNERABLE" in line.upper():
+                vuln_name = line.split(":")[0].strip("| ").strip()
+                if vuln_name and vuln_name not in nse_vulns:
+                    nse_vulns.append({"name": vuln_name, "severity": "CRITICAL"})
+            elif "ms17-010" in line.lower() and "state:" in line.lower():
+                if "vulnerable" in line.lower():
+                    nse_vulns.append({"name": "MS17-010 (EternalBlue)", "severity": "CRITICAL"})
+            elif "ms08-067" in line.lower() and "vulnerable" in line.lower():
+                nse_vulns.append({"name": "MS08-067", "severity": "CRITICAL"})
+
+    # RDP encryption check
+    if 3389 in ports_set:
+        out = _run([
+            "nmap", "-n", "-p", "3389",
+            "--script", "rdp-enum-encryption",
+            "--host-timeout", timeout_flag, ip,
+        ])
+        nse_vulns = results.setdefault("nse_vulns", [])
+        for line in out.splitlines():
+            line = line.strip()
+            if "security layer" in line.lower() and "rdp" in line.lower():
+                results.setdefault("rdp_encryption", line.strip("| ")[:100])
+            elif "classic rdp security" in line.lower() or "rdp security layer" in line.lower():
+                if {"name": "RDP using weak Classic security layer", "severity": "HIGH"} not in nse_vulns:
+                    nse_vulns.append({"name": "RDP using weak Classic security layer", "severity": "HIGH"})
+
+    # FTP anonymous login check
+    if 21 in ports_set:
+        out = _run([
+            "nmap", "-n", "-p", "21",
+            "--script", "ftp-anon",
+            "--host-timeout", timeout_flag, ip,
+        ])
+        nse_vulns = results.setdefault("nse_vulns", [])
+        for line in out.splitlines():
+            line = line.strip()
+            if "anonymous ftp login allowed" in line.lower():
+                nse_vulns.append({"name": "FTP anonymous login allowed", "severity": "HIGH"})
+                break
+
+    # HTTP default accounts check
+    if web_ports:
+        out = _run([
+            "nmap", "-n", "-p", ",".join(str(p) for p in web_ports),
+            "--script", "http-default-accounts",
+            "--host-timeout", timeout_flag, ip,
+        ])
+        nse_vulns = results.setdefault("nse_vulns", [])
+        for line in out.splitlines():
+            line = line.strip()
+            if "default credentials" in line.lower() or "valid credentials" in line.lower():
+                nse_vulns.append({"name": f"HTTP default credentials found: {line[:80]}", "severity": "CRITICAL"})
+
+    # SSL vulnerability checks (HEARTBLEED, POODLE)
+    all_ssl_ports = [p for p in (443, 8443, 636, 993, 995) if p in ports_set]
+    if all_ssl_ports:
+        out = _run([
+            "nmap", "-n", "-p", ",".join(str(p) for p in all_ssl_ports),
+            "--script", "ssl-heartbleed,ssl-poodle",
+            "--host-timeout", timeout_flag, ip,
+        ])
+        nse_vulns = results.setdefault("nse_vulns", [])
+        current_port = None
+        for line in out.splitlines():
+            pm = re.match(r"^(\d+)/tcp", line)
+            if pm:
+                current_port = int(pm.group(1))
+            line_s = line.strip()
+            if "heartbleed" in line_s.lower() and "vulnerable" in line_s.lower():
+                label = f"HEARTBLEED on port {current_port}" if current_port else "HEARTBLEED"
+                nse_vulns.append({"name": label, "severity": "CRITICAL"})
+            elif "poodle" in line_s.lower() and "vulnerable" in line_s.lower():
+                label = f"POODLE SSL3 on port {current_port}" if current_port else "POODLE SSL3"
+                nse_vulns.append({"name": label, "severity": "HIGH"})
+
+    # Deduplicate nse_vulns
+    if results.get("nse_vulns"):
+        seen = set()
+        deduped = []
+        for v in results["nse_vulns"]:
+            key = v.get("name", "")
+            if key not in seen:
+                seen.add(key)
+                deduped.append(v)
+        results["nse_vulns"] = deduped
 
     return results
 
@@ -1834,6 +2119,11 @@ def phase6_security(hosts: list) -> list:
                 "flag": f"Unidentified device (unknown OUI) with {len(ports_set)} open services",
                 "severity": "LOW",
             })
+
+        # NSE vulnerability findings (from NSE-1/NSE-2 scripts)
+        for vuln in services.get("nse_vulns", []):
+            flags.append({"flag": vuln.get("name", "Unknown vulnerability"),
+                          "severity": vuln.get("severity", "HIGH")})
 
         host["security_flags"] = flags
         total_flags += len(flags)
@@ -4083,6 +4373,759 @@ def phase16_eol_detection(hosts: list, config: dict) -> dict:
     }
 
 
+# ── Phase 17: testssl.sh Deep TLS Analysis ────────────────────────────────
+
+TESTSSL_BIN = Path("/opt/network-discovery/bin/testssl.sh")
+
+
+def phase17_testssl(hosts: list, config: dict) -> dict:
+    """Phase 17: Deep TLS/SSL analysis using testssl.sh.
+
+    For each host with TLS-capable ports open, runs testssl.sh --jsonfile
+    and parses findings for deprecated protocols, weak ciphers, and known
+    TLS vulnerabilities (HEARTBLEED, POODLE, ROBOT).
+
+    Adds tls_audit field to matching host records.
+    """
+    logger.info("[Phase 17] testssl.sh Deep TLS Analysis...")
+    if not TESTSSL_BIN.exists():
+        logger.warning("  testssl.sh not found — skipping (run install.sh to install)")
+        return {"available": False, "hosts_audited": 0, "findings": []}
+
+    tls_ports = config.get("testssl_ports", [443, 8443, 636, 993, 995])
+    results_by_host = {}
+    all_findings = []
+    hosts_audited = 0
+
+    for host in hosts:
+        ip = host.get("ip", "")
+        open_ports = set(host.get("open_ports", []))
+        target_ports = [p for p in tls_ports if p in open_ports]
+        if not target_ports:
+            continue
+
+        host_findings = []
+        for port in target_ports:
+            import tempfile, os as _os
+            with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
+                json_out = tf.name
+            try:
+                proc = subprocess.run(
+                    [str(TESTSSL_BIN), "--jsonfile", json_out,
+                     "--quiet", "--warnings", "off",
+                     f"{ip}:{port}"],
+                    capture_output=True, text=True, timeout=90,
+                )
+                if _os.path.exists(json_out) and _os.path.getsize(json_out) > 0:
+                    with open(json_out) as jf:
+                        try:
+                            data = json.load(jf)
+                        except json.JSONDecodeError:
+                            data = []
+                    for entry in (data if isinstance(data, list) else []):
+                        finding_id = entry.get("id", "")
+                        severity = entry.get("severity", "").upper()
+                        finding = entry.get("finding", "")
+                        if severity in ("CRITICAL", "HIGH", "MEDIUM", "WARN") and finding:
+                            mapped_sev = "CRITICAL" if severity == "CRITICAL" else \
+                                         "HIGH" if severity in ("HIGH", "WARN") else "MEDIUM"
+                            host_findings.append({
+                                "port": port,
+                                "id": finding_id,
+                                "severity": mapped_sev,
+                                "finding": finding[:200],
+                            })
+                            # Surface as security flag
+                            host.setdefault("security_flags", []).append({
+                                "flag": f"TLS ({ip}:{port}) {finding_id}: {finding[:80]}",
+                                "severity": mapped_sev,
+                            })
+            except subprocess.TimeoutExpired:
+                logger.warning(f"  testssl.sh timeout for {ip}:{port}")
+            except Exception as e:
+                logger.debug(f"  testssl.sh error for {ip}:{port}: {e}")
+            finally:
+                try:
+                    _os.unlink(json_out)
+                except Exception:
+                    pass
+
+        if host_findings:
+            host["tls_audit"] = host_findings
+            results_by_host[ip] = host_findings
+            all_findings.extend(host_findings)
+            hosts_audited += 1
+
+    logger.info(f"  testssl.sh complete: {hosts_audited} hosts audited, {len(all_findings)} findings.")
+    return {
+        "available": True,
+        "hosts_audited": hosts_audited,
+        "findings": all_findings,
+        "by_host": results_by_host,
+    }
+
+
+# ── Phase 18: Nikto Web Vulnerability Scanning ────────────────────────────
+
+def phase18_nikto(hosts: list, config: dict) -> dict:
+    """Phase 18: Nikto web vulnerability scanning.
+
+    Runs nikto against each host with HTTP/HTTPS ports open, with a per-host
+    time limit and a total scan budget to avoid excessive scan duration.
+    """
+    logger.info("[Phase 18] Nikto Web Vulnerability Scanning...")
+    try:
+        subprocess.run(["nikto", "-Version"], capture_output=True, timeout=5)
+    except (FileNotFoundError, Exception):
+        logger.warning("  nikto not found — skipping (add nikto to install.sh)")
+        return {"available": False, "hosts_scanned": 0, "findings": []}
+
+    web_ports_set = {80, 443, 8080, 8443}
+    max_time = int(config.get("nikto_max_time", 300))
+    scan_budget = int(config.get("nikto_scan_budget", 1800))
+    budget_used = 0
+    hosts_scanned = 0
+    all_findings = []
+
+    for host in hosts:
+        if budget_used >= scan_budget:
+            logger.info("  Nikto scan budget exhausted — skipping remaining hosts.")
+            break
+        ip = host.get("ip", "")
+        open_ports = set(host.get("open_ports", []))
+        target_ports = [p for p in sorted(web_ports_set & open_ports)]
+        if not target_ports:
+            continue
+
+        host_findings = []
+        for port in target_ports:
+            if budget_used >= scan_budget:
+                break
+            protocol = "https" if port in (443, 8443) else "http"
+            t0 = time.time()
+            try:
+                proc = subprocess.run(
+                    ["nikto", "-h", ip, "-p", str(port),
+                     "-maxtime", str(max_time),
+                     "-nointeractive", "-Format", "txt"],
+                    capture_output=True, text=True,
+                    timeout=max_time + 30,
+                )
+                elapsed = time.time() - t0
+                budget_used += elapsed
+                for line in proc.stdout.splitlines():
+                    # Nikto finding lines start with "+ "
+                    if line.startswith("+ "):
+                        finding_text = line[2:].strip()
+                        # Skip purely informational lines
+                        if any(s in finding_text.lower() for s in
+                               ("server:", "target ip:", "target hostname:", "target port:",
+                                "start time:", "end time:", "requests made:", "error count:")):
+                            continue
+                        severity = "HIGH" if any(
+                            s in finding_text.lower() for s in
+                            ("osvdb", "cve-", "remote file inclusion", "sql injection",
+                             "cross-site", "xss", "backdoor", "shell", "remote code")
+                        ) else "MEDIUM"
+                        host_findings.append({
+                            "port": port,
+                            "protocol": protocol,
+                            "finding": finding_text[:300],
+                            "severity": severity,
+                        })
+                        # Surface as security flag
+                        host.setdefault("security_flags", []).append({
+                            "flag": f"Nikto ({ip}:{port}): {finding_text[:100]}",
+                            "severity": severity,
+                        })
+            except subprocess.TimeoutExpired:
+                budget_used += max_time
+                logger.warning(f"  Nikto timeout for {ip}:{port}")
+            except Exception as e:
+                logger.debug(f"  Nikto error for {ip}:{port}: {e}")
+
+        if host_findings:
+            host["nikto_findings"] = host_findings
+            all_findings.extend(host_findings)
+            hosts_scanned += 1
+
+    logger.info(f"  Nikto complete: {hosts_scanned} hosts scanned, {len(all_findings)} findings.")
+    return {
+        "available": True,
+        "hosts_scanned": hosts_scanned,
+        "findings": all_findings,
+        "budget_used_seconds": round(budget_used, 1),
+    }
+
+
+# ── Phase 19: SPEEDTEST WAN Bandwidth Baseline ────────────────────────────
+
+def phase19_speedtest(config: dict) -> dict:
+    """Phase 19: WAN bandwidth baseline via speedtest-cli.
+
+    Runs speedtest-cli --json with a configurable timeout during the
+    OSINT/external phase and returns download/upload/ping metrics.
+    """
+    logger.info("[Phase 19] WAN Bandwidth Test...")
+    timeout = int(config.get("speedtest_timeout", 60))
+    result = {
+        "available": False,
+        "download_mbps": None,
+        "upload_mbps": None,
+        "ping_ms": None,
+        "server": "",
+        "error": "",
+    }
+
+    # Try speedtest-cli (pip) first, then the Ookla CLI
+    for cmd in (["speedtest-cli", "--json"], ["speedtest", "--format=json"]):
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout,
+            )
+            if proc.returncode == 0 and proc.stdout.strip():
+                data = json.loads(proc.stdout.strip())
+                # speedtest-cli uses bits/s, convert to Mbps
+                dl = data.get("download", 0)
+                ul = data.get("upload", 0)
+                ping = data.get("ping", 0)
+                server = (data.get("server", {}) or {})
+                server_label = server.get("name", "") or data.get("server", {}).get("host", "")
+                result.update({
+                    "available": True,
+                    "download_mbps": round(dl / 1_000_000, 2) if dl else round(
+                        data.get("download", {}).get("bandwidth", 0) * 8 / 1_000_000, 2),
+                    "upload_mbps": round(ul / 1_000_000, 2) if ul else round(
+                        data.get("upload", {}).get("bandwidth", 0) * 8 / 1_000_000, 2),
+                    "ping_ms": round(ping, 1) if isinstance(ping, (int, float)) else (
+                        round(data.get("ping", {}).get("latency", 0), 1)),
+                    "server": str(server_label)[:80],
+                    "error": "",
+                })
+                logger.info(
+                    f"  Speedtest: {result['download_mbps']} Mbps down / "
+                    f"{result['upload_mbps']} Mbps up / {result['ping_ms']} ms ping"
+                )
+                return result
+        except subprocess.TimeoutExpired:
+            result["error"] = "Speedtest timed out"
+            logger.warning("  Speedtest timed out")
+            return result
+        except FileNotFoundError:
+            continue
+        except json.JSONDecodeError as e:
+            logger.debug(f"  Speedtest JSON parse error: {e}")
+            continue
+        except Exception as e:
+            logger.debug(f"  Speedtest error: {e}")
+            continue
+
+    result["error"] = "speedtest-cli not installed"
+    logger.warning("  speedtest-cli not found — skipping bandwidth test")
+    return result
+
+
+# ── Phase 20: enum4linux-ng Deep SMB/Windows Enumeration ──────────────────
+
+ENUM4LINUX_BIN = Path("/opt/network-discovery/bin/enum4linux-ng/enum4linux-ng.py")
+
+
+def phase20_enum4linux(hosts: list, config: dict) -> dict:
+    """Phase 20: Deep SMB/Windows enumeration via enum4linux-ng.
+
+    For each host with ports 139 or 445 open, runs enum4linux-ng -A -oJ
+    and parses shares, users, groups, and password policy.
+    """
+    logger.info("[Phase 20] Deep SMB/Windows Enumeration (enum4linux-ng)...")
+
+    # Check for enum4linux-ng
+    python_bin = str(Path("/opt/network-discovery/venv/bin/python3"))
+    if not ENUM4LINUX_BIN.exists():
+        logger.warning("  enum4linux-ng not found — skipping (run install.sh to install)")
+        return {"available": False, "hosts_enumerated": 0, "results": {}}
+
+    smb_hosts = [h for h in hosts if 445 in h.get("open_ports", [])
+                 or 139 in h.get("open_ports", [])]
+    if not smb_hosts:
+        logger.info("  No SMB hosts found — skipping enum4linux-ng.")
+        return {"available": True, "hosts_enumerated": 0, "results": {}}
+
+    import tempfile, os as _os
+    results_by_host = {}
+    hosts_enumerated = 0
+
+    for host in smb_hosts:
+        ip = host.get("ip", "")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            json_out_prefix = f"{tmpdir}/enum4linux"
+            try:
+                proc = subprocess.run(
+                    [python_bin, str(ENUM4LINUX_BIN), "-A", "-oJ",
+                     json_out_prefix, ip],
+                    capture_output=True, text=True, timeout=120,
+                )
+                json_file = f"{json_out_prefix}.json"
+                if _os.path.exists(json_file):
+                    with open(json_file) as jf:
+                        data = json.load(jf)
+                    enum_result = {
+                        "shares": [],
+                        "users": [],
+                        "groups": [],
+                        "password_policy": {},
+                        "workgroup": data.get("workgroup", ""),
+                        "domain": data.get("domain", ""),
+                    }
+
+                    # Shares
+                    for share in (data.get("shares") or []):
+                        name = share.get("name", "") if isinstance(share, dict) else str(share)
+                        enum_result["shares"].append(name)
+
+                    # Users
+                    for user in (data.get("users") or []):
+                        uname = user.get("username", "") if isinstance(user, dict) else str(user)
+                        if uname:
+                            enum_result["users"].append(uname)
+
+                    # Groups
+                    for grp in (data.get("groups") or []):
+                        gname = grp.get("groupname", grp.get("name", "")) if isinstance(grp, dict) else str(grp)
+                        if gname:
+                            enum_result["groups"].append(gname)
+
+                    # Password policy
+                    pp = data.get("password_policy") or {}
+                    if isinstance(pp, dict):
+                        enum_result["password_policy"] = {
+                            "min_length": pp.get("minimum_password_length", ""),
+                            "complexity": pp.get("password_complexity", ""),
+                            "max_age": pp.get("maximum_password_age", ""),
+                            "lockout_threshold": pp.get("lockout_threshold", ""),
+                        }
+
+                    host["smb_enumeration"] = enum_result
+                    results_by_host[ip] = enum_result
+                    hosts_enumerated += 1
+                    logger.info(
+                        f"  {ip}: {len(enum_result['shares'])} shares, "
+                        f"{len(enum_result['users'])} users"
+                    )
+            except subprocess.TimeoutExpired:
+                logger.warning(f"  enum4linux-ng timeout for {ip}")
+            except Exception as e:
+                logger.debug(f"  enum4linux-ng error for {ip}: {e}")
+
+    logger.info(f"  enum4linux-ng complete: {hosts_enumerated} hosts enumerated.")
+    return {
+        "available": True,
+        "hosts_enumerated": hosts_enumerated,
+        "results": results_by_host,
+    }
+
+
+# ── Phase 21: p0f Passive OS Fingerprinting ───────────────────────────────
+
+def phase21_p0f(hosts: list, config: dict) -> dict:
+    """Phase 21: Passive OS fingerprinting via p0f.
+
+    Reads the p0f results from the data directory (written by discovery-main.py
+    which starts p0f before the scan). Merges p0f OS guesses into host records
+    where nmap OS detection failed.
+    """
+    logger.info("[Phase 21] p0f Passive OS Fingerprinting...")
+    p0f_log = DATA_DIR / "p0f.log"
+    result = {
+        "available": False,
+        "hosts_fingerprinted": 0,
+        "os_guesses": {},
+    }
+
+    if not p0f_log.exists():
+        logger.info("  p0f log not found — p0f may not have run (see install.sh)")
+        return result
+
+    # Parse p0f log format: [timestamp] | client  = ip/port | ...
+    # mod=syn | subj=cli | os=... | dist=...
+    os_by_ip: dict = {}
+    try:
+        with open(p0f_log, errors="replace") as f:
+            current_ip = None
+            for line in f:
+                line = line.strip()
+                ip_m = re.search(r"client\s*=\s*([\d.]+)/", line)
+                if ip_m:
+                    current_ip = ip_m.group(1)
+                os_m = re.search(r"os\s*=\s*([^\|]+)", line)
+                if os_m and current_ip:
+                    os_guess = os_m.group(1).strip()
+                    if os_guess and os_guess != "???":
+                        os_by_ip[current_ip] = os_guess
+                        current_ip = None
+    except Exception as e:
+        logger.debug(f"  p0f log parse error: {e}")
+        return result
+
+    result["available"] = True
+    result["os_guesses"] = os_by_ip
+
+    # Merge into hosts where nmap OS detection was empty
+    enriched = 0
+    for host in hosts:
+        ip = host.get("ip", "")
+        if ip in os_by_ip and not host.get("os_guess"):
+            host["os_guess"] = f"p0f: {os_by_ip[ip]}"
+            enriched += 1
+
+    result["hosts_fingerprinted"] = enriched
+    logger.info(f"  p0f: {len(os_by_ip)} IPs fingerprinted, {enriched} host records enriched.")
+    return result
+
+
+# ── Phase 22: Kismet Passive Wireless IDS ─────────────────────────────────
+
+def phase22_kismet(wifi_results: dict, config: dict) -> dict:
+    """Phase 22: Kismet passive wireless IDS (Pi 4+ only, opt-in).
+
+    Runs Kismet in daemon mode for a configurable duration, then parses
+    alerts for rogue APs, deauth attacks, and anomalies.
+    """
+    logger.info("[Phase 22] Kismet Passive Wireless IDS...")
+
+    duration = int(config.get("kismet_duration", 90))
+    result = {
+        "available": False,
+        "ran": False,
+        "alerts": [],
+        "open_ssids": [],
+        "error": "",
+    }
+
+    # Check prerequisites
+    try:
+        subprocess.run(["kismet", "--version"], capture_output=True, timeout=5)
+    except (FileNotFoundError, Exception):
+        logger.warning("  kismet not found — skipping (see install.sh)")
+        result["error"] = "kismet not installed"
+        return result
+
+    result["available"] = True
+
+    # Check for monitor-mode capable WiFi interface
+    wifi_ifaces = []
+    try:
+        iw_out = subprocess.check_output(
+            ["iw", "dev"], text=True, timeout=10, stderr=subprocess.DEVNULL
+        )
+        for line in iw_out.splitlines():
+            m = re.search(r"Interface\s+(\S+)", line)
+            if m:
+                wifi_ifaces.append(m.group(1))
+    except Exception:
+        pass
+
+    if not wifi_ifaces:
+        logger.warning("  No WiFi interfaces found for Kismet")
+        result["error"] = "No WiFi interfaces"
+        return result
+
+    import tempfile, os as _os
+    with tempfile.TemporaryDirectory() as tmpdir:
+        kismet_log_prefix = f"{tmpdir}/kismet"
+        kismet_pid_file = f"{tmpdir}/kismet.pid"
+        iface = wifi_ifaces[0]
+        try:
+            # Start Kismet in background (non-interactive daemon mode)
+            proc = subprocess.Popen(
+                ["kismet", "--no-ncurses-wrapper", "--daemonize",
+                 "--pid-file", kismet_pid_file,
+                 "--log-prefix", kismet_log_prefix,
+                 "-c", iface],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            )
+            logger.info(f"  Kismet running on {iface} for {duration}s...")
+            time.sleep(duration)
+
+            # Stop Kismet
+            try:
+                if _os.path.exists(kismet_pid_file):
+                    with open(kismet_pid_file) as pf:
+                        pid = int(pf.read().strip())
+                    import signal
+                    _os.kill(pid, signal.SIGTERM)
+                    time.sleep(2)
+            except Exception:
+                proc.terminate()
+
+            result["ran"] = True
+
+            # Parse Kismet alerts from log (kismetdb or text alert log)
+            alert_log = f"{kismet_log_prefix}-kismet.alert"
+            if _os.path.exists(alert_log):
+                with open(alert_log, errors="replace") as af:
+                    for line in af:
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            result["alerts"].append(line[:200])
+
+            # Collect open SSIDs from WiFi scan results
+            networks = (wifi_results or {}).get("networks", [])
+            for net in networks:
+                if net.get("encryption") in ("OPN", "OPEN", ""):
+                    ssid = net.get("ssid", "")
+                    if ssid:
+                        result["open_ssids"].append(ssid)
+
+            logger.info(
+                f"  Kismet: {len(result['alerts'])} alerts, "
+                f"{len(result['open_ssids'])} open SSIDs"
+            )
+
+        except Exception as e:
+            logger.warning(f"  Kismet error: {e}")
+            result["error"] = str(e)
+
+    return result
+
+
+# ── Phase 23: Delta Reporting (New / Removed Devices) ─────────────────────
+
+PREVIOUS_HOSTS_FILE = DATA_DIR / "previous-hosts.json"
+
+
+def phase23_delta_reporting(hosts: list, config: dict) -> dict:
+    """Phase 23: Compare current hosts to previous scan for delta reporting.
+
+    Stores current host list to previous-hosts.json after comparison.
+    Returns new_devices, removed_devices, new_ports, and new_flags dicts.
+    """
+    logger.info("[Phase 23] Delta Reporting...")
+    result = {
+        "has_previous": False,
+        "new_devices": [],
+        "removed_devices": [],
+        "new_ports": {},
+        "new_flags": {},
+        "previous_scan_time": "",
+    }
+
+    # Load previous hosts
+    prev_hosts_by_ip: dict = {}
+    if PREVIOUS_HOSTS_FILE.exists():
+        try:
+            with open(PREVIOUS_HOSTS_FILE) as f:
+                prev_data = json.load(f)
+            result["previous_scan_time"] = prev_data.get("scan_time", "")
+            for h in prev_data.get("hosts", []):
+                prev_hosts_by_ip[h["ip"]] = h
+            result["has_previous"] = bool(prev_hosts_by_ip)
+        except Exception as e:
+            logger.debug(f"  Delta: failed to load previous hosts: {e}")
+
+    current_by_ip = {h["ip"]: h for h in hosts}
+
+    if result["has_previous"]:
+        # New devices (in current but not previous)
+        for ip, host in current_by_ip.items():
+            if ip not in prev_hosts_by_ip:
+                result["new_devices"].append({
+                    "ip": ip,
+                    "hostname": host.get("hostname", "N/A"),
+                    "vendor": host.get("vendor", "Unknown"),
+                    "category": host.get("category", "Unknown"),
+                    "open_ports": host.get("open_ports", []),
+                })
+
+        # Removed devices (in previous but not current)
+        for ip, prev_host in prev_hosts_by_ip.items():
+            if ip not in current_by_ip:
+                result["removed_devices"].append({
+                    "ip": ip,
+                    "hostname": prev_host.get("hostname", "N/A"),
+                    "vendor": prev_host.get("vendor", "Unknown"),
+                })
+
+        # New ports (ports in current but not in previous for same host)
+        for ip, host in current_by_ip.items():
+            if ip in prev_hosts_by_ip:
+                prev_ports = set(prev_hosts_by_ip[ip].get("open_ports", []))
+                curr_ports = set(host.get("open_ports", []))
+                added_ports = sorted(curr_ports - prev_ports)
+                if added_ports:
+                    result["new_ports"][ip] = added_ports
+
+        # New flags (security flags in current but not in previous)
+        for ip, host in current_by_ip.items():
+            if ip in prev_hosts_by_ip:
+                prev_flags = {f["flag"] for f in prev_hosts_by_ip[ip].get("security_flags", [])}
+                curr_flags = host.get("security_flags", [])
+                new_f = [f for f in curr_flags if f["flag"] not in prev_flags]
+                if new_f:
+                    result["new_flags"][ip] = new_f
+
+        logger.info(
+            f"  Delta: {len(result['new_devices'])} new, "
+            f"{len(result['removed_devices'])} removed, "
+            f"{len(result['new_ports'])} hosts with new ports"
+        )
+    else:
+        logger.info("  Delta: no previous scan data found — this is the baseline.")
+
+    # Save current hosts for next scan comparison
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        save_data = {
+            "scan_time": datetime.now().isoformat(),
+            "hosts": [
+                {
+                    "ip": h["ip"],
+                    "hostname": h.get("hostname", "N/A"),
+                    "vendor": h.get("vendor", "Unknown"),
+                    "category": h.get("category", "Unknown"),
+                    "open_ports": h.get("open_ports", []),
+                    "security_flags": h.get("security_flags", []),
+                }
+                for h in hosts
+            ],
+        }
+        with open(PREVIOUS_HOSTS_FILE, "w") as f:
+            json.dump(save_data, f, indent=2)
+        logger.debug(f"  Delta: saved {len(hosts)} hosts to {PREVIOUS_HOSTS_FILE}")
+    except Exception as e:
+        logger.warning(f"  Delta: failed to save host snapshot: {e}")
+
+    return result
+
+
+# ── Phase 24: Network Topology Diagram ────────────────────────────────────
+
+def phase24_topology_diagram(hosts: list, topology: dict, recon: dict) -> dict:
+    """Phase 24: Generate an ASCII network topology diagram from traceroute data.
+
+    Parses the hop data already collected in Phase 5 to build a simple
+    hop-graph, then renders an ASCII art network map showing the gateway,
+    subnets, and key devices.
+    """
+    logger.info("[Phase 24] Network Topology Diagram...")
+
+    gw_ip = recon.get("default_gateway", "")
+    hops_by_target = topology.get("hops_by_target", {})
+    all_hosts_by_ip = {h["ip"]: h for h in hosts}
+
+    # Collect unique IPs that appear as intermediate hops
+    hop_ips: set = set()
+    for hops in hops_by_target.values():
+        for h in hops:
+            hop_ips.add(h)
+
+    # Categorize hosts into tiers
+    gw_hosts = [h for h in hosts if h.get("is_gateway") or h.get("ip") == gw_ip]
+    router_ips = hop_ips - {gw_ip} - set(all_hosts_by_ip.keys())
+    infra_hosts = [h for h in hosts if h.get("category") in
+                   ("Firewall", "Network Switch", "Wireless Access Point",
+                    "Network Infrastructure") and not h.get("is_gateway")]
+    server_hosts = [h for h in hosts if h.get("category") in
+                    ("Windows Server", "Linux/Unix Server", "Server",
+                     "Database Server", "Domain Controller", "Hypervisor",
+                     "NAS / Storage")]
+    endpoint_hosts = [h for h in hosts if h.get("category") in
+                      ("Windows Workstation", "Windows Device", "Apple Device",
+                       "IP Camera / NVR", "VoIP Phone", "Printer", "IoT Device",
+                       "Raspberry Pi")]
+    unknown_hosts = [h for h in hosts if h.get("category") in
+                     ("Unknown Device", "Unknown", "")]
+
+    def _host_label(h: dict, max_len: int = 18) -> str:
+        ip = h.get("ip", "")
+        hn = h.get("hostname", "") or ""
+        if hn and hn not in ("N/A", ""):
+            hn = hn.split(".")[0][:max_len]
+            return f"{hn} ({ip})"
+        return ip
+
+    lines = []
+    lines.append("NETWORK TOPOLOGY MAP")
+    lines.append("=" * 60)
+
+    # Internet / WAN
+    pub = recon.get("public_ip_info", {})
+    pub_ip = pub.get("public_ip", "")
+    isp = pub.get("isp", "")
+    if pub_ip:
+        lines.append(f"  [INTERNET / WAN]")
+        lines.append(f"  Public IP: {pub_ip}  ISP: {isp}")
+        lines.append("       |")
+
+    # Gateway tier
+    if gw_hosts:
+        gw = gw_hosts[0]
+        gw_label = _host_label(gw)
+        gw_info = gw.get("gateway_info", {}) or {}
+        gw_product = gw_info.get("product", "") or gw.get("category", "Gateway")
+        lines.append(f"  [{gw_product.upper()}] {gw_label}")
+        lines.append("       |")
+    elif gw_ip:
+        lines.append(f"  [GATEWAY] {gw_ip}")
+        lines.append("       |")
+
+    # Infrastructure tier
+    if infra_hosts:
+        lines.append("  [NETWORK INFRASTRUCTURE]")
+        for h in infra_hosts[:8]:
+            cat = h.get("category", "")
+            lines.append(f"    +-- [{cat[:12]}] {_host_label(h)}")
+        if len(infra_hosts) > 8:
+            lines.append(f"    +-- ... ({len(infra_hosts) - 8} more)")
+        lines.append("       |")
+
+    # Subnets scanned
+    subnets = recon.get("subnets", [])
+    if subnets:
+        lines.append(f"  [LAN: {', '.join(subnets[:3])}]")
+        lines.append("       |")
+
+    # Server tier
+    if server_hosts:
+        lines.append("  [SERVERS]")
+        for h in server_hosts[:8]:
+            cat = h.get("category", "Server")
+            lines.append(f"    +-- [{cat[:12]}] {_host_label(h)}")
+        if len(server_hosts) > 8:
+            lines.append(f"    +-- ... ({len(server_hosts) - 8} more)")
+
+    # Endpoint tier
+    if endpoint_hosts:
+        lines.append("  [ENDPOINTS / DEVICES]")
+        for h in endpoint_hosts[:12]:
+            cat = h.get("category", "Device")
+            lines.append(f"    +-- [{cat[:12]}] {_host_label(h)}")
+        if len(endpoint_hosts) > 12:
+            lines.append(f"    +-- ... ({len(endpoint_hosts) - 12} more)")
+
+    # Unknown devices
+    if unknown_hosts:
+        lines.append(f"  [UNKNOWN / UNIDENTIFIED: {len(unknown_hosts)} device(s)]")
+        for h in unknown_hosts[:5]:
+            lines.append(f"    +-- {_host_label(h)}")
+        if len(unknown_hosts) > 5:
+            lines.append(f"    +-- ... ({len(unknown_hosts) - 5} more)")
+
+    lines.append("=" * 60)
+    ascii_map = "\n".join(lines)
+
+    logger.info(f"  Topology diagram: {len(lines)} lines generated.")
+    return {
+        "ascii_map": ascii_map,
+        "tier_counts": {
+            "gateways": len(gw_hosts),
+            "infrastructure": len(infra_hosts),
+            "servers": len(server_hosts),
+            "endpoints": len(endpoint_hosts),
+            "unknown": len(unknown_hosts),
+        },
+    }
+
+
 # ── Hostname Enrichment ────────────────────────────────────────────────────
 
 def _enrich_hostnames_from_discovery(
@@ -4373,6 +5416,46 @@ def run_discovery(progress_callback=None) -> dict:
         phase16_eol_detection, hosts, config,
         config_key="enable_eol_detection")
 
+    # ── Extended tool phases (17–24) ─────────────────────────────────────
+    testssl_results = _run_phase(
+        "17", "testssl.sh deep TLS analysis",
+        phase17_testssl, hosts, config,
+        config_key="enable_testssl")
+
+    nikto_results = _run_phase(
+        "18", "Nikto web vulnerability scan",
+        phase18_nikto, hosts, config,
+        config_key="enable_nikto")
+
+    speedtest_results = _run_phase(
+        "19", "WAN bandwidth test",
+        phase19_speedtest, config,
+        config_key="enable_speedtest")
+
+    enum4linux_results = _run_phase(
+        "20", "enum4linux-ng SMB enumeration",
+        phase20_enum4linux, hosts, config,
+        config_key="enable_enum4linux")
+
+    p0f_results = _run_phase(
+        "21", "p0f passive OS fingerprinting",
+        phase21_p0f, hosts, config,
+        config_key="enable_p0f")
+
+    kismet_results = _run_phase(
+        "22", "Kismet wireless IDS",
+        phase22_kismet, wifi_results, config,
+        config_key="enable_kismet")
+
+    delta_results = _run_phase(
+        "23", "Delta reporting",
+        phase23_delta_reporting, hosts, config,
+        config_key="enable_delta_reporting")
+
+    topology_diagram = _run_phase(
+        "24", "Network topology diagram",
+        phase24_topology_diagram, hosts, topology, recon)
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
@@ -4420,6 +5503,15 @@ def run_discovery(progress_callback=None) -> dict:
         "ssl_audit": ssl_audit_results,
         "backup_posture": backup_results,
         "eol_detection": eol_results,
+        # Extended tool results
+        "testssl": testssl_results,
+        "nikto": nikto_results,
+        "speedtest": speedtest_results,
+        "enum4linux": enum4linux_results,
+        "p0f": p0f_results,
+        "kismet": kismet_results,
+        "delta": delta_results,
+        "topology_diagram": topology_diagram,
         # Operational statistics
         "phase_timings": phase_timings,
     }

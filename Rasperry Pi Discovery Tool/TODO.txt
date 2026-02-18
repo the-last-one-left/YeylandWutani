@@ -1,0 +1,99 @@
+[x] Reorganize the report, move Operational Statistics to the bottom and group similar reporting together
+[x] Research additional tools (potentially even third party) that will work with the pi to provide a potentially more comprehensive scan and report, create a new ADDITIONAL_TOOLS.MD report with potential findings and integration steps
+[x] Review ADDITIONAL_TOOLS.MD, update this TODO.txt with manageable tasks to implement each, focusing on including all prerequisite and setups automatically though the installer script, include an additional new file called existing_pi.txt with instructions to add/update a pi from before these updates to operate with the changes
+
+--- Implementation Tasks from ADDITIONAL_TOOLS.MD (Priority Order) ---
+
+[x] NSE-1: Expand nmap scripts in network-scanner.py Phase 3/4
+    - Add to nmap args: --script smb-vuln-ms17-010,smb-vuln-ms08-067,rdp-enum-encryption,ftp-anon,http-default-accounts,ssl-heartbleed,ssl-poodle
+    - Parse NSE output and add findings to security_flags with appropriate severity
+    - No new packages required (nmap already installed)
+    - Effort: Low
+
+[x] NSE-2: Add Vulners CVE correlation via nmap NSE
+    - Add --script vulners to Phase 3 nmap call (requires internet; skip if offline)
+    - Parse vulners output; add cves list to each service with CVSS score
+    - Surface CVEs with CVSS >= 7.0 as HIGH/CRITICAL security_flags
+    - No new packages required
+    - Effort: Low
+
+[x] TESTSSL-1: Add testssl.sh integration for deep TLS analysis
+    - Install: download testssl.sh to /opt/network-discovery/bin/ in install.sh
+    - Add install.sh step: curl -sL https://testssl.sh/testssl.sh -o /opt/network-discovery/bin/testssl.sh && chmod +x
+    - New Phase 17 in network-scanner.py: for each open port 443/8443/636/993/995, run testssl.sh --jsonfile
+    - Parse JSON for deprecated protocols (TLS 1.0/1.1, SSLv3), weak ciphers, POODLE, HEARTBLEED, ROBOT
+    - Add tls_audit field to host records; new report section in report_generator.py
+    - Prereqs in install.sh: apt-get install openssl bsdmainutils (likely already present)
+    - Effort: Medium
+
+[x] NIKTO-1: Add Nikto web vulnerability scanning
+    - Install: add nikto to apt-get install list in install.sh
+    - New Phase 18 in network-scanner.py: for each host with port 80/443/8080/8443, run nikto with timeout
+    - Limit to MAX 5 minutes per host; skip if total scan time budget exceeded
+    - Parse nikto output for findings; add nikto_findings to host records
+    - Surface OSVDB/CVE findings as security_flags; add "Web Vulnerabilities" subsection to Security Observations
+    - Prereqs in install.sh: apt-get install nikto
+    - Effort: Medium
+
+[x] SPEEDTEST-1: Add WAN bandwidth baseline to OSINT phase
+    - Install: add speedtest-cli to pip install in install.sh (or download Ookla arm binary)
+    - During Phase 13 (OSINT), run speedtest-cli --json with 60s timeout
+    - Add bandwidth_test dict (download_mbps, upload_mbps, ping_ms, server) to reconnaissance
+    - Display in Network Overview report section
+    - Prereqs in install.sh: pip install speedtest-cli
+    - Effort: Low
+
+[x] ENUM4LINUX-1: Add deep SMB/Windows enumeration
+    - Install: add enum4linux-ng to pip install in install.sh
+      pip install impacket ldap3 msldap; git clone https://github.com/cddmp/enum4linux-ng to /opt/network-discovery/bin/
+    - New sub-phase in Phase 4 (Service Enumeration): for each host with 139/445 open, run enum4linux-ng -A -oJ
+    - Parse JSON output: shares, users, groups, password policy
+    - Add smb_enumeration field to host records
+    - New "Windows Environment" report section with share inventory and user counts
+    - Prereqs in install.sh: apt-get install python3-impacket; pip install impacket ldap3
+    - Effort: Medium-High
+
+[x] NETDISCOVER-1: Add passive ARP host discovery
+    - Install: add netdiscover to apt-get install list in install.sh
+    - In Phase 2 (Host Discovery): run netdiscover -r <subnet> -P -N (non-interactive, print-only mode)
+    - Parse output for IP/MAC pairs; merge into arp_results before nmap sweep
+    - Helps discover hosts that rate-limit ICMP/ARP-ping responses
+    - Prereqs in install.sh: apt-get install netdiscover
+    - Effort: Low
+
+[x] RUSTSCAN-1: Add RustScan for faster port pre-discovery on large subnets
+    - Install: in install.sh, detect architecture (aarch64 vs armv7l); download appropriate RustScan binary from GitHub releases
+    - When subnet > /24 or host count > 50, run RustScan first to find open ports
+    - Pass confirmed open ports to nmap via -p argument for service detection
+    - Reduces total scan time significantly for large networks
+    - Prereqs in install.sh: download binary, chmod +x, place in /opt/network-discovery/bin/rustscan
+    - Effort: Medium
+
+[x] P0F-1: Add passive OS fingerprinting via p0f
+    - Install: add p0f to apt-get install list in install.sh
+    - In discovery-main.py: start p0f daemon before scanner, stop after; read p0f log
+    - Merge p0f OS guesses into host records where nmap OS detection failed
+    - Helpful for IoT devices, cameras, and printers that block active OS probes
+    - Prereqs in install.sh: apt-get install p0f
+    - Effort: Medium
+
+[x] KISMET-1: Add Kismet passive wireless IDS (Pi 4+ only)
+    - Install: add kismet to apt-get install list in install.sh (with Pi model check - skip on Pi < 4)
+    - Detect if WiFi adapter supports monitor mode before enabling
+    - Run Kismet for ~90 seconds during WiFi phase; parse alerts for rogue APs, deauth attacks
+    - Add wireless_ids field to wifi_results; report open SSIDs and anomalies in WiFi section
+    - Prereqs in install.sh: apt-get install kismet; add network-discovery user to kismet group
+    - Effort: High
+
+[x] REPORT-1: Add "New This Scan" delta reporting
+    - Store previous scan's host list in /opt/network-discovery/data/previous-hosts.json
+    - Compare current hosts to previous: new_devices, removed_devices, new_ports, new_flags
+    - Add delta section to report showing changes since last scan
+    - Particularly useful for weekly recurring scans to highlight drift
+    - Effort: Medium
+
+[x] REPORT-2: Add network topology diagram to report
+    - Parse traceroute data already collected in Phase 5 to build hop graph
+    - Generate ASCII or inline SVG network map showing gateway, subnets, and key devices
+    - Embed in report between Network Overview and Device Breakdown
+    - Effort: Medium-High
