@@ -210,7 +210,7 @@ Add the following keys inside the "network_discovery" block:
   "rustscan_threshold_hosts": 50,
   "enable_p0f": true,
   "p0f_duration": 30,
-  "enable_kismet": false,
+  "enable_kismet": true,
   "kismet_duration": 90,
   "enable_delta_reporting": true
 
