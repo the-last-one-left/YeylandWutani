@@ -1,6 +1,1 @@
-[x] Getting these errors despite the tools being installed --
-
-[WARNING] network_scanner -   speedtest-cli not found — skipping bandwidth test
-[WARNING] network_scanner -   kismet not found — skipping (see install.sh)
-[INFO] network_scanner -   p0f log not found — p0f may not have run (see install.sh)
-
+[ ] Reorganize HTML report, putting CVE detections (long lists) at bottom, put operational stats at very bottom
