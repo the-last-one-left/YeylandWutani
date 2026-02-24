@@ -21,7 +21,8 @@
 
 .PARAMETER InputCsv
     Optional. Path to CSV file containing a UserPrincipalName column.
-    If not specified, processes all enabled member accounts in the tenant.
+    If not specified, processes all member accounts in the tenant (including
+    disabled accounts - intentional for decommissioning scenarios).
 
 .PARAMETER OutputPath
     Base path for output files (without extension).
@@ -39,7 +40,7 @@
 .NOTES
     Author:      Yeyland Wutani LLC
     Tagline:     Building Better Systems
-    Version:     2.1
+    Version:     2.2
     Requires:    Microsoft.Graph.Users module
                  ExchangeOnlineManagement module
     Permissions: User.ReadWrite.All, Organization.Read.All (Graph)
@@ -461,7 +462,7 @@ $($barRows -join "`n")
                 <div class="meta-row"><span class="meta-label">Provisioning Wait</span><span class="meta-value">$WaitTimeSeconds seconds</span></div>
                 <div class="meta-row"><span class="meta-label">Max Retries</span><span class="meta-value">$MaxRetries</span></div>
                 <div class="meta-row"><span class="meta-label">Report Generated</span><span class="meta-value">$reportDate</span></div>
-                <div class="meta-row"><span class="meta-label">Script Version</span><span class="meta-value">2.1</span></div>
+                <div class="meta-row"><span class="meta-label">Script Version</span><span class="meta-value">2.2</span></div>
             </div>
         </div>
     </div>
@@ -704,19 +705,29 @@ function Get-UsersToProcess {
         return $users
     }
 
-    Write-Log "Retrieving all enabled member accounts from Microsoft Graph..." -Level Info
-    $allUsers = Get-MgUser -All `
-        -Filter "userType eq 'Member' and accountEnabled eq true" `
-        -Property UserPrincipalName, DisplayName, Mail, Id |
-        Where-Object { $_.UserPrincipalName -notlike "*#EXT#*" } |
-        Where-Object { $_.UserPrincipalName -notmatch "^(admin|sync|svc|service|system|health|discovery)" }
+    # NOTE: accountEnabled intentionally not filtered - this is a decommission audit.
+    # Disabled users in a source tenant are the primary use case and must be included.
+    Write-Log "Retrieving all member accounts from Microsoft Graph (including disabled)..." -Level Info
 
-    Write-Log "Found $($allUsers.Count) user accounts." -Level Info
+    $allUsers = Get-MgUser -All `
+        -Filter "userType eq 'Member'" `
+        -Property UserPrincipalName, DisplayName, Mail, Id, AccountEnabled |
+        Where-Object {
+            # Exclude federated guest/external accounts only
+            $_.UserPrincipalName -notlike "*#EXT#*"
+        }
+
+    $total    = $allUsers.Count
+    $enabled  = ($allUsers | Where-Object { $_.AccountEnabled }).Count
+    $disabled = $total - $enabled
+
+    Write-Log "Found $total member accounts ($enabled enabled, $disabled disabled)." -Level Info
 
     return $allUsers | Select-Object `
         @{N = 'UserPrincipalName'; E = { $_.UserPrincipalName } },
         @{N = 'DisplayName';       E = { $_.DisplayName } },
-        @{N = 'PrimarySmtpAddress';E = { $_.Mail } }
+        @{N = 'PrimarySmtpAddress';E = { $_.Mail } },
+        @{N = 'AccountEnabled';    E = { $_.AccountEnabled } }
 }
 
 function Add-UserLicense {
@@ -985,7 +996,6 @@ try {
     $currentUser     = 0
 
     Write-Log "Processing $totalUsers user(s) using SKU: $($selectedLicense.SkuPartNumber)" -Level Info
-
     $results = [System.Collections.ArrayList]::new()
 
     foreach ($user in $usersToProcess) {
@@ -997,6 +1007,7 @@ try {
         $userResult = [PSCustomObject]@{
             UserPrincipalName          = $upn
             DisplayName                = $user.DisplayName
+            AccountEnabled             = $user.AccountEnabled
             ProcessedDateTime          = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
             LicenseSkuUsed             = $selectedLicense.SkuPartNumber
             LicenseAssigned            = $false
@@ -1149,9 +1160,10 @@ catch {
     throw
 }
 finally {
-
-    Disconnect-MgGraph -ErrorAction SilentlyContinue
-    Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
+    # Sessions left open to support re-runs in the same shell.
+    # Uncomment to disconnect automatically:
+    # Disconnect-MgGraph -ErrorAction SilentlyContinue
+    # Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 #endregion Main
