@@ -391,6 +391,56 @@ function Show-CertificateOutputMenu {
     }
 }
 
+function Show-ChallengeTypeMenu {
+    # Only show the menu in interactive mode - when parameters are passed directly, respect them
+    if (-not $script:isInteractive) { return }
+
+    # Check for wildcards - they require DNS
+    $allCheckDomains = @($DomainName) + @($AdditionalDomains | Where-Object { $_ })
+    $hasWildcard = $allCheckDomains | Where-Object { $_ -like '*`**' }
+
+    if ($hasWildcard) {
+        Write-Host ""
+        Write-Host "  Wildcard domain detected - DNS-01 validation is required." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  [1] DNS-01 with plugin (automated via DNS provider API)" -ForegroundColor Cyan
+        Write-Host "  [2] DNS-01 manual (you create TXT records when prompted)" -ForegroundColor Cyan
+        Write-Host ""
+
+        do {
+            $chalChoice = Read-Host "  Select challenge type [1-2]"
+        } while ($chalChoice -notin @('1', '2'))
+
+        if ($chalChoice -eq '1') {
+            $script:ChallengeType = 'Dns'
+        }
+        else {
+            $script:ChallengeType = 'DnsManual'
+        }
+    }
+    else {
+        Write-Host ""
+        Write-Host "  How should domain ownership be validated?" -ForegroundColor White
+        Write-Host ""
+        Write-Host "  [1] HTTP-01  - Serve a challenge file via IIS on port 80 (requires public IIS)" -ForegroundColor Cyan
+        Write-Host "  [2] DNS-01   - Create a DNS TXT record via provider API (automated)" -ForegroundColor Cyan
+        Write-Host "  [3] DNS-01   - Create a DNS TXT record manually (you will be prompted)" -ForegroundColor Cyan
+        Write-Host ""
+
+        do {
+            $chalChoice = Read-Host "  Select challenge type [1-3]"
+        } while ($chalChoice -notin @('1', '2', '3'))
+
+        switch ($chalChoice) {
+            '1' { $script:ChallengeType = 'Http' }
+            '2' { $script:ChallengeType = 'Dns' }
+            '3' { $script:ChallengeType = 'DnsManual' }
+        }
+    }
+
+    Write-Log "Challenge type: $ChallengeType"
+}
+
 # ============================================================================
 # PREREQUISITE CHECKS
 # ============================================================================
@@ -400,33 +450,76 @@ function Test-Prerequisites {
 
     # Check internet connectivity to Let's Encrypt
     $acmeEndpoint = if ($Staging) { "acme-staging-v02.api.letsencrypt.org" } else { "acme-v02.api.letsencrypt.org" }
-    $connectTest = Test-NetConnection -ComputerName $acmeEndpoint -Port 443 -WarningAction SilentlyContinue
-    if (-not $connectTest.TcpTestSucceeded) {
-        throw "Cannot reach $acmeEndpoint on port 443. Check internet connectivity and firewall rules."
+    $acmeUrl = "https://$acmeEndpoint/directory"
+
+    # Detect this server's public IP for logging
+    try {
+        $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 10 -ErrorAction Stop).Trim()
+        Write-Log "Server public IP: $publicIP" -Level Info
+    }
+    catch {
+        # Try fallbacks
+        try {
+            $publicIP = (Invoke-RestMethod -Uri "https://icanhazip.com" -TimeoutSec 10 -ErrorAction Stop).Trim()
+            Write-Log "Server public IP: $publicIP" -Level Info
+        }
+        catch {
+            Write-Log "Could not determine server public IP (not fatal)" -Level Warning
+        }
+    }
+
+    # Test actual HTTPS connectivity to the ACME directory endpoint (avoids split-DNS issues)
+    try {
+        $null = Invoke-WebRequest -Uri $acmeUrl -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+    }
+    catch {
+        throw "Cannot reach $acmeUrl. Check internet connectivity and firewall rules. Error: $($_.Exception.Message)"
     }
     Write-Log "ACME endpoint reachable ($acmeEndpoint)" -Level Success
 
     # Challenge-type-specific checks
     if ($ChallengeType -eq 'Http') {
-        # HTTP-01 requires IIS
+        # HTTP-01 requires IIS for serving the challenge file
         if (-not $script:IISAvailable) {
-            throw "HTTP-01 challenge requires IIS. Either install IIS, or use -ChallengeType Dns / -ChallengeType DnsManual for DNS-01 validation (no IIS needed)."
-        }
+            Write-Host ""
+            Write-Host "  HTTP-01 challenge requires IIS to serve the challenge file, but IIS is not available." -ForegroundColor Yellow
+            Write-Host "  You can switch to DNS-01 validation instead." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "  [1] DNS-01 with plugin (automated via DNS provider API)" -ForegroundColor Cyan
+            Write-Host "  [2] DNS-01 manual (you create TXT records when prompted)" -ForegroundColor Cyan
+            Write-Host ""
 
-        # Check port 80 listener (needed for HTTP-01 challenge)
-        $port80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
-        if (-not $port80) {
-            Write-Log "No listener on port 80. IIS must be running and listening on port 80 for HTTP-01 challenges." -Level Warning
-        }
+            do {
+                $fallbackChoice = Read-Host "  Select challenge type [1-2]"
+            } while ($fallbackChoice -notin @('1', '2'))
 
-        # Wildcard domains require DNS-01
-        $allCheckDomains = @($DomainName) + @($AdditionalDomains | Where-Object { $_ })
-        $hasWildcard = $allCheckDomains | Where-Object { $_ -like '*`**' }
-        if ($hasWildcard) {
-            throw "Wildcard certificates (e.g. *.contoso.com) require DNS-01 validation. Use -ChallengeType Dns or -ChallengeType DnsManual."
+            if ($fallbackChoice -eq '1') {
+                $script:ChallengeType = 'Dns'
+                Write-Log "Switched to DNS-01 plugin challenge (IIS not available for HTTP-01)" -Level Info
+            }
+            else {
+                $script:ChallengeType = 'DnsManual'
+                Write-Log "Switched to DNS-01 manual challenge (IIS not available for HTTP-01)" -Level Info
+            }
+        }
+        else {
+            # Check port 80 listener (needed for HTTP-01 challenge)
+            $port80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
+            if (-not $port80) {
+                Write-Log "No listener on port 80. IIS must be running and listening on port 80 for HTTP-01 challenges." -Level Warning
+            }
+
+            # Wildcard domains require DNS-01
+            $allCheckDomains = @($DomainName) + @($AdditionalDomains | Where-Object { $_ })
+            $hasWildcard = $allCheckDomains | Where-Object { $_ -like '*`**' }
+            if ($hasWildcard) {
+                throw "Wildcard certificates (e.g. *.contoso.com) require DNS-01 validation. Use -ChallengeType Dns or -ChallengeType DnsManual."
+            }
         }
     }
-    elseif ($ChallengeType -eq 'Dns') {
+
+    # Re-check after potential fallback from HTTP to DNS
+    if ($ChallengeType -eq 'Dns') {
         if (-not $DnsPlugin) {
             throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin -List' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
         }
@@ -1112,7 +1205,8 @@ try {
     $shouldInstallTask = $InstallScheduledTask.IsPresent
 
     # Determine if we're running interactively (no task switches pre-selected)
-    $isInteractive = -not $shouldInstallTask -and [Environment]::UserInteractive
+    $script:isInteractive = -not $shouldInstallTask -and [Environment]::UserInteractive
+    $isInteractive = $script:isInteractive
 
     # Show interactive menu when running interactively without task flags
     if ($isInteractive -and -not $RemoveScheduledTask) {
@@ -1141,6 +1235,9 @@ try {
 
     # Ask about certificate output (IIS import vs PFX export)
     Show-CertificateOutputMenu
+
+    # Ask about challenge type (HTTP-01, DNS-01, or DNS manual)
+    Show-ChallengeTypeMenu
 
     # Show run summary
     Write-Host ""
