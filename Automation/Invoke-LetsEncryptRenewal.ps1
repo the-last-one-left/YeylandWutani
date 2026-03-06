@@ -413,6 +413,16 @@ function Show-ChallengeTypeMenu {
 
         if ($chalChoice -eq '1') {
             $script:ChallengeType = 'Dns'
+            if (-not $DnsPlugin) {
+                Write-Host ""
+                Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
+                Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                Write-Host ""
+                $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
+                if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
+                    throw "A DNS plugin name is required for DNS-01 automated validation."
+                }
+            }
         }
         else {
             $script:ChallengeType = 'DnsManual'
@@ -433,7 +443,19 @@ function Show-ChallengeTypeMenu {
 
         switch ($chalChoice) {
             '1' { $script:ChallengeType = 'Http' }
-            '2' { $script:ChallengeType = 'Dns' }
+            '2' {
+                $script:ChallengeType = 'Dns'
+                if (-not $DnsPlugin) {
+                    Write-Host ""
+                    Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
+                    Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                    Write-Host ""
+                    $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
+                    if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
+                        throw "A DNS plugin name is required for DNS-01 automated validation."
+                    }
+                }
+            }
             '3' { $script:ChallengeType = 'DnsManual' }
         }
     }
@@ -495,6 +517,16 @@ function Test-Prerequisites {
 
             if ($fallbackChoice -eq '1') {
                 $script:ChallengeType = 'Dns'
+                if (-not $DnsPlugin) {
+                    Write-Host ""
+                    Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
+                    Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                    Write-Host ""
+                    $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
+                    if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
+                        throw "A DNS plugin name is required for DNS-01 automated validation."
+                    }
+                }
                 Write-Log "Switched to DNS-01 plugin challenge (IIS not available for HTTP-01)" -Level Info
             }
             else {
@@ -521,7 +553,19 @@ function Test-Prerequisites {
     # Re-check after potential fallback from HTTP to DNS
     if ($ChallengeType -eq 'Dns') {
         if (-not $DnsPlugin) {
-            throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin -List' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
+            if ($script:isInteractive) {
+                Write-Host ""
+                Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
+                Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                Write-Host ""
+                $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
+                if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
+                    throw "A DNS plugin name is required for DNS-01 automated validation."
+                }
+            }
+            else {
+                throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin -List' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
+            }
         }
         Write-Log "DNS-01 challenge mode: plugin=$DnsPlugin, propagation wait=${DnsSleep}s" -Level Info
     }
