@@ -2,21 +2,27 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Automated Let's Encrypt Certificate Renewal for IIS v1.2
+    Automated Let's Encrypt Certificate Renewal v1.3
 
 .DESCRIPTION
-    Automates the full Let's Encrypt certificate lifecycle on IIS servers using the
-    ACME protocol via the Posh-ACME module. Designed for MSP environments where
-    customers are transitioning to 90-day (and soon 47-day) certificate renewals.
+    Automates the full Let's Encrypt certificate lifecycle using the ACME protocol
+    via the Posh-ACME module. Designed for MSP environments where customers are
+    transitioning to 90-day (and soon 47-day) certificate renewals.
+
+    When run interactively, presents a menu to choose between one-time issuance,
+    scheduled auto-renewal, or task removal. Works with or without IIS - when IIS
+    is present, you choose whether to import to IIS or export as PFX.
 
     Capabilities:
+    - Interactive menu for guided one-shot or scheduled operation
     - New certificate issuance via HTTP-01 or DNS-01 challenge validation
     - Automatic IIS challenge response configuration (HTTP-01)
     - DNS-01 validation via 30+ providers (Azure, Cloudflare, GoDaddy, Route53, etc.)
     - Manual DNS mode for providers without API integration
     - Wildcard certificate support (requires DNS-01)
+    - PFX export mode for non-IIS servers (Apache, nginx, load balancers)
     - Certificate renewal when approaching expiry threshold
-    - Automatic IIS binding updates (replaces old cert with renewed cert)
+    - Automatic IIS binding updates (when IIS output mode is selected)
     - Scheduled task installation for fully unattended operation
     - Let's Encrypt staging environment support for testing
     - Multi-domain (SAN) certificate support
@@ -31,13 +37,14 @@
         Can be fully automated with a DNS provider plugin, or done manually.
 
     Workflow:
-      1. Ensures Posh-ACME module is available (installs if needed)
-      2. Configures the ACME server (staging or production)
-      3. Sets up challenge infrastructure (IIS vdir for HTTP-01, or DNS plugin for DNS-01)
-      4. Requests or renews the certificate via ACME protocol
-      5. Imports the new certificate into the Windows certificate store
-      6. Updates all matching IIS HTTPS bindings with the new certificate
-      7. Cleans up challenge infrastructure
+      1. Shows interactive menu (one-shot, install task, or remove task)
+      2. Asks where to deploy the certificate (IIS or PFX export)
+      3. Ensures Posh-ACME module is available (installs if needed)
+      4. Configures the ACME server (staging or production)
+      5. Sets up challenge infrastructure (IIS vdir for HTTP-01, or DNS plugin for DNS-01)
+      6. Requests or renews the certificate via ACME protocol
+      7. Imports to IIS cert store and updates bindings, OR exports as PFX
+      8. Cleans up challenge infrastructure
 
 .PARAMETER DomainName
     Primary domain name for the certificate. This becomes the certificate's
@@ -162,7 +169,7 @@
 
 .NOTES
     Yeyland Wutani LLC - Building Better Systems
-    Version: 1.2.0
+    Version: 1.3.0
 
     Prerequisites:
     - Windows Server 2016+ (IIS required for HTTP-01 and auto-binding; optional for DNS-01 with PFX export)
@@ -237,7 +244,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "1.2.0"
+$ScriptVersion = "1.3.0"
 $TaskName = "LetsEncrypt Certificate Renewal - $DomainName"
 $LogDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt"
 $LogFile = Join-Path $LogDir "renewal_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -271,21 +278,19 @@ function Write-Log {
 }
 
 function Write-Banner {
-    $banner = @"
-
-============================================================
-  Let's Encrypt Certificate Renewal for IIS v$ScriptVersion
-  Yeyland Wutani LLC - Building Better Systems
-============================================================
-  Domain:    $DomainName
-  Mode:      $(if ($Staging) { "STAGING (test)" } else { "PRODUCTION" })
-  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })
-  Output:    $(if ($PfxOutputPath) { "PFX export to $PfxOutputPath" } else { "IIS cert store + binding update" })
-  Threshold: $RenewalDays days before expiry
-============================================================
-
-"@
-    Write-Host $banner -ForegroundColor DarkYellow
+    $border = "=" * 81
+    Write-Host ""
+    Write-Host $border -ForegroundColor Gray
+    Write-Host '  __   _______   ___      _    _  _ ___   __      ___   _ _____ _   _  _ ___ ' -ForegroundColor DarkYellow
+    Write-Host '  \ \ / / __\ \ / / |    /_\  | \| |   \  \ \    / / | | |_   _/_\ | \| |_ _|' -ForegroundColor DarkYellow
+    Write-Host '   \ V /| _| \ V /| |__ / _ \ | .` | |) |  \ \/\/ /| |_| | | |/ _ \| .` || | ' -ForegroundColor DarkYellow
+    Write-Host '    |_| |___| |_| |____/_/ \_\|_|\_|___/    \_/\_/  \___/  |_/_/ \_\_|\_|___|' -ForegroundColor DarkYellow
+    Write-Host '' -ForegroundColor Green
+    Write-Host '                      B U I L D I N G   B E T T E R   S Y S T E M S' -ForegroundColor Green
+    Write-Host $border -ForegroundColor Gray
+    Write-Host "  Let's Encrypt Certificate Manager v$ScriptVersion" -ForegroundColor Cyan
+    Write-Host $border -ForegroundColor Gray
+    Write-Host ""
 }
 
 # ============================================================================
@@ -304,46 +309,94 @@ function Test-IISAvailable {
     return $false
 }
 
-function Test-Prerequisites {
-    Write-Log "Checking prerequisites..."
+# ============================================================================
+# INTERACTIVE MENU
+# ============================================================================
 
-    # Detect IIS availability
+function Show-InteractiveMenu {
+    Write-Host "  What would you like to do?" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [1] Request/renew a certificate (one-time)" -ForegroundColor Cyan
+    Write-Host "  [2] Request/renew and install scheduled task for auto-renewal" -ForegroundColor Cyan
+    Write-Host "  [3] Remove existing scheduled task" -ForegroundColor Cyan
+    Write-Host "  [4] Exit" -ForegroundColor Cyan
+    Write-Host ""
+
+    do {
+        $choice = Read-Host "  Select option [1-4]"
+    } while ($choice -notin @('1', '2', '3', '4'))
+
+    return $choice
+}
+
+function Show-CertificateOutputMenu {
+    # Always ask about certificate output - IIS may be present but not the target
     $script:IISAvailable = Test-IISAvailable
-    if ($script:IISAvailable) {
-        Write-Log "IIS is installed" -Level Success
+    $iisLoaded = $false
 
-        # Check WebAdministration module
-        if (-not (Get-Module -ListAvailable -Name WebAdministration)) {
+    if ($script:IISAvailable) {
+        # Try to load WebAdministration
+        if (Get-Module -ListAvailable -Name WebAdministration) {
+            Import-Module WebAdministration -ErrorAction SilentlyContinue
+            $iisLoaded = $true
+        }
+        else {
             Write-Log "WebAdministration module not found. IIS binding management will be unavailable." -Level Warning
             $script:IISAvailable = $false
         }
+    }
+
+    # If PfxOutputPath was already provided on the command line, skip the menu
+    if ($PfxOutputPath) {
+        Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
+        return
+    }
+
+    Write-Host ""
+    Write-Host "  How should the certificate be deployed?" -ForegroundColor White
+    Write-Host ""
+    if ($script:IISAvailable) {
+        Write-Host "  [1] Import to IIS certificate store and update site bindings" -ForegroundColor Cyan
+        Write-Host "  [2] Export as PFX file to a folder (for any web server / load balancer)" -ForegroundColor Cyan
+    }
+    else {
+        Write-Host "  IIS is not installed on this server." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "  [1] Export as PFX file to a folder (for any web server / load balancer)" -ForegroundColor Cyan
+    }
+    Write-Host ""
+
+    if ($script:IISAvailable) {
+        do {
+            $outputChoice = Read-Host "  Select output [1-2]"
+        } while ($outputChoice -notin @('1', '2'))
+
+        if ($outputChoice -eq '2') {
+            $script:PfxOutputPath = Read-Host "  Enter folder path to export PFX to (e.g. C:\Certs)"
+            if ([string]::IsNullOrWhiteSpace($script:PfxOutputPath)) {
+                throw "A folder path is required for PFX export."
+            }
+            Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
+        }
         else {
-            Import-Module WebAdministration -ErrorAction Stop
-            Write-Log "WebAdministration module loaded" -Level Success
+            Write-Log "Certificate output: IIS certificate store + binding update" -Level Info
         }
     }
     else {
-        Write-Log "IIS is not installed on this server" -Level Warning
-
-        # HTTP-01 requires IIS
-        if ($ChallengeType -eq 'Http') {
-            throw "HTTP-01 challenge requires IIS. Either install IIS, or use -ChallengeType Dns / -ChallengeType DnsManual for DNS-01 validation (no IIS needed)."
+        $script:PfxOutputPath = Read-Host "  Enter folder path to export PFX to (e.g. C:\Certs)"
+        if ([string]::IsNullOrWhiteSpace($script:PfxOutputPath)) {
+            throw "A PFX output path is required when IIS is not installed. Re-run with -PfxOutputPath <folder>."
         }
-
-        # Without IIS, we need somewhere to put the PFX
-        if (-not $PfxOutputPath) {
-            Write-Host ""
-            Write-Host "  IIS is not installed. The certificate can be exported as a PFX file." -ForegroundColor Yellow
-            Write-Host "  This is useful for Apache, nginx, or other non-IIS web servers." -ForegroundColor Yellow
-            Write-Host ""
-            $script:PfxOutputPath = Read-Host "  Enter a folder path to export the PFX file to (e.g. C:\Certs)"
-            if ([string]::IsNullOrWhiteSpace($script:PfxOutputPath)) {
-                throw "A PFX output path is required when IIS is not installed. Re-run with -PfxOutputPath <folder>."
-            }
-        }
-
-        Write-Log "Non-IIS mode: certificate will be exported as PFX to $PfxOutputPath" -Level Info
+        Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
     }
+}
+
+# ============================================================================
+# PREREQUISITE CHECKS
+# ============================================================================
+
+function Test-Prerequisites {
+    Write-Log "Checking prerequisites..."
 
     # Check internet connectivity to Let's Encrypt
     $acmeEndpoint = if ($Staging) { "acme-staging-v02.api.letsencrypt.org" } else { "acme-v02.api.letsencrypt.org" }
@@ -355,6 +408,11 @@ function Test-Prerequisites {
 
     # Challenge-type-specific checks
     if ($ChallengeType -eq 'Http') {
+        # HTTP-01 requires IIS
+        if (-not $script:IISAvailable) {
+            throw "HTTP-01 challenge requires IIS. Either install IIS, or use -ChallengeType Dns / -ChallengeType DnsManual for DNS-01 validation (no IIS needed)."
+        }
+
         # Check port 80 listener (needed for HTTP-01 challenge)
         $port80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
         if (-not $port80) {
@@ -387,7 +445,7 @@ function Test-Prerequisites {
         }
     }
 
-    # Verify certificate store path exists or fall back (only relevant when IIS is available)
+    # Verify certificate store path exists or fall back (only relevant for IIS output mode)
     if ($script:IISAvailable -and -not $PfxOutputPath) {
         if ($CertStorePath -eq "Cert:\LocalMachine\WebHosting") {
             try {
@@ -1044,11 +1102,56 @@ function Remove-OldLogs {
 try {
     Write-Banner
 
-    # Handle scheduled task removal
+    # Handle scheduled task removal (direct parameter mode)
     if ($RemoveScheduledTask) {
         Uninstall-RenewalTask
         return
     }
+
+    # Track whether we should install the scheduled task
+    $shouldInstallTask = $InstallScheduledTask.IsPresent
+
+    # Determine if we're running interactively (no task switches pre-selected)
+    $isInteractive = -not $shouldInstallTask -and [Environment]::UserInteractive
+
+    # Show interactive menu when running interactively without task flags
+    if ($isInteractive -and -not $RemoveScheduledTask) {
+        $menuChoice = Show-InteractiveMenu
+
+        switch ($menuChoice) {
+            '1' {
+                # One-shot: proceed with renewal, no scheduled task
+                Write-Log "Mode: One-time certificate request/renewal"
+            }
+            '2' {
+                # Renew + install scheduled task
+                $shouldInstallTask = $true
+                Write-Log "Mode: Request/renewal + scheduled task installation"
+            }
+            '3' {
+                Uninstall-RenewalTask
+                return
+            }
+            '4' {
+                Write-Host "  Exiting." -ForegroundColor Gray
+                return
+            }
+        }
+    }
+
+    # Ask about certificate output (IIS import vs PFX export)
+    Show-CertificateOutputMenu
+
+    # Show run summary
+    Write-Host ""
+    Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
+    Write-Host "  Domain:    $DomainName" -ForegroundColor White
+    Write-Host "  Mode:      $(if ($Staging) { 'STAGING (test)' } else { 'PRODUCTION' })" -ForegroundColor White
+    Write-Host "  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })" -ForegroundColor White
+    Write-Host "  Output:    $(if ($PfxOutputPath) { "PFX export to $PfxOutputPath" } else { 'IIS cert store + binding update' })" -ForegroundColor White
+    Write-Host "  Threshold: $RenewalDays days before expiry" -ForegroundColor White
+    Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
+    Write-Host ""
 
     # Build the full domain list
     $allDomains = @($DomainName)
@@ -1066,7 +1169,7 @@ try {
     # Clean old logs
     Remove-OldLogs
 
-    # Check current certificate status (only in cert store if IIS is available)
+    # Check current certificate status (only in cert store when doing IIS output)
     $currentCert = $null
     $oldThumbprint = $null
     if ($script:IISAvailable -and -not $PfxOutputPath) {
@@ -1080,7 +1183,7 @@ try {
     if (-not $needsRenewal) {
         Write-Log "Certificate is still valid and outside the renewal window. No action needed." -Level Success
 
-        if ($InstallScheduledTask) {
+        if ($shouldInstallTask) {
             Install-RenewalTask
         }
 
@@ -1094,12 +1197,12 @@ try {
     if ($PSCmdlet.ShouldProcess($DomainName, "Request/renew Let's Encrypt certificate")) {
         $paCert = Invoke-AcmeCertificateOrder -Domains $allDomains
 
-        if ($PfxOutputPath -or -not $script:IISAvailable) {
-            # Non-IIS path: export PFX to folder
+        if ($PfxOutputPath) {
+            # PFX export path
             $exportedPfx = Export-PfxToFolder -PACertificate $paCert
 
             # Install scheduled task if requested
-            if ($InstallScheduledTask) {
+            if ($shouldInstallTask) {
                 Install-RenewalTask
             }
 
@@ -1131,7 +1234,7 @@ try {
             Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
 
             # Install scheduled task if requested
-            if ($InstallScheduledTask) {
+            if ($shouldInstallTask) {
                 Install-RenewalTask
             }
 
