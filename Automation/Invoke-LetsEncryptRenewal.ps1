@@ -2,7 +2,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Automated Let's Encrypt Certificate Renewal for IIS v1.0
+    Automated Let's Encrypt Certificate Renewal for IIS v1.1
 
 .DESCRIPTION
     Automates the full Let's Encrypt certificate lifecycle on IIS servers using the
@@ -10,8 +10,11 @@
     customers are transitioning to 90-day (and soon 47-day) certificate renewals.
 
     Capabilities:
-    - New certificate issuance via HTTP-01 challenge validation
-    - Automatic IIS challenge response configuration
+    - New certificate issuance via HTTP-01 or DNS-01 challenge validation
+    - Automatic IIS challenge response configuration (HTTP-01)
+    - DNS-01 validation via 30+ providers (Azure, Cloudflare, GoDaddy, Route53, etc.)
+    - Manual DNS mode for providers without API integration
+    - Wildcard certificate support (requires DNS-01)
     - Certificate renewal when approaching expiry threshold
     - Automatic IIS binding updates (replaces old cert with renewed cert)
     - Scheduled task installation for fully unattended operation
@@ -19,10 +22,18 @@
     - Multi-domain (SAN) certificate support
     - Contact email registration for expiry notifications from Let's Encrypt
 
+    Challenge Types:
+      HTTP-01 (default): Proves domain control by serving a token file over HTTP.
+        Requires port 80 open to the internet. Cannot issue wildcard certificates.
+
+      DNS-01: Proves domain control by creating a TXT record in DNS.
+        Supports wildcard certificates (*.contoso.com). Does not require port 80.
+        Can be fully automated with a DNS provider plugin, or done manually.
+
     Workflow:
       1. Ensures Posh-ACME module is available (installs if needed)
       2. Configures the ACME server (staging or production)
-      3. Sets up IIS to serve HTTP-01 challenge tokens
+      3. Sets up challenge infrastructure (IIS vdir for HTTP-01, or DNS plugin for DNS-01)
       4. Requests or renews the certificate via ACME protocol
       5. Imports the new certificate into the Windows certificate store
       6. Updates all matching IIS HTTPS bindings with the new certificate
@@ -39,6 +50,38 @@
 .PARAMETER ContactEmail
     Email address registered with Let's Encrypt for expiry notifications and
     account recovery. Required for first-time registration.
+
+.PARAMETER ChallengeType
+    ACME challenge type to use for domain validation. Default: "Http".
+    - Http:      HTTP-01 challenge. Serves a token file via IIS on port 80.
+                 Simple and works for most setups. Cannot issue wildcard certs.
+    - Dns:       DNS-01 challenge using a Posh-ACME DNS plugin for automatic
+                 TXT record management. Required for wildcard certificates.
+                 Specify the plugin with -DnsPlugin and credentials with -DnsPluginArgs.
+    - DnsManual: DNS-01 challenge with manual TXT record creation. The script
+                 will pause and display the TXT record value for you to create.
+                 Not suitable for automated/scheduled renewals.
+
+.PARAMETER DnsPlugin
+    The Posh-ACME DNS plugin name for automated DNS-01 challenges.
+    Common plugins: Azure, AzureDns, Cloudflare, GoDaddy, Route53, Namecheap,
+    DOcean (DigitalOcean), Hetzner, OVH, Porkbun, DuckDNS, Dynu, Linode, Gandi.
+    Run 'Get-PAPlugin -List' after installing Posh-ACME to see all available plugins.
+    Run 'Get-PAPlugin <PluginName> -Params' to see required parameters for a plugin.
+
+.PARAMETER DnsPluginArgs
+    Hashtable of arguments for the DNS plugin. Each plugin requires different
+    credentials/parameters. See examples below and Posh-ACME documentation.
+
+    Common examples:
+    - Cloudflare: @{ CFToken = (Read-Host -AsSecureString) }
+    - Azure DNS:  @{ AZSubscriptionId = 'xxx'; AZAccessToken = 'xxx' }
+    - Route53:    @{ R53AccessKey = 'xxx'; R53SecretKey = (Read-Host -AsSecureString) }
+    - GoDaddy:    @{ GDKey = 'xxx'; GDSecret = (Read-Host -AsSecureString) }
+
+.PARAMETER DnsSleep
+    Seconds to wait for DNS propagation after creating TXT records. Default: 120.
+    Increase this if validation fails due to slow DNS propagation.
 
 .PARAMETER RenewalDays
     Number of days before certificate expiry to trigger renewal. Default: 30.
@@ -88,13 +131,31 @@
     .\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com" -ForceRenewal
     Forces renewal even if the current certificate has not reached the renewal threshold.
 
+.EXAMPLE
+    .\Invoke-LetsEncryptRenewal.ps1 -DomainName "*.contoso.com" -ContactEmail "admin@contoso.com" -ChallengeType Dns -DnsPlugin Cloudflare -DnsPluginArgs @{ CFToken = (Read-Host 'Cloudflare API Token' -AsSecureString) }
+    Issues a wildcard certificate using Cloudflare DNS for automated DNS-01 validation.
+
+.EXAMPLE
+    .\Invoke-LetsEncryptRenewal.ps1 -DomainName "*.contoso.com" -AdditionalDomains @("contoso.com") -ContactEmail "admin@contoso.com" -ChallengeType Dns -DnsPlugin AzureDns -DnsPluginArgs @{ AZSubscriptionId = 'your-sub-id'; AZAccessToken = 'your-token' }
+    Issues a wildcard + apex domain certificate using Azure DNS.
+
+.EXAMPLE
+    .\Invoke-LetsEncryptRenewal.ps1 -DomainName "*.contoso.com" -ContactEmail "admin@contoso.com" -ChallengeType DnsManual
+    Issues a wildcard certificate with manual DNS TXT record creation. The script will
+    pause and tell you what TXT record to create, then wait for you to confirm.
+
+.EXAMPLE
+    .\Invoke-LetsEncryptRenewal.ps1 -DomainName "*.contoso.com" -ContactEmail "admin@contoso.com" -ChallengeType Dns -DnsPlugin Route53 -DnsPluginArgs @{ R53AccessKey = 'AKIA...'; R53SecretKey = (Read-Host 'AWS Secret' -AsSecureString) } -InstallScheduledTask
+    Issues a wildcard cert via Route53 and installs a scheduled task for auto-renewal.
+
 .NOTES
     Yeyland Wutani LLC - Building Better Systems
-    Version: 1.0.0
+    Version: 1.1.0
 
     Prerequisites:
     - Windows Server 2016+ with IIS installed
-    - Port 80 must be reachable from the internet (for HTTP-01 challenge)
+    - For HTTP-01: Port 80 must be reachable from the internet
+    - For DNS-01: DNS provider API credentials (or ability to create TXT records manually)
     - PowerShell 5.1+ (PowerShell 7+ recommended)
     - Administrative privileges
     - Internet connectivity to Let's Encrypt ACME endpoints
@@ -123,6 +184,20 @@ param(
     [string]$ContactEmail,
 
     [Parameter()]
+    [ValidateSet('Http', 'Dns', 'DnsManual')]
+    [string]$ChallengeType = 'Http',
+
+    [Parameter()]
+    [string]$DnsPlugin,
+
+    [Parameter()]
+    [hashtable]$DnsPluginArgs,
+
+    [Parameter()]
+    [ValidateRange(30, 600)]
+    [int]$DnsSleep = 120,
+
+    [Parameter()]
     [ValidateRange(7, 60)]
     [int]$RenewalDays = 30,
 
@@ -147,7 +222,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$ScriptVersion = "1.0.0"
+$ScriptVersion = "1.1.0"
 $TaskName = "LetsEncrypt Certificate Renewal - $DomainName"
 $LogDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt"
 $LogFile = Join-Path $LogDir "renewal_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -189,6 +264,7 @@ function Write-Banner {
 ============================================================
   Domain:    $DomainName
   Mode:      $(if ($Staging) { "STAGING (test)" } else { "PRODUCTION" })
+  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })
   Threshold: $RenewalDays days before expiry
 ============================================================
 
@@ -229,10 +305,30 @@ function Test-Prerequisites {
     }
     Write-Log "ACME endpoint reachable ($acmeEndpoint)" -Level Success
 
-    # Check port 80 listener (needed for HTTP-01 challenge)
-    $port80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
-    if (-not $port80) {
-        Write-Log "No listener on port 80. IIS must be running and listening on port 80 for HTTP-01 challenges." -Level Warning
+    # Challenge-type-specific checks
+    if ($ChallengeType -eq 'Http') {
+        # Check port 80 listener (needed for HTTP-01 challenge)
+        $port80 = Get-NetTCPConnection -LocalPort 80 -State Listen -ErrorAction SilentlyContinue
+        if (-not $port80) {
+            Write-Log "No listener on port 80. IIS must be running and listening on port 80 for HTTP-01 challenges." -Level Warning
+        }
+
+        # Wildcard domains require DNS-01
+        $allCheckDomains = @($DomainName) + @($AdditionalDomains | Where-Object { $_ })
+        $hasWildcard = $allCheckDomains | Where-Object { $_ -like '*`**' }
+        if ($hasWildcard) {
+            throw "Wildcard certificates (e.g. *.contoso.com) require DNS-01 validation. Use -ChallengeType Dns or -ChallengeType DnsManual."
+        }
+    }
+    elseif ($ChallengeType -eq 'Dns') {
+        if (-not $DnsPlugin) {
+            throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin -List' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
+        }
+        Write-Log "DNS-01 challenge mode: plugin=$DnsPlugin, propagation wait=${DnsSleep}s" -Level Info
+    }
+    elseif ($ChallengeType -eq 'DnsManual') {
+        Write-Log "DNS-01 manual mode: you will be prompted to create TXT records during validation" -Level Warning
+        Write-Log "Manual DNS mode is NOT suitable for unattended scheduled task renewals" -Level Warning
     }
 
     # Verify certificate store path exists or fall back
@@ -411,11 +507,124 @@ function Invoke-AcmeCertificateOrder {
         Write-Log "Using existing ACME account: $($account.id)"
     }
 
-    # Build the challenge path for HTTP-01 validation
-    $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
-    New-AcmeChallengeConfig -ChallengePath $challengeDir
+    Write-Log "Requesting certificate for: $($Domains -join ', ')"
 
-    # Find IIS sites that serve these domains and add challenge virtual directories
+    # Build challenge parameters based on challenge type
+    switch ($ChallengeType) {
+        'Http' {
+            $certParams = Build-HttpChallengeParams -Domains $Domains
+        }
+        'Dns' {
+            $certParams = Build-DnsChallengeParams -Domains $Domains
+        }
+        'DnsManual' {
+            $certParams = Build-DnsManualChallengeParams -Domains $Domains
+        }
+    }
+
+    $matchedSites = @()
+    try {
+        # For HTTP-01, set up IIS challenge infrastructure
+        if ($ChallengeType -eq 'Http') {
+            $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
+            New-AcmeChallengeConfig -ChallengePath $challengeDir
+            $matchedSites = Add-ChallengeToMatchingSites -Domains $Domains -ChallengePath $challengeDir
+        }
+
+        $paCert = New-PACertificate @certParams
+
+        if (-not $paCert) {
+            $errorHint = switch ($ChallengeType) {
+                'Http'      { "Check that port 80 is accessible from the internet and DNS points to this server." }
+                'Dns'       { "Check DNS plugin credentials and that the plugin can create TXT records in your DNS zone." }
+                'DnsManual' { "Check that TXT records were created correctly and had time to propagate." }
+            }
+            throw "Certificate order failed. $errorHint"
+        }
+
+        Write-Log "Certificate obtained successfully!" -Level Success
+        Write-Log "  Thumbprint: $($paCert.Thumbprint)"
+        Write-Log "  Expires: $($paCert.NotAfter)"
+
+        return $paCert
+    }
+    finally {
+        # Clean up HTTP-01 challenge virtual directories
+        foreach ($siteName in $matchedSites) {
+            Remove-ChallengeVirtualDirectory -SiteName $siteName
+        }
+    }
+}
+
+function Build-HttpChallengeParams {
+    param([string[]]$Domains)
+
+    $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
+
+    return @{
+        Domain     = $Domains
+        AcceptTOS  = $true
+        Contact    = $ContactEmail
+        Plugin     = 'WebRoot'
+        PluginArgs = @{ WRPath = $challengeDir }
+        Force      = $ForceRenewal.IsPresent
+        Verbose    = $false
+    }
+}
+
+function Build-DnsChallengeParams {
+    param([string[]]$Domains)
+
+    Write-Log "Using DNS-01 challenge with plugin: $DnsPlugin"
+
+    # Validate the plugin exists in Posh-ACME
+    $availablePlugins = Get-PAPlugin -List -ErrorAction SilentlyContinue
+    if ($availablePlugins -and $DnsPlugin -notin $availablePlugins.Name) {
+        $pluginList = ($availablePlugins.Name | Sort-Object) -join ', '
+        throw "DNS plugin '$DnsPlugin' not found. Available plugins: $pluginList"
+    }
+
+    $certParams = @{
+        Domain     = $Domains
+        AcceptTOS  = $true
+        Contact    = $ContactEmail
+        Plugin     = $DnsPlugin
+        Force      = $ForceRenewal.IsPresent
+        DnsSleep   = $DnsSleep
+        Verbose    = $false
+    }
+
+    if ($DnsPluginArgs) {
+        $certParams['PluginArgs'] = $DnsPluginArgs
+    }
+
+    return $certParams
+}
+
+function Build-DnsManualChallengeParams {
+    param([string[]]$Domains)
+
+    Write-Log "Using DNS-01 manual challenge mode"
+    Write-Log "You will need to create DNS TXT records when prompted" -Level Warning
+
+    return @{
+        Domain     = $Domains
+        AcceptTOS  = $true
+        Contact    = $ContactEmail
+        Plugin     = 'Manual'
+        PluginArgs = @{ ManualNonInteractive = $false }
+        Force      = $ForceRenewal.IsPresent
+        DnsSleep   = $DnsSleep
+        Verbose    = $false
+    }
+}
+
+function Add-ChallengeToMatchingSites {
+    param(
+        [string[]]$Domains,
+        [string]$ChallengePath
+    )
+
     $sites = Get-ChildItem "IIS:\Sites" -ErrorAction SilentlyContinue
     $matchedSites = @()
     foreach ($site in $sites) {
@@ -426,7 +635,7 @@ function Invoke-AcmeCertificateOrder {
             if ($hostHeader -in $Domains -or [string]::IsNullOrEmpty($hostHeader)) {
                 if ($site.Name -notin $matchedSites) {
                     $matchedSites += $site.Name
-                    Add-ChallengeVirtualDirectory -SiteName $site.Name -ChallengePath $challengeDir
+                    Add-ChallengeVirtualDirectory -SiteName $site.Name -ChallengePath $ChallengePath
                 }
             }
         }
@@ -435,7 +644,7 @@ function Invoke-AcmeCertificateOrder {
     if ($matchedSites.Count -eq 0) {
         Write-Log "No IIS sites found with bindings matching the requested domains. Adding challenge directory to Default Web Site." -Level Warning
         if (Get-Website -Name "Default Web Site" -ErrorAction SilentlyContinue) {
-            Add-ChallengeVirtualDirectory -SiteName "Default Web Site" -ChallengePath $challengeDir
+            Add-ChallengeVirtualDirectory -SiteName "Default Web Site" -ChallengePath $ChallengePath
             $matchedSites += "Default Web Site"
         }
         else {
@@ -443,57 +652,7 @@ function Invoke-AcmeCertificateOrder {
         }
     }
 
-    Write-Log "Requesting certificate for: $($Domains -join ', ')"
-
-    # Define the HTTP-01 challenge plugin arguments
-    # Posh-ACME's WebSelfHost plugin won't work if IIS is on port 80, so we use the manual approach
-    # with a custom script that writes challenge files to our IIS-served directory
-    $challengeScript = {
-        param($args)
-        $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
-        # Write the challenge token file
-        $args.Body | Set-Content -Path (Join-Path $challengeDir $args.Token) -NoNewline -Encoding ASCII
-    }
-
-    $cleanupScript = {
-        param($args)
-        $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
-        $tokenFile = Join-Path $challengeDir $args.Token
-        if (Test-Path $tokenFile) {
-            Remove-Item $tokenFile -Force
-        }
-    }
-
-    try {
-        # Request the certificate using the Manual plugin with HTTP challenge handling
-        $certParams = @{
-            Domain      = $Domains
-            AcceptTOS   = $true
-            Contact     = $ContactEmail
-            Plugin      = 'WebRoot'
-            PluginArgs  = @{ WRPath = $challengeDir }
-            Force       = $ForceRenewal.IsPresent
-            Verbose     = $false
-        }
-
-        $paCert = New-PACertificate @certParams
-
-        if (-not $paCert) {
-            throw "Certificate order failed. Check that port 80 is accessible from the internet and DNS points to this server."
-        }
-
-        Write-Log "Certificate obtained successfully!" -Level Success
-        Write-Log "  Thumbprint: $($paCert.Thumbprint)"
-        Write-Log "  Expires: $($paCert.NotAfter)"
-
-        return $paCert
-    }
-    finally {
-        # Clean up challenge virtual directories
-        foreach ($siteName in $matchedSites) {
-            Remove-ChallengeVirtualDirectory -SiteName $siteName
-        }
-    }
+    return $matchedSites
 }
 
 function Import-CertificateToStore {
@@ -656,9 +815,31 @@ function Install-RenewalTask {
         $domainList = ($AdditionalDomains | ForEach-Object { "`"$_`"" }) -join ','
         $argParts += "-AdditionalDomains @($domainList)"
     }
+    if ($ChallengeType -ne 'Http') {
+        $argParts += "-ChallengeType $ChallengeType"
+    }
+    if ($DnsPlugin) {
+        $argParts += "-DnsPlugin `"$DnsPlugin`""
+    }
+    if ($DnsSleep -ne 120) {
+        $argParts += "-DnsSleep $DnsSleep"
+    }
     if ($Staging) { $argParts += "-Staging" }
     if ($CertStorePath -ne "Cert:\LocalMachine\WebHosting") {
         $argParts += "-CertStorePath `"$CertStorePath`""
+    }
+
+    # Warn about DnsManual mode with scheduled tasks
+    if ($ChallengeType -eq 'DnsManual') {
+        Write-Log "WARNING: DnsManual challenge type requires interactive input and is NOT compatible with scheduled tasks!" -Level Warning
+        Write-Log "Consider switching to -ChallengeType Dns with a -DnsPlugin for automated renewals" -Level Warning
+    }
+
+    # Note: DnsPluginArgs containing SecureString values will NOT survive serialization
+    # to a scheduled task. For scheduled tasks, use environment variables or a credential
+    # file that the DNS plugin supports. See Posh-ACME docs for plugin-specific guidance.
+    if ($DnsPluginArgs) {
+        Write-Log "Note: DNS plugin credentials are stored by Posh-ACME in the ACME account profile and will be reused on renewal" -Level Info
     }
 
     $action = New-ScheduledTaskAction `
