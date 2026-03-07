@@ -881,8 +881,9 @@ function Save-PluginCredentials {
             [System.Security.Cryptography.DataProtectionScope]::LocalMachine
         )
 
+        $entryType = if ($isSecure) { 'SecureString' } else { 'String' }
         $store.Args[$key] = @{
-            Type  = if ($isSecure) { 'SecureString' } else { 'String' }
+            Type  = $entryType
             Value = [Convert]::ToBase64String($encrypted)
         }
     }
@@ -955,7 +956,7 @@ function Get-DnsPluginArgsInteractive {
     param([string]$Plugin)
 
     Write-Host ""
-    Write-Host "  ── DNS Provider Credentials ─────────────────────────────────────" -ForegroundColor DarkGray
+    Write-Host "  -- DNS Provider Credentials -----------------------------------------------" -ForegroundColor DarkGray
 
     # Check for a previously saved credential first
     $saved = Get-PluginCredentials
@@ -976,12 +977,12 @@ function Get-DnsPluginArgsInteractive {
             Write-Host ""
             Write-Host "  How to get it:" -ForegroundColor Gray
             Write-Host "    1. Log in at dash.cloudflare.com" -ForegroundColor Gray
-            Write-Host "    2. Click your profile icon (top right) → My Profile" -ForegroundColor Gray
+            Write-Host "    2. Click your profile icon (top right) -> My Profile" -ForegroundColor Gray
             Write-Host "    3. Go to the 'API Tokens' tab" -ForegroundColor Gray
-            Write-Host "    4. Click 'Create Token' → use the 'Edit zone DNS' template" -ForegroundColor Gray
+            Write-Host "    4. Click 'Create Token' -> use the 'Edit zone DNS' template" -ForegroundColor Gray
             Write-Host "    5. Scope it to your specific zone (e.g. specificoffice.com)" -ForegroundColor Gray
-            Write-Host "    6. Click 'Continue to summary' → 'Create Token'" -ForegroundColor Gray
-            Write-Host "    7. Copy the token — it is only shown once" -ForegroundColor Yellow
+            Write-Host "    6. Click 'Continue to summary' -> 'Create Token'" -ForegroundColor Gray
+            Write-Host "    7. Copy the token - it is only shown once" -ForegroundColor Yellow
             Write-Host ""
             $token = Read-Host "  Paste your Cloudflare API Token" -AsSecureString
             return @{ CFToken = $token }
@@ -992,7 +993,7 @@ function Get-DnsPluginArgsInteractive {
             Write-Host "  How to get them:" -ForegroundColor Gray
             Write-Host "    1. Go to developer.godaddy.com → Keys" -ForegroundColor Gray
             Write-Host "    2. Create a Production key (not OTE/test)" -ForegroundColor Gray
-            Write-Host "    3. Copy both the Key and Secret — Secret is only shown once" -ForegroundColor Yellow
+            Write-Host "    3. Copy both the Key and Secret - Secret is only shown once" -ForegroundColor Yellow
             Write-Host ""
             $key    = Read-Host "  GoDaddy API Key"
             $secret = Read-Host "  GoDaddy API Secret" -AsSecureString
@@ -1002,9 +1003,9 @@ function Get-DnsPluginArgsInteractive {
             Write-Host "  AWS Route53 credentials required (IAM user with Route53 permissions)." -ForegroundColor White
             Write-Host ""
             Write-Host "  How to get them:" -ForegroundColor Gray
-            Write-Host "    1. In AWS Console, go to IAM → Users → Create user" -ForegroundColor Gray
+            Write-Host "    1. In AWS Console, go to IAM -> Users -> Create user" -ForegroundColor Gray
             Write-Host "    2. Attach the 'AmazonRoute53FullAccess' policy (or a custom scoped policy)" -ForegroundColor Gray
-            Write-Host "    3. Go to the user → Security credentials → Create access key" -ForegroundColor Gray
+            Write-Host "    3. Go to the user -> Security credentials -> Create access key" -ForegroundColor Gray
             Write-Host "    4. Copy the Access Key ID and Secret Access Key" -ForegroundColor Yellow
             Write-Host ""
             $accessKey = Read-Host "  AWS Access Key ID"
@@ -1015,10 +1016,10 @@ function Get-DnsPluginArgsInteractive {
             Write-Host "  Azure DNS credentials required (Service Principal with DNS Zone Contributor role)." -ForegroundColor White
             Write-Host ""
             Write-Host "  How to get them:" -ForegroundColor Gray
-            Write-Host "    1. In Azure Portal, go to Azure Active Directory → App registrations → New registration" -ForegroundColor Gray
+            Write-Host "    1. In Azure Portal, go to Azure Active Directory -> App registrations -> New registration" -ForegroundColor Gray
             Write-Host "    2. Note the Application (client) ID and Directory (tenant) ID" -ForegroundColor Gray
-            Write-Host "    3. Under Certificates & secrets, create a new client secret — copy it now" -ForegroundColor Gray
-            Write-Host "    4. Go to your DNS Zone → Access control (IAM) → Add role assignment" -ForegroundColor Gray
+            Write-Host "    3. Under Certificates and secrets, create a new client secret - copy it now" -ForegroundColor Gray
+            Write-Host "    4. Go to your DNS Zone -> Access control (IAM) -> Add role assignment" -ForegroundColor Gray
             Write-Host "    5. Assign 'DNS Zone Contributor' to the app registration you created" -ForegroundColor Gray
             Write-Host "    6. Also need your Azure Subscription ID (found in Subscriptions)" -ForegroundColor Gray
             Write-Host ""
@@ -1037,8 +1038,8 @@ function Get-DnsPluginArgsInteractive {
             Write-Host "  Namecheap API credentials required." -ForegroundColor White
             Write-Host ""
             Write-Host "  How to get them:" -ForegroundColor Gray
-            Write-Host "    1. Log in at namecheap.com → Profile → Tools" -ForegroundColor Gray
-            Write-Host "    2. Scroll to 'Business & Dev Tools' → Enable API access" -ForegroundColor Gray
+            Write-Host "    1. Log in at namecheap.com -> Profile -> Tools" -ForegroundColor Gray
+            Write-Host "    2. Scroll to 'Business and Dev Tools' -> Enable API access" -ForegroundColor Gray
             Write-Host "    3. Whitelist this server's public IP address in the API section" -ForegroundColor Yellow
             Write-Host "    4. Your API key is shown on that same page" -ForegroundColor Gray
             Write-Host ""
@@ -1243,6 +1244,11 @@ function Export-PfxToFolder {
 
     # Save the PFX password to a file
     $pfxPass = $PACertificate.PfxPass
+    if ($pfxPass -is [System.Security.SecureString]) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($pfxPass)
+        try   { $pfxPass = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
     if ([string]::IsNullOrEmpty($pfxPass)) {
         $pfxPass = "poshacme"
     }
