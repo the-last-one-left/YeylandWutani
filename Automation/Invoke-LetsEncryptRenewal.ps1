@@ -73,7 +73,7 @@
     The Posh-ACME DNS plugin name for automated DNS-01 challenges.
     Common plugins: Azure, AzureDns, Cloudflare, GoDaddy, Route53, Namecheap,
     DOcean (DigitalOcean), Hetzner, OVH, Porkbun, DuckDNS, Dynu, Linode, Gandi.
-    Run 'Get-PAPlugin -List' after installing Posh-ACME to see all available plugins.
+    Run 'Get-PAPlugin' after installing Posh-ACME to see all available plugins.
     Run 'Get-PAPlugin <PluginName> -Params' to see required parameters for a plugin.
 
 .PARAMETER DnsPluginArgs
@@ -416,7 +416,7 @@ function Show-ChallengeTypeMenu {
             if (-not $DnsPlugin) {
                 Write-Host ""
                 Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
-                Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                Write-Host "  Full list: run 'Get-PAPlugin' after Posh-ACME is installed" -ForegroundColor Gray
                 Write-Host ""
                 $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
                 if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
@@ -448,7 +448,7 @@ function Show-ChallengeTypeMenu {
                 if (-not $DnsPlugin) {
                     Write-Host ""
                     Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
-                    Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                    Write-Host "  Full list: run 'Get-PAPlugin' after Posh-ACME is installed" -ForegroundColor Gray
                     Write-Host ""
                     $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
                     if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
@@ -520,7 +520,7 @@ function Test-Prerequisites {
                 if (-not $DnsPlugin) {
                     Write-Host ""
                     Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
-                    Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                    Write-Host "  Full list: run 'Get-PAPlugin' after Posh-ACME is installed" -ForegroundColor Gray
                     Write-Host ""
                     $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
                     if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
@@ -556,7 +556,7 @@ function Test-Prerequisites {
             if ($script:isInteractive) {
                 Write-Host ""
                 Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
-                Write-Host "  Full list: run 'Get-PAPlugin -List' after Posh-ACME is installed" -ForegroundColor Gray
+                Write-Host "  Full list: run 'Get-PAPlugin' after Posh-ACME is installed" -ForegroundColor Gray
                 Write-Host ""
                 $script:DnsPlugin = Read-Host "  Enter DNS plugin name"
                 if ([string]::IsNullOrWhiteSpace($script:DnsPlugin)) {
@@ -564,7 +564,7 @@ function Test-Prerequisites {
                 }
             }
             else {
-                throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin -List' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
+                throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
             }
         }
         Write-Log "DNS-01 challenge mode: plugin=$DnsPlugin, propagation wait=${DnsSleep}s" -Level Info
@@ -831,7 +831,14 @@ function Build-DnsChallengeParams {
     Write-Log "Using DNS-01 challenge with plugin: $DnsPlugin"
 
     # Validate the plugin exists in Posh-ACME
-    $availablePlugins = Get-PAPlugin -List -ErrorAction SilentlyContinue
+    # Posh-ACME v4+ uses Get-PAPlugin without parameters; older versions used -List
+    $availablePlugins = $null
+    try {
+        $availablePlugins = Get-PAPlugin -ErrorAction Stop
+    }
+    catch {
+        Write-Log "Could not enumerate DNS plugins (non-fatal, will attempt to use '$DnsPlugin' directly)" -Level Warning
+    }
     if ($availablePlugins -and $DnsPlugin -notin $availablePlugins.Name) {
         $pluginList = ($availablePlugins.Name | Sort-Object) -join ', '
         throw "DNS plugin '$DnsPlugin' not found. Available plugins: $pluginList"
