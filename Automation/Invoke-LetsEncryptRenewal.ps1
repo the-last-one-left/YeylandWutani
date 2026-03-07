@@ -237,6 +237,10 @@ param(
     [string]$PfxOutputPath,
 
     [Parameter()]
+    [ValidateSet('IIS', 'RDGateway', 'PFX')]
+    [string]$DeployMode,
+
+    [Parameter()]
     [string]$CertStorePath = "Cert:\LocalMachine\WebHosting",
 
     [Parameter(ParameterSetName = 'RemoveTask')]
@@ -244,6 +248,8 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$script:OutputMode    = if ($DeployMode) { $DeployMode } elseif ($PfxOutputPath) { 'PFX' } else { 'IIS' }
+$script:RDGAvailable  = $false
 $ScriptVersion = "1.3.0"
 $TaskName = "LetsEncrypt Certificate Renewal - $DomainName"
 $LogDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt"
@@ -332,16 +338,86 @@ function Show-InteractiveMenu {
     return $choice
 }
 
+function Test-RDGatewayAvailable {
+    # Check for the TSGateway service
+    if (-not (Get-Service -Name TSGateway -ErrorAction SilentlyContinue)) { return $false }
+
+    # Verify the WMI class is accessible (not present on non-RDG servers even if service exists)
+    $gwSettings = Get-CimInstance -Namespace root/CIMV2/TerminalServices `
+        -ClassName Win32_TSGatewayServerSettings -ErrorAction SilentlyContinue
+    return ($null -ne $gwSettings)
+}
+
+function Get-RDGatewayCurrentCert {
+    # Returns the X509Certificate2 currently bound to RD Gateway, or $null
+    try {
+        $gwSettings = Get-CimInstance -Namespace root/CIMV2/TerminalServices `
+            -ClassName Win32_TSGatewayServerSettings -ErrorAction Stop
+        if (-not $gwSettings.CertHash -or $gwSettings.CertHash.Count -eq 0) { return $null }
+
+        $thumbprint = [System.BitConverter]::ToString($gwSettings.CertHash).Replace('-', '')
+        return (Get-Item "Cert:\LocalMachine\My\$thumbprint" -ErrorAction SilentlyContinue)
+    }
+    catch {
+        Write-Log "Could not retrieve current RD Gateway certificate: $($_.Exception.Message)" -Level Warning
+        return $null
+    }
+}
+
+function Install-RDGatewayCertificate {
+    param([System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
+
+    $thumbprint = $Certificate.Thumbprint
+    Write-Log "Binding certificate to RD Gateway (thumbprint: $thumbprint)"
+
+    $bound = $false
+
+    # Method 1: RDS PowerShell drive (Windows Server 2016+)
+    try {
+        if (-not (Get-PSDrive -Name RDS -ErrorAction SilentlyContinue)) {
+            Import-Module RemoteDesktopServices -ErrorAction SilentlyContinue
+        }
+        $rdsPath = 'RDS:\GatewayServer\SSLCertificate\Thumbprint'
+        if (Test-Path $rdsPath -ErrorAction SilentlyContinue) {
+            Set-Item -Path $rdsPath -Value $thumbprint -ErrorAction Stop
+            $bound = $true
+            Write-Log "RD Gateway certificate set via RDS PowerShell drive" -Level Success
+        }
+    }
+    catch {
+        Write-Log "RDS drive method failed ($($_.Exception.Message)) - falling back to WMI" -Level Warning
+    }
+
+    # Method 2: WMI/CIM (works on 2012 R2+ and as a fallback on newer)
+    if (-not $bound) {
+        $certObj     = Get-Item "Cert:\LocalMachine\My\$thumbprint" -ErrorAction Stop
+        $certHash    = $certObj.GetCertHash()
+        $gwSettings  = Get-CimInstance -Namespace root/CIMV2/TerminalServices `
+            -ClassName Win32_TSGatewayServerSettings -ErrorAction Stop
+        $result = Invoke-CimMethod -InputObject $gwSettings -MethodName SetCertificate `
+            -Arguments @{ CertHash = $certHash }
+
+        if ($result.ReturnValue -ne 0) {
+            throw "Win32_TSGatewayServerSettings.SetCertificate returned error code $($result.ReturnValue)"
+        }
+        $bound = $true
+        Write-Log "RD Gateway certificate set via WMI" -Level Success
+    }
+
+    # Restart TSGateway to apply - this drops active RD Gateway sessions
+    Write-Log "Restarting TSGateway service to apply certificate (active gateway sessions will be dropped)..." -Level Warning
+    Restart-Service -Name TSGateway -Force -ErrorAction Stop
+    Write-Log "TSGateway service restarted" -Level Success
+}
+
 function Show-CertificateOutputMenu {
-    # Always ask about certificate output - IIS may be present but not the target
+    # Detect available local services
     $script:IISAvailable = Test-IISAvailable
-    $iisLoaded = $false
+    $script:RDGAvailable = Test-RDGatewayAvailable
 
     if ($script:IISAvailable) {
-        # Try to load WebAdministration
         if (Get-Module -ListAvailable -Name WebAdministration) {
             Import-Module WebAdministration -ErrorAction SilentlyContinue
-            $iisLoaded = $true
         }
         else {
             Write-Log "WebAdministration module not found. IIS binding management will be unavailable." -Level Warning
@@ -349,48 +425,92 @@ function Show-CertificateOutputMenu {
         }
     }
 
-    # If PfxOutputPath was already provided on the command line, skip the menu
-    if ($PfxOutputPath) {
-        Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
+    # If DeployMode or PfxOutputPath were provided on the command line, skip the menu
+    if ($DeployMode -or $PfxOutputPath) {
+        if ($PfxOutputPath) { $script:OutputMode = 'PFX' }
+        # $script:OutputMode already set from $DeployMode at script start
+
+        if ($script:OutputMode -eq 'RDGateway') {
+            $script:CertStorePath = 'Cert:\LocalMachine\My'
+        }
+        Write-Log "Certificate output: $script:OutputMode$(if ($PfxOutputPath) { " -> $PfxOutputPath" })" -Level Info
         return
     }
+
+    # Build menu options dynamically based on what services are present
+    $menuOptions = [System.Collections.Generic.List[hashtable]]::new()
+    if ($script:IISAvailable) {
+        $menuOptions.Add(@{ Label = 'Import to IIS certificate store and update site bindings'; Mode = 'IIS' })
+    }
+    if ($script:RDGAvailable) {
+        $menuOptions.Add(@{ Label = 'Bind to RD Gateway (TSGateway service) - updates gateway SSL certificate'; Mode = 'RDGateway' })
+    }
+    $menuOptions.Add(@{ Label = 'Export as PFX file to a folder (for any web server / load balancer)'; Mode = 'PFX' })
 
     Write-Host ""
     Write-Host "  How should the certificate be deployed?" -ForegroundColor White
     Write-Host ""
-    if ($script:IISAvailable) {
-        Write-Host "  [1] Import to IIS certificate store and update site bindings" -ForegroundColor Cyan
-        Write-Host "  [2] Export as PFX file to a folder (for any web server / load balancer)" -ForegroundColor Cyan
-    }
-    else {
-        Write-Host "  IIS is not installed on this server." -ForegroundColor Yellow
+    if (-not $script:IISAvailable -and -not $script:RDGAvailable) {
+        Write-Host "  No compatible local services (IIS, RD Gateway) detected on this server." -ForegroundColor Yellow
         Write-Host ""
-        Write-Host "  [1] Export as PFX file to a folder (for any web server / load balancer)" -ForegroundColor Cyan
+    }
+    for ($i = 0; $i -lt $menuOptions.Count; $i++) {
+        Write-Host "  [$($i+1)] $($menuOptions[$i].Label)" -ForegroundColor Cyan
     }
     Write-Host ""
 
-    if ($script:IISAvailable) {
-        do {
-            $outputChoice = Read-Host "  Select output [1-2]"
-        } while ($outputChoice -notin @('1', '2'))
+    $maxChoice = $menuOptions.Count
+    $validChoices = 1..$maxChoice | ForEach-Object { "$_" }
+    do {
+        $outputChoice = Read-Host "  Select output [1-$maxChoice]"
+    } while ($outputChoice -notin $validChoices)
 
-        if ($outputChoice -eq '2') {
+    $chosen = $menuOptions[[int]$outputChoice - 1]
+    $script:OutputMode = $chosen.Mode
+
+    switch ($script:OutputMode) {
+        'PFX' {
             $script:PfxOutputPath = Read-Host "  Enter folder path to export PFX to (e.g. C:\Certs)"
             if ([string]::IsNullOrWhiteSpace($script:PfxOutputPath)) {
                 throw "A folder path is required for PFX export."
             }
             Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
         }
-        else {
+        'RDGateway' {
+            # RD Gateway requires the cert in Cert:\LocalMachine\My
+            $script:CertStorePath = 'Cert:\LocalMachine\My'
+
+            # Check the existing RD Gateway cert hostname against the requested domain
+            $currentGWCert = Get-RDGatewayCurrentCert
+            if ($currentGWCert) {
+                Write-Log "Current RD Gateway certificate: Subject=$($currentGWCert.Subject)  Expires=$($currentGWCert.NotAfter.ToString('yyyy-MM-dd'))" -Level Info
+
+                $gwCN = if ($currentGWCert.Subject -match 'CN=([^,]+)') { $Matches[1] } else { '' }
+                $reqBase = $DomainName.TrimStart('*').TrimStart('.')
+                $gwBase  = $gwCN.TrimStart('*').TrimStart('.')
+
+                if ($gwBase -and $reqBase -ne $gwBase) {
+                    Write-Log "WARNING: Requested domain '$DomainName' differs from current RD Gateway cert hostname '$gwCN'. RDP clients connecting to '$gwBase' will need a matching cert." -Level Warning
+                    Write-Host ""
+                    Write-Host "  Current gateway cert: $gwCN" -ForegroundColor Yellow
+                    Write-Host "  Requested domain:     $DomainName" -ForegroundColor Yellow
+                    Write-Host "  These do not match. Clients connecting to '$gwBase' may get certificate warnings." -ForegroundColor Yellow
+                    Write-Host ""
+                    $confirm = Read-Host "  Continue anyway? [y/N]"
+                    if ($confirm -notmatch '^[Yy]') {
+                        throw "Aborted by user - domain mismatch for RD Gateway certificate."
+                    }
+                }
+            }
+            else {
+                Write-Log "No existing RD Gateway certificate found (or cert is not in Cert:\LocalMachine\My). Proceeding." -Level Warning
+            }
+
+            Write-Log "Certificate output: RD Gateway binding (Cert:\LocalMachine\My + TSGateway service restart)" -Level Info
+        }
+        'IIS' {
             Write-Log "Certificate output: IIS certificate store + binding update" -Level Info
         }
-    }
-    else {
-        $script:PfxOutputPath = Read-Host "  Enter folder path to export PFX to (e.g. C:\Certs)"
-        if ([string]::IsNullOrWhiteSpace($script:PfxOutputPath)) {
-            throw "A PFX output path is required when IIS is not installed. Re-run with -PfxOutputPath <folder>."
-        }
-        Write-Log "Certificate output: PFX export to $PfxOutputPath" -Level Info
     }
 }
 
@@ -788,7 +908,7 @@ function Invoke-AcmeCertificateOrder {
         }
 
         if ($ChallengeType -eq 'Dns') {
-            Write-Log "Submitting certificate order — Posh-ACME will create a DNS TXT record then wait ${DnsSleep}s for propagation before asking Let's Encrypt to verify. This is normal; please wait..." -Level Info
+            Write-Log "Submitting certificate order - Posh-ACME will create a DNS TXT record then wait ${DnsSleep}s for propagation before asking Let's Encrypt to verify. This is normal; please wait..." -Level Info
         }
 
         $paCert = New-PACertificate @certParams
@@ -917,7 +1037,7 @@ function Get-PluginCredentials {
         $store = Get-Content -Path $credFile -Raw | ConvertFrom-Json
 
         if ($store.Plugin -ne $DnsPlugin) {
-            Write-Log "Saved credentials are for plugin '$($store.Plugin)' but current plugin is '$DnsPlugin' — skipping" -Level Warning
+            Write-Log "Saved credentials are for plugin '$($store.Plugin)' but current plugin is '$DnsPlugin' - skipping" -Level Warning
             return $null
         }
 
@@ -991,7 +1111,7 @@ function Get-DnsPluginArgsInteractive {
             Write-Host "  GoDaddy API Key and Secret required." -ForegroundColor White
             Write-Host ""
             Write-Host "  How to get them:" -ForegroundColor Gray
-            Write-Host "    1. Go to developer.godaddy.com → Keys" -ForegroundColor Gray
+            Write-Host "    1. Go to developer.godaddy.com -> Keys" -ForegroundColor Gray
             Write-Host "    2. Create a Production key (not OTE/test)" -ForegroundColor Gray
             Write-Host "    3. Copy both the Key and Secret - Secret is only shown once" -ForegroundColor Yellow
             Write-Host ""
@@ -1413,6 +1533,8 @@ function Install-RenewalTask {
     if ($PfxOutputPath) {
         $argParts += "-PfxOutputPath `"$PfxOutputPath`""
     }
+    # Persist the chosen deployment mode so the scheduled task uses the same target
+    $argParts += "-DeployMode $script:OutputMode"
     if ($Staging) { $argParts += "-Staging" }
     if ($CertStorePath -ne "Cert:\LocalMachine\WebHosting") {
         $argParts += "-CertStorePath `"$CertStorePath`""
@@ -1560,7 +1682,7 @@ try {
     Write-Host "  Domain:    $DomainName" -ForegroundColor White
     Write-Host "  Mode:      $(if ($Staging) { 'STAGING (test)' } else { 'PRODUCTION' })" -ForegroundColor White
     Write-Host "  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })" -ForegroundColor White
-    Write-Host "  Output:    $(if ($PfxOutputPath) { "PFX export to $PfxOutputPath" } else { 'IIS cert store + binding update' })" -ForegroundColor White
+    Write-Host "  Output:    $(switch ($script:OutputMode) { 'PFX' { "PFX export to $PfxOutputPath" } 'RDGateway' { 'RD Gateway (TSGateway) certificate binding' } default { 'IIS cert store + binding update' } })" -ForegroundColor White
     Write-Host "  Threshold: $RenewalDays days before expiry" -ForegroundColor White
     Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
     Write-Host ""
@@ -1609,59 +1731,75 @@ try {
     if ($PSCmdlet.ShouldProcess($DomainName, "Request/renew Let's Encrypt certificate")) {
         $paCert = Invoke-AcmeCertificateOrder -Domains $allDomains
 
-        if ($PfxOutputPath) {
-            # PFX export path
-            $exportedPfx = Export-PfxToFolder -PACertificate $paCert
+        $stagingNote = if ($Staging) {
+            "`n  NOTE: This is a STAGING certificate (not browser-trusted).`n  Run again without -Staging for a production certificate."
+        } else { '' }
 
-            # Install scheduled task if requested
-            if ($shouldInstallTask) {
-                Install-RenewalTask
-            }
+        switch ($script:OutputMode) {
 
-            Write-Host ""
-            Write-Host "  ============================================================" -ForegroundColor Green
-            Write-Host "  Certificate issued and exported!" -ForegroundColor Green
-            Write-Host "  PFX File:   $exportedPfx" -ForegroundColor Green
-            Write-Host "  Expires:    $($paCert.NotAfter)" -ForegroundColor Green
-            Write-Host "  Output Dir: $PfxOutputPath" -ForegroundColor Green
-            if ($Staging) {
+            'PFX' {
+                $exportedPfx = Export-PfxToFolder -PACertificate $paCert
+
+                if ($shouldInstallTask) { Install-RenewalTask }
+
                 Write-Host ""
-                Write-Host "  NOTE: This is a STAGING certificate (not browser-trusted)." -ForegroundColor Yellow
-                Write-Host "  Run again without -Staging for a production certificate." -ForegroundColor Yellow
-            }
-            Write-Host ""
-            Write-Host "  Import the PFX into your web server or load balancer." -ForegroundColor Cyan
-            Write-Host "  Password is saved alongside the PFX file (restricted to Admins)." -ForegroundColor Cyan
-            Write-Host "  ============================================================" -ForegroundColor Green
-            Write-Host ""
-        }
-        else {
-            # IIS path: import to store and update bindings
-            $newCert = Import-CertificateToStore -PACertificate $paCert
-
-            # Update IIS bindings
-            Update-IISBindings -NewThumbprint $newCert.Thumbprint -OldThumbprint $oldThumbprint -Domains $allDomains
-
-            # Remove old certificate if safe to do so
-            Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
-
-            # Install scheduled task if requested
-            if ($shouldInstallTask) {
-                Install-RenewalTask
-            }
-
-            Write-Host ""
-            Write-Host "  ============================================================" -ForegroundColor Green
-            Write-Host "  Certificate renewal complete!" -ForegroundColor Green
-            Write-Host "  Thumbprint: $($newCert.Thumbprint)" -ForegroundColor Green
-            Write-Host "  Expires:    $($newCert.NotAfter)" -ForegroundColor Green
-            if ($Staging) {
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host "  Certificate issued and exported!" -ForegroundColor Green
+                Write-Host "  PFX File:   $exportedPfx" -ForegroundColor Green
+                Write-Host "  Expires:    $($paCert.NotAfter)" -ForegroundColor Green
+                Write-Host "  Output Dir: $PfxOutputPath" -ForegroundColor Green
+                if ($stagingNote) { Write-Host $stagingNote -ForegroundColor Yellow }
                 Write-Host ""
-                Write-Host "  NOTE: This is a STAGING certificate (not browser-trusted)." -ForegroundColor Yellow
-                Write-Host "  Run again without -Staging for a production certificate." -ForegroundColor Yellow
+                Write-Host "  Import the PFX into your web server or load balancer." -ForegroundColor Cyan
+                Write-Host "  Password is saved alongside the PFX file (restricted to Admins)." -ForegroundColor Cyan
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host ""
             }
-            Write-Host "  ============================================================" -ForegroundColor Green
-            Write-Host ""
+
+            'RDGateway' {
+                # Import cert to Cert:\LocalMachine\My (CertStorePath was set in menu)
+                $newCert = Import-CertificateToStore -PACertificate $paCert
+
+                # Bind to RD Gateway and restart TSGateway service
+                Install-RDGatewayCertificate -Certificate $newCert
+
+                # Remove old cert if it's no longer needed elsewhere
+                Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
+
+                if ($shouldInstallTask) { Install-RenewalTask }
+
+                Write-Host ""
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host "  RD Gateway certificate updated!" -ForegroundColor Green
+                Write-Host "  Thumbprint: $($newCert.Thumbprint)" -ForegroundColor Green
+                Write-Host "  Expires:    $($newCert.NotAfter)" -ForegroundColor Green
+                Write-Host "  Store:      Cert:\LocalMachine\My" -ForegroundColor Green
+                if ($stagingNote) { Write-Host $stagingNote -ForegroundColor Yellow }
+                Write-Host ""
+                Write-Host "  TSGateway service was restarted. Active RD Gateway sessions were dropped." -ForegroundColor Yellow
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host ""
+            }
+
+            default {
+                # IIS path: import to store and update bindings
+                $newCert = Import-CertificateToStore -PACertificate $paCert
+
+                Update-IISBindings -NewThumbprint $newCert.Thumbprint -OldThumbprint $oldThumbprint -Domains $allDomains
+
+                Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
+
+                if ($shouldInstallTask) { Install-RenewalTask }
+
+                Write-Host ""
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host "  Certificate renewal complete!" -ForegroundColor Green
+                Write-Host "  Thumbprint: $($newCert.Thumbprint)" -ForegroundColor Green
+                Write-Host "  Expires:    $($newCert.NotAfter)" -ForegroundColor Green
+                if ($stagingNote) { Write-Host $stagingNote -ForegroundColor Yellow }
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host ""
+            }
         }
 
         Write-Log "Renewal process completed successfully" -Level Success
