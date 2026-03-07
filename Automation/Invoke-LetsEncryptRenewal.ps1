@@ -298,13 +298,16 @@ function Write-Banner {
 # ============================================================================
 
 function Test-IISAvailable {
-    # Check IIS via Windows Feature
-    $iisFeature = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
-    if ($iisFeature -and $iisFeature.InstallState -eq 'Installed') { return $true }
-
-    # Fallback: check W3SVC service (works on workstation OS)
+    # Check W3SVC service first - works on both Server and Workstation editions
     $w3svc = Get-Service -Name W3SVC -ErrorAction SilentlyContinue
     if ($w3svc) { return $true }
+
+    # Check IIS via Windows Feature (Server editions only - requires ServerManager module)
+    $osInfo = Get-CimInstance -ClassName Win32_OperatingSystem -ErrorAction SilentlyContinue
+    if ($osInfo -and $osInfo.Caption -match 'Server') {
+        $iisFeature = Get-WindowsFeature -Name Web-Server -ErrorAction SilentlyContinue
+        if ($iisFeature -and $iisFeature.InstallState -eq 'Installed') { return $true }
+    }
 
     return $false
 }
@@ -784,6 +787,10 @@ function Invoke-AcmeCertificateOrder {
             $matchedSites = Add-ChallengeToMatchingSites -Domains $Domains -ChallengePath $challengeDir
         }
 
+        if ($ChallengeType -eq 'Dns') {
+            Write-Log "Submitting certificate order — Posh-ACME will create a DNS TXT record then wait ${DnsSleep}s for propagation before asking Let's Encrypt to verify. This is normal; please wait..." -Level Info
+        }
+
         $paCert = New-PACertificate @certParams
 
         if (-not $paCert) {
@@ -798,6 +805,12 @@ function Invoke-AcmeCertificateOrder {
         Write-Log "Certificate obtained successfully!" -Level Success
         Write-Log "  Thumbprint: $($paCert.Thumbprint)"
         Write-Log "  Expires: $($paCert.NotAfter)"
+
+        # Persist DNS plugin credentials after every successful issuance so scheduled
+        # task renewals (running as SYSTEM) can load them without prompting.
+        if ($ChallengeType -eq 'Dns' -and $DnsPlugin -and $script:DnsPluginArgs) {
+            Save-PluginCredentials -Plugin $DnsPlugin -PluginArgs $script:DnsPluginArgs
+        }
 
         return $paCert
     }
@@ -825,6 +838,224 @@ function Build-HttpChallengeParams {
     }
 }
 
+# ============================================================================
+# CREDENTIAL MANAGEMENT
+# Credentials are encrypted with DPAPI LocalMachine scope so that the
+# scheduled task (running as SYSTEM) can decrypt them on renewal without
+# any interactive prompt.
+# ============================================================================
+
+function Save-PluginCredentials {
+    param(
+        [string]$Plugin,
+        [hashtable]$PluginArgs
+    )
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    $credFile = Join-Path $LogDir "plugin_creds.json"
+
+    $store = @{
+        Plugin  = $Plugin
+        SavedAt = (Get-Date -Format 'o')
+        Args    = @{}
+    }
+
+    foreach ($key in $PluginArgs.Keys) {
+        $val = $PluginArgs[$key]
+        $isSecure = $val -is [System.Security.SecureString]
+
+        if ($isSecure) {
+            $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($val)
+            try   { $plain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+            finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($plain)
+            $plain = $null
+        }
+        else {
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes([string]$val)
+        }
+
+        $encrypted = [System.Security.Cryptography.ProtectedData]::Protect(
+            $bytes, $null,
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        )
+
+        $store.Args[$key] = @{
+            Type  = if ($isSecure) { 'SecureString' } else { 'String' }
+            Value = [Convert]::ToBase64String($encrypted)
+        }
+    }
+
+    $store | ConvertTo-Json -Depth 5 | Set-Content -Path $credFile -Encoding UTF8
+
+    # Restrict file access to Administrators and SYSTEM only
+    try {
+        $acl = Get-Acl -Path $credFile
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'BUILTIN\Administrators', 'FullControl', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'NT AUTHORITY\SYSTEM', 'FullControl', 'Allow')))
+        Set-Acl -Path $credFile -AclObject $acl
+    }
+    catch {
+        Write-Log "Could not restrict credential file permissions (non-fatal): $($_.Exception.Message)" -Level Warning
+    }
+
+    Write-Log "DNS plugin credentials saved (DPAPI/LocalMachine): $credFile" -Level Info
+}
+
+function Get-PluginCredentials {
+    $credFile = Join-Path $LogDir "plugin_creds.json"
+    if (-not (Test-Path $credFile)) { return $null }
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    try {
+        $store = Get-Content -Path $credFile -Raw | ConvertFrom-Json
+
+        if ($store.Plugin -ne $DnsPlugin) {
+            Write-Log "Saved credentials are for plugin '$($store.Plugin)' but current plugin is '$DnsPlugin' — skipping" -Level Warning
+            return $null
+        }
+
+        $result = @{}
+        foreach ($key in $store.Args.PSObject.Properties.Name) {
+            $entry   = $store.Args.$key
+            $bytes   = [Convert]::FromBase64String($entry.Value)
+            $plain   = [System.Text.Encoding]::UTF8.GetString(
+                [System.Security.Cryptography.ProtectedData]::Unprotect(
+                    $bytes, $null,
+                    [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+                )
+            )
+
+            if ($entry.Type -eq 'SecureString') {
+                $ss = New-Object System.Security.SecureString
+                foreach ($c in $plain.ToCharArray()) { $ss.AppendChar($c) }
+                $ss.MakeReadOnly()
+                $result[$key] = $ss
+            }
+            else {
+                $result[$key] = $plain
+            }
+        }
+
+        Write-Log "Loaded saved DNS plugin credentials for $DnsPlugin (saved $($store.SavedAt))" -Level Info
+        return $result
+    }
+    catch {
+        Write-Log "Failed to load saved plugin credentials: $($_.Exception.Message)" -Level Warning
+        return $null
+    }
+}
+
+function Get-DnsPluginArgsInteractive {
+    param([string]$Plugin)
+
+    Write-Host ""
+    Write-Host "  ── DNS Provider Credentials ─────────────────────────────────────" -ForegroundColor DarkGray
+
+    # Check for a previously saved credential first
+    $saved = Get-PluginCredentials
+    if ($saved) {
+        $credFile = Join-Path $LogDir "plugin_creds.json"
+        $savedDate = (Get-Content $credFile -Raw | ConvertFrom-Json).SavedAt
+        Write-Host "  Found saved credentials for $Plugin (saved $savedDate)" -ForegroundColor Green
+        $reuse = Read-Host "  Use saved credentials? [Y/n]"
+        if ($reuse -eq '' -or $reuse -match '^[Yy]') {
+            return $saved
+        }
+        Write-Host ""
+    }
+
+    switch ($Plugin.ToLower()) {
+        'cloudflare' {
+            Write-Host "  Cloudflare API Token required." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  How to get it:" -ForegroundColor Gray
+            Write-Host "    1. Log in at dash.cloudflare.com" -ForegroundColor Gray
+            Write-Host "    2. Click your profile icon (top right) → My Profile" -ForegroundColor Gray
+            Write-Host "    3. Go to the 'API Tokens' tab" -ForegroundColor Gray
+            Write-Host "    4. Click 'Create Token' → use the 'Edit zone DNS' template" -ForegroundColor Gray
+            Write-Host "    5. Scope it to your specific zone (e.g. specificoffice.com)" -ForegroundColor Gray
+            Write-Host "    6. Click 'Continue to summary' → 'Create Token'" -ForegroundColor Gray
+            Write-Host "    7. Copy the token — it is only shown once" -ForegroundColor Yellow
+            Write-Host ""
+            $token = Read-Host "  Paste your Cloudflare API Token" -AsSecureString
+            return @{ CFToken = $token }
+        }
+        'godaddy' {
+            Write-Host "  GoDaddy API Key and Secret required." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  How to get them:" -ForegroundColor Gray
+            Write-Host "    1. Go to developer.godaddy.com → Keys" -ForegroundColor Gray
+            Write-Host "    2. Create a Production key (not OTE/test)" -ForegroundColor Gray
+            Write-Host "    3. Copy both the Key and Secret — Secret is only shown once" -ForegroundColor Yellow
+            Write-Host ""
+            $key    = Read-Host "  GoDaddy API Key"
+            $secret = Read-Host "  GoDaddy API Secret" -AsSecureString
+            return @{ GDKey = $key; GDSecret = $secret }
+        }
+        'route53' {
+            Write-Host "  AWS Route53 credentials required (IAM user with Route53 permissions)." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  How to get them:" -ForegroundColor Gray
+            Write-Host "    1. In AWS Console, go to IAM → Users → Create user" -ForegroundColor Gray
+            Write-Host "    2. Attach the 'AmazonRoute53FullAccess' policy (or a custom scoped policy)" -ForegroundColor Gray
+            Write-Host "    3. Go to the user → Security credentials → Create access key" -ForegroundColor Gray
+            Write-Host "    4. Copy the Access Key ID and Secret Access Key" -ForegroundColor Yellow
+            Write-Host ""
+            $accessKey = Read-Host "  AWS Access Key ID"
+            $secretKey = Read-Host "  AWS Secret Access Key" -AsSecureString
+            return @{ R53AccessKey = $accessKey; R53SecretKey = $secretKey }
+        }
+        'azuredns' {
+            Write-Host "  Azure DNS credentials required (Service Principal with DNS Zone Contributor role)." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  How to get them:" -ForegroundColor Gray
+            Write-Host "    1. In Azure Portal, go to Azure Active Directory → App registrations → New registration" -ForegroundColor Gray
+            Write-Host "    2. Note the Application (client) ID and Directory (tenant) ID" -ForegroundColor Gray
+            Write-Host "    3. Under Certificates & secrets, create a new client secret — copy it now" -ForegroundColor Gray
+            Write-Host "    4. Go to your DNS Zone → Access control (IAM) → Add role assignment" -ForegroundColor Gray
+            Write-Host "    5. Assign 'DNS Zone Contributor' to the app registration you created" -ForegroundColor Gray
+            Write-Host "    6. Also need your Azure Subscription ID (found in Subscriptions)" -ForegroundColor Gray
+            Write-Host ""
+            $subId    = Read-Host "  Azure Subscription ID"
+            $tenantId = Read-Host "  Azure Tenant (Directory) ID"
+            $appId    = Read-Host "  App Registration Client ID"
+            $secret   = Read-Host "  Client Secret" -AsSecureString
+            return @{
+                AZSubscriptionId         = $subId
+                AZTenantId               = $tenantId
+                AZAppUsername            = $appId
+                AZAppPasswordCredential  = $secret
+            }
+        }
+        'namecheap' {
+            Write-Host "  Namecheap API credentials required." -ForegroundColor White
+            Write-Host ""
+            Write-Host "  How to get them:" -ForegroundColor Gray
+            Write-Host "    1. Log in at namecheap.com → Profile → Tools" -ForegroundColor Gray
+            Write-Host "    2. Scroll to 'Business & Dev Tools' → Enable API access" -ForegroundColor Gray
+            Write-Host "    3. Whitelist this server's public IP address in the API section" -ForegroundColor Yellow
+            Write-Host "    4. Your API key is shown on that same page" -ForegroundColor Gray
+            Write-Host ""
+            $username = Read-Host "  Namecheap username"
+            $apiKey   = Read-Host "  Namecheap API key" -AsSecureString
+            return @{ NCUsername = $username; NCApiKey = $apiKey }
+        }
+        default {
+            Write-Host "  Plugin '$Plugin' requires credentials." -ForegroundColor White
+            Write-Host "  Run 'Get-PAPlugin $Plugin -Param' in PowerShell to see required parameters." -ForegroundColor Gray
+            Write-Host "  You will be prompted for individual values by Posh-ACME during certificate issuance." -ForegroundColor Gray
+            Write-Host ""
+            return $null  # Let Posh-ACME prompt natively
+        }
+    }
+}
+
 function Build-DnsChallengeParams {
     param([string[]]$Domains)
 
@@ -844,6 +1075,28 @@ function Build-DnsChallengeParams {
         throw "DNS plugin '$DnsPlugin' not found. Available plugins: $pluginList"
     }
 
+    # Resolve plugin credentials:
+    #   1. Use args passed on the command line
+    #   2. If interactive (menu-driven run), prompt the user with provider instructions
+    #   3. If non-interactive (scheduled task), load from the DPAPI-encrypted credential store
+    $resolvedPluginArgs = $DnsPluginArgs
+    if (-not $resolvedPluginArgs) {
+        if ($script:isInteractive) {
+            $resolvedPluginArgs = Get-DnsPluginArgsInteractive -Plugin $DnsPlugin
+        }
+        else {
+            $resolvedPluginArgs = Get-PluginCredentials
+            if (-not $resolvedPluginArgs) {
+                throw "No DNS plugin credentials found. Run the script interactively with -InstallScheduledTask to save credentials for unattended renewal."
+            }
+        }
+    }
+
+    # Persist back to script scope so Install-RenewalTask can save them
+    if ($resolvedPluginArgs) {
+        $script:DnsPluginArgs = $resolvedPluginArgs
+    }
+
     $certParams = @{
         Domain     = $Domains
         AcceptTOS  = $true
@@ -854,8 +1107,8 @@ function Build-DnsChallengeParams {
         Verbose    = $false
     }
 
-    if ($DnsPluginArgs) {
-        $certParams['PluginArgs'] = $DnsPluginArgs
+    if ($resolvedPluginArgs) {
+        $certParams['PluginArgs'] = $resolvedPluginArgs
     }
 
     return $certParams
@@ -1165,11 +1418,16 @@ function Install-RenewalTask {
         Write-Log "Consider switching to -ChallengeType Dns with a -DnsPlugin for automated renewals" -Level Warning
     }
 
-    # Note: DnsPluginArgs containing SecureString values will NOT survive serialization
-    # to a scheduled task. For scheduled tasks, use environment variables or a credential
-    # file that the DNS plugin supports. See Posh-ACME docs for plugin-specific guidance.
-    if ($DnsPluginArgs) {
-        Write-Log "Note: DNS plugin credentials are stored by Posh-ACME in the ACME account profile and will be reused on renewal" -Level Info
+    # DNS plugin credentials are saved to a DPAPI/LocalMachine-encrypted file during cert
+    # issuance and loaded automatically by the scheduled task (running as SYSTEM).
+    if ($DnsPlugin) {
+        $credFile = Join-Path $LogDir "plugin_creds.json"
+        if (Test-Path $credFile) {
+            Write-Log "DNS plugin credentials on file: $credFile (DPAPI/LocalMachine encrypted)" -Level Info
+        }
+        else {
+            Write-Log "WARNING: No saved DNS plugin credentials found. The scheduled task will fail on renewal unless credentials are saved first by running this script interactively." -Level Warning
+        }
     }
 
     $action = New-ScheduledTaskAction `

@@ -29,6 +29,9 @@ dev/
 .vs/
 _WorkDir/
 
+# Claude Code AI working directories
+.claude/
+
 # Operating System
 .DS_Store
 Thumbs.db
