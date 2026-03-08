@@ -297,6 +297,194 @@ The installer is completely self-contained with these embedded components:
 
 ---
 
+## Let's Encrypt Certificate Renewal (Invoke-LetsEncryptRenewal.ps1)
+
+Automated Let's Encrypt certificate lifecycle management designed for MSP environments. Run interactively once to configure and install a scheduled task; subsequent renewals happen fully unattended as SYSTEM.
+
+### Deployment Modes
+
+| Mode | Target | How It Works |
+|------|--------|--------------|
+| **IIS** | Local IIS | Imports cert to `Cert:\LocalMachine\WebHosting` (or `\My`), updates all matching HTTPS bindings |
+| **RD Gateway** | Local TSGateway service | Imports to `Cert:\LocalMachine\My`, binds via RDS PowerShell drive or WMI, restarts TSGateway |
+| **PFX Export** | Any server (Apache, nginx, load balancer) | Exports PFX + plain-text password file to a specified folder |
+| **WatchGuard Firebox** | Firebox Web UI SSL cert | SSH to Firebox, transfers PFX via ephemeral FTP server, imports and activates as `web-server-cert` |
+
+### Challenge Types
+
+| Type | Use Case | Wildcard Support |
+|------|----------|-----------------|
+| **HTTP-01** | Port 80 accessible from internet, IIS present | No |
+| **DNS-01 (plugin)** | Automated TXT record via provider API (30+ plugins) | Yes |
+| **DNS-01 (manual)** | No API access; script pauses for manual TXT creation | Yes |
+
+> DNS-01 plugin examples: Azure, Cloudflare, GoDaddy, Route53, Namecheap, Hetzner, Porkbun, DuckDNS, and 25+ more. Run `Get-PAPlugin` after install to list all.
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Interactive Setup** | Guided menu on first run — no parameters required |
+| **Unattended Renewal** | Scheduled task runs daily as SYSTEM; only renews within threshold window |
+| **Renewal Threshold** | Configurable (default 30 days). Cert checked daily; email only sent on action |
+| **Shared Cert Cache** | Posh-ACME data stored in `ProgramData` — same cache for interactive user and SYSTEM |
+| **DPAPI Credentials** | All secrets (DNS plugin, Firebox SSH, email) encrypted with LocalMachine DPAPI, ACL-restricted |
+| **Wildcard Certs** | Supported via DNS-01 (e.g. `*.contoso.com`) |
+| **Multi-Domain SANs** | Multiple domains on a single certificate via `-AdditionalDomains` |
+| **Staging Support** | `-Staging` flag for testing without consuming rate limits |
+| **Expired Cert Cleanup** | Auto-removes expired Let's Encrypt certs from both cert stores on every run |
+| **Email Reporting** | Success/failure/update notifications via Graph API (OAuth2) or SMTP (STARTTLS) |
+| **Update Task** | Menu option to refresh credentials or reconfigure without reissuing the cert |
+
+### Interactive Menu
+
+On first run without parameters, a guided menu walks through all configuration:
+
+```
+  Let's Encrypt Certificate Manager v1.4.0
+  ─────────────────────────────────────────
+  What would you like to do?
+
+  [1] Request/renew a certificate (one-time)
+  [2] Request/renew + install scheduled auto-renewal task
+  [3] Remove existing scheduled renewal task
+  [4] Update existing scheduled task (refresh credentials / reconfigure)
+  [5] Exit
+```
+
+Followed by deployment target, challenge type, and optional email reporting configuration.
+
+### Usage Examples
+
+```powershell
+# First-time interactive setup (recommended) — menu guides through everything
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com"
+
+# Staging test run (not browser-trusted, avoids rate limits)
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com" -Staging
+
+# Non-interactive: IIS, HTTP-01, install scheduled task at 3 AM
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com" `
+    -DeployMode IIS -InstallScheduledTask
+
+# Wildcard via Cloudflare DNS-01, PFX export
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "*.contoso.com" -ContactEmail "admin@contoso.com" `
+    -ChallengeType Dns -DnsPlugin Cloudflare `
+    -DnsPluginArgs @{ CFToken = (Read-Host "CF Token" -AsSecureString) } `
+    -DeployMode PFX -PfxOutputPath "C:\Certs"
+
+# WatchGuard Firebox web-server-cert, DNS-01, scheduled task
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "fw.contoso.com" -ContactEmail "admin@contoso.com" `
+    -ChallengeType Dns -DnsPlugin Cloudflare `
+    -DnsPluginArgs @{ CFToken = (Read-Host "CF Token" -AsSecureString) } `
+    -DeployMode WatchGuard -FireboxHost 10.0.0.1 -InstallScheduledTask
+
+# RD Gateway (run on the RD Gateway server)
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "gateway.contoso.com" -ContactEmail "admin@contoso.com" `
+    -DeployMode RDGateway -InstallScheduledTask
+
+# Force immediate renewal (ignore threshold)
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com" `
+    -DeployMode IIS -ForceRenewal
+
+# Remove scheduled task
+.\Invoke-LetsEncryptRenewal.ps1 -DomainName "www.contoso.com" -ContactEmail "admin@contoso.com" `
+    -RemoveScheduledTask
+```
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-DomainName` | Primary domain (certificate CN) | Required |
+| `-ContactEmail` | Let's Encrypt account contact email | Required |
+| `-AdditionalDomains` | Additional SANs on the certificate | None |
+| `-ChallengeType` | `Http`, `Dns`, or `DnsManual` | `Http` |
+| `-DnsPlugin` | Posh-ACME DNS plugin name | None |
+| `-DnsPluginArgs` | Hashtable of plugin credentials | None |
+| `-DnsSleep` | DNS propagation wait in seconds | `120` |
+| `-RenewalDays` | Days before expiry to trigger renewal | `30` |
+| `-DeployMode` | `IIS`, `RDGateway`, `PFX`, or `WatchGuard` | Prompted |
+| `-PfxOutputPath` | Folder for PFX export (sets PFX mode) | None |
+| `-FireboxHost` | Firebox hostname or IP (WatchGuard mode) | Prompted |
+| `-FireboxSshPort` | Firebox SSH port | `4118` |
+| `-FireboxLocalIP` | This machine's IP for Firebox FTP callback | Auto-detected |
+| `-FireboxFtpPort` | Local FTP port for cert transfer | `2121` |
+| `-InstallScheduledTask` | Install daily scheduled renewal task | False |
+| `-TaskTime` | Scheduled task run time | `03:00` |
+| `-RemoveScheduledTask` | Remove the scheduled task | False |
+| `-SendReport` | Enable email status reporting | False |
+| `-Staging` | Use Let's Encrypt staging environment | False |
+| `-ForceRenewal` | Renew even if cert is still valid | False |
+| `-CertStorePath` | Windows cert store path | `Cert:\LocalMachine\WebHosting` |
+
+### WatchGuard Firebox Deployment
+
+Deploys the certificate to the Firebox Web UI SSL (`web-server-cert`) using a fully automated SSH + FTP pipeline:
+
+```
+Script (PowerShell)
+    ↓ SSH (port 4118) — Posh-SSH module
+WatchGuard Firebox CLI
+    ↓ FTP callback (port 2121) — ephemeral in-process FTP server
+Script receives PFX transfer request → sends fullchain.pfx
+    ↓ Firebox imports and activates cert
+web-server-cert updated → Firebox Web UI now uses new cert
+```
+
+**Credential Security:** SSH credentials are encrypted with DPAPI (LocalMachine scope) and stored in `firebox_creds.json`. The scheduled task reads these without prompting — no plaintext secrets in task arguments.
+
+> **Note:** IKEv2 Mobile VPN certificate assignment via CLI is not available on Fireware v12.10+. That requires manual update in the Firebox Web UI.
+
+### RD Gateway Deployment
+
+Binds the certificate to the TSGateway service via the RDS PowerShell drive (with WMI fallback). TSGateway is restarted to apply the cert — active gateway sessions will be dropped briefly.
+
+**Requirements:**
+- Script must run **on the RD Gateway server** (not remotely)
+- Remote Desktop Gateway role service must be installed
+- The menu always shows this option; an error is thrown at deploy time if TSGateway is not present
+
+### Email Reporting
+
+Sends HTML-formatted reports on renewal outcomes. Skipped runs (cert not yet due) do not generate emails — only Success, Failed, and Updated events trigger a notification.
+
+| Method | Configuration | Requirements |
+|--------|--------------|--------------|
+| **Microsoft 365 Graph API** | Tenant ID, Client ID, Client Secret | `Mail.Send` Application permission + admin consent |
+| **SMTP** | Server, port, credentials | STARTTLS supported on port 587 |
+
+The client secret (Graph) and SMTP password are DPAPI-encrypted at rest. Configure during interactive setup — settings persist for all future task runs.
+
+### Credential Storage
+
+All secrets are encrypted with Windows DPAPI (LocalMachine scope) and stored in `C:\ProgramData\YeylandWutani\LetsEncrypt\`:
+
+| File | Contents |
+|------|----------|
+| `plugin_creds.json` | DNS plugin API credentials |
+| `firebox_creds.json` | Firebox SSH username + password |
+| `email_config.json` | Graph/SMTP settings + encrypted secret/password |
+
+Files are ACL-restricted to Administrators and SYSTEM. The scheduled task (running as SYSTEM) can decrypt all secrets without any user interaction.
+
+### Scheduled Task Behavior
+
+| Run Condition | Action | Email? |
+|---------------|--------|--------|
+| Cert has >30 days remaining | Log skip, exit | No |
+| Cert within 30-day window | Renew + deploy | Yes (Success) |
+| Renewal fails | Log error | Yes (Failed) |
+| Update task selected (menu option 4) | Reinstall task, no cert order | Yes (Updated) |
+
+Posh-ACME data (accounts, orders, cached certs) is stored in `C:\ProgramData\YeylandWutani\PoshAcme` — a shared path accessible to both the interactive user and the SYSTEM account, preventing unnecessary re-issuance.
+
+### Expired Certificate Cleanup
+
+On every run, the script sweeps `Cert:\LocalMachine\WebHosting` and `Cert:\LocalMachine\My` for expired Let's Encrypt certificates (identified by issuer) and removes them automatically. Any cert currently assigned to an IIS SSL binding is always protected regardless of expiry date.
+
+---
+
 ## Server Baseline Configuration (Set-ServerBaseline.ps1)
 
 Automated server provisioning and hardening for MSP environments with modular component deployment.
@@ -686,13 +874,14 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 
 | Script | Requirements |
 |--------|--------------|
+| `Invoke-LetsEncryptRenewal.ps1` | PowerShell 5.1+, Administrator rights, Internet access to Let's Encrypt ACME endpoints. Posh-ACME auto-installed. Posh-SSH auto-installed for WatchGuard mode. IIS optional (HTTP-01 / IIS binding). TSGateway service required on-box for RD Gateway mode. |
 | `Install-SMTPRelay.ps1` | PowerShell 5.1+, Administrator rights, Internet access (NSSM download), Microsoft.Graph module (for auto app creation) |
 | `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module (for AD query), PSExec.exe, Admin rights on targets |
 | `Reset-UserProfile.ps1` | PowerShell 5.1+, Local Administrator rights, User must be logged off |
 | `Get-SPOMigrationReadiness.ps1` | PowerShell 5.1+, Read access to source paths |
 | `Convert-Legacy*.ps1` | PowerShell 5.1+, Microsoft Office installed |
 | `Find-DuplicateFiles.ps1` | PowerShell 5.1+, NTFS (for hardlinks) |
-| All scripts | Windows environment |
+| All scripts | Windows Server 2016+ or Windows 10/11, PowerShell 5.1+ |
 
 ---
 
