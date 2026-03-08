@@ -29,6 +29,14 @@ dev/
 .vs/
 _WorkDir/
 
+# Claude Code working/temp scripts (ad-hoc helpers created during development sessions)
+check-syntax.ps1
+check-sections.ps1
+find-sections.ps1
+
+# Claude Code AI working directories
+.claude/
+
 # Operating System
 .DS_Store
 Thumbs.db
