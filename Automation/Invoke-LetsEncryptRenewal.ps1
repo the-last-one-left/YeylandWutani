@@ -169,7 +169,7 @@
 
 .NOTES
     Yeyland Wutani LLC - Building Better Systems
-    Version: 1.3.0
+    Version: 1.4.0
 
     Prerequisites:
     - Windows Server 2016+ (IIS required for HTTP-01 and auto-binding; optional for DNS-01 with PFX export)
@@ -237,8 +237,27 @@ param(
     [string]$PfxOutputPath,
 
     [Parameter()]
-    [ValidateSet('IIS', 'RDGateway', 'PFX')]
+    [ValidateSet('IIS', 'RDGateway', 'PFX', 'WatchGuard')]
     [string]$DeployMode,
+
+    # ---- WatchGuard Firebox deployment parameters ----
+
+    [Parameter()]
+    [string]$FireboxHost,
+
+    [Parameter()]
+    [int]$FireboxSshPort = 4118,
+
+    [Parameter()]
+    [string]$FireboxLocalIP,   # IP the Firebox can reach this machine on (for FTP callback)
+
+    [Parameter()]
+    [int]$FireboxFtpPort = 2121,   # Non-privileged port; no admin required
+
+    # ---- Email reporting parameters ----
+
+    [Parameter()]
+    [switch]$SendReport,   # Enable email status reports (settings loaded from email_config.json)
 
     [Parameter()]
     [string]$CertStorePath = "Cert:\LocalMachine\WebHosting",
@@ -248,9 +267,27 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$script:OutputMode    = if ($DeployMode) { $DeployMode } elseif ($PfxOutputPath) { 'PFX' } else { 'IIS' }
-$script:RDGAvailable  = $false
-$ScriptVersion = "1.3.0"
+$script:OutputMode     = if ($DeployMode) { $DeployMode } elseif ($PfxOutputPath) { 'PFX' } else { 'IIS' }
+$script:RDGAvailable   = $false
+$script:FireboxHost    = $FireboxHost
+$script:FireboxSshPort = $FireboxSshPort
+$script:FireboxLocalIP = $FireboxLocalIP
+$script:FireboxFtpPort = $FireboxFtpPort
+$script:SkipCertOrder  = $false
+$script:WgCredential   = $null
+$script:SendReport     = $SendReport.IsPresent
+$script:ReportSent     = $false
+$script:ReportData     = @{
+    Status        = 'None'    # 'Success' | 'Failed' | 'Skipped' | 'Updated' | 'None'
+    Domain        = $DomainName
+    Mode          = ''
+    NewExpiry     = ''
+    CurrentExpiry = ''
+    Thumbprint    = ''
+    Message       = ''
+    StartTime     = Get-Date
+}
+$ScriptVersion = "1.4.0"
 $TaskName = "LetsEncrypt Certificate Renewal - $DomainName"
 $LogDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt"
 $LogFile = Join-Path $LogDir "renewal_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
@@ -328,12 +365,13 @@ function Show-InteractiveMenu {
     Write-Host "  [1] Request/renew a certificate (one-time)" -ForegroundColor Cyan
     Write-Host "  [2] Request/renew and install scheduled task for auto-renewal" -ForegroundColor Cyan
     Write-Host "  [3] Remove existing scheduled task" -ForegroundColor Cyan
-    Write-Host "  [4] Exit" -ForegroundColor Cyan
+    Write-Host "  [4] Update existing scheduled task (refresh credentials / reconfigure)" -ForegroundColor Cyan
+    Write-Host "  [5] Exit" -ForegroundColor Cyan
     Write-Host ""
 
     do {
-        $choice = Read-Host "  Select option [1-4]"
-    } while ($choice -notin @('1', '2', '3', '4'))
+        $choice = Read-Host "  Select option [1-5]"
+    } while ($choice -notin @('1', '2', '3', '4', '5'))
 
     return $choice
 }
@@ -446,6 +484,7 @@ function Show-CertificateOutputMenu {
         $menuOptions.Add(@{ Label = 'Bind to RD Gateway (TSGateway service) - updates gateway SSL certificate'; Mode = 'RDGateway' })
     }
     $menuOptions.Add(@{ Label = 'Export as PFX file to a folder (for any web server / load balancer)'; Mode = 'PFX' })
+    $menuOptions.Add(@{ Label = 'Deploy to WatchGuard Firebox (web-server-cert via SSH + FTP)'; Mode = 'WatchGuard' })
 
     Write-Host ""
     Write-Host "  How should the certificate be deployed?" -ForegroundColor White
@@ -510,6 +549,35 @@ function Show-CertificateOutputMenu {
         }
         'IIS' {
             Write-Log "Certificate output: IIS certificate store + binding update" -Level Info
+        }
+        'WatchGuard' {
+            # Gather Firebox connection details interactively if not provided
+            if (-not $script:FireboxHost) {
+                Write-Host ""
+                $script:FireboxHost = Read-Host "  Firebox hostname or IP"
+                if ([string]::IsNullOrWhiteSpace($script:FireboxHost)) {
+                    throw "Firebox hostname or IP is required for WatchGuard deployment."
+                }
+            }
+
+            Write-Host "  SSH port [$($script:FireboxSshPort)]:" -ForegroundColor Gray -NoNewline
+            $sshIn = Read-Host " "
+            if (-not [string]::IsNullOrWhiteSpace($sshIn)) { $script:FireboxSshPort = [int]$sshIn }
+
+            if (-not $script:FireboxLocalIP) {
+                $detected = (Get-NetIPAddress -AddressFamily IPv4 |
+                    Where-Object { $_.IPAddress -ne '127.0.0.1' -and $_.PrefixOrigin -ne 'WellKnown' } |
+                    Sort-Object InterfaceIndex | Select-Object -First 1).IPAddress
+                Write-Host "  This machine's IP (Firebox will FTP back to this) [$detected]:" -ForegroundColor Gray -NoNewline
+                $localIpIn = Read-Host " "
+                $script:FireboxLocalIP = if ($localIpIn.Trim()) { $localIpIn.Trim() } else { $detected }
+            }
+
+            Write-Host "  FTP port (used for cert transfer) [$($script:FireboxFtpPort)]:" -ForegroundColor Gray -NoNewline
+            $ftpIn = Read-Host " "
+            if (-not [string]::IsNullOrWhiteSpace($ftpIn)) { $script:FireboxFtpPort = [int]$ftpIn }
+
+            Write-Log "Certificate output: WatchGuard Firebox $($script:FireboxHost):$($script:FireboxSshPort) (SSH+FTP deploy)" -Level Info
         }
     }
 }
@@ -584,6 +652,156 @@ function Show-ChallengeTypeMenu {
     }
 
     Write-Log "Challenge type: $ChallengeType"
+}
+
+function Show-EmailReportMenu {
+    <#
+    .SYNOPSIS
+        Interactively configures optional email reporting for certificate renewal runs.
+        Settings are DPAPI/LocalMachine-encrypted in email_config.json so the
+        scheduled task (running as SYSTEM) can send reports without prompting.
+    #>
+    if (-not $script:isInteractive) { return }
+
+    Write-Host ""
+    Write-Host "  -- Email Reporting --------------------------------------------------------" -ForegroundColor DarkGray
+
+    # Offer to keep / update / disable existing config
+    $existing = Get-EmailConfig
+    if ($existing -and $existing.Enabled) {
+        Write-Host "  Email reporting is already configured:" -ForegroundColor Green
+        Write-Host "    Method:    $($existing.Method)" -ForegroundColor Gray
+        Write-Host "    Sender:    $($existing.Sender)" -ForegroundColor Gray
+        Write-Host "    Recipient: $($existing.Recipient)" -ForegroundColor Gray
+        Write-Host ""
+        Write-Host "  [K] Keep existing settings (default)" -ForegroundColor Cyan
+        Write-Host "  [U] Update / reconfigure" -ForegroundColor Cyan
+        Write-Host "  [D] Disable email reporting" -ForegroundColor Cyan
+        Write-Host ""
+        $action = Read-Host "  Choice [K/u/d]"
+
+        if ($action -match '^[Dd]') {
+            # Just flip the Enabled flag in-place without re-encrypting secrets
+            $cfgFile = Join-Path $LogDir "email_config.json"
+            $raw = Get-Content $cfgFile -Raw | ConvertFrom-Json
+            $raw.Enabled = $false
+            $raw | ConvertTo-Json | Set-Content -Path $cfgFile -Encoding UTF8
+            $script:SendReport = $false
+            Write-Log "Email reporting disabled" -Level Info
+            return
+        }
+        if ($action -notmatch '^[Uu]') {
+            # Keep
+            $script:SendReport = $true
+            Write-Log "Email reporting: keeping existing config ($($existing.Method) -> $($existing.Recipient))" -Level Info
+            return
+        }
+        # Fall through to reconfigure
+        Write-Host ""
+    }
+    else {
+        $enable = Read-Host "  Configure email reports for this renewal run (and future scheduled runs)? [y/N]"
+        if ($enable -notmatch '^[Yy]') {
+            $script:SendReport = $false
+            return
+        }
+    }
+
+    # ---- Choose method ----
+    Write-Host ""
+    Write-Host "  [1] Microsoft 365 Graph API  (OAuth2 app credentials - recommended for M365 environments)" -ForegroundColor Cyan
+    Write-Host "  [2] SMTP  (any mail server with username/password - Office 365, Gmail, etc.)" -ForegroundColor Cyan
+    Write-Host ""
+    do { $methodChoice = Read-Host "  Select method [1-2]" } while ($methodChoice -notin @('1', '2'))
+
+    $config = @{
+        Enabled   = $true
+        Method    = if ($methodChoice -eq '1') { 'Graph' } else { 'SMTP' }
+        Sender    = ''
+        Recipient = ''
+    }
+
+    Write-Host ""
+    $config.Recipient = Read-Host "  Send reports TO (recipient email)"
+    if ([string]::IsNullOrWhiteSpace($config.Recipient)) { throw "Recipient email is required." }
+
+    if ($config.Method -eq 'Graph') {
+        Write-Host ""
+        Write-Host "  -- Microsoft 365 Graph API --------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  Prerequisites:" -ForegroundColor Gray
+        Write-Host "    1. Azure Portal -> Azure AD -> App registrations -> New registration" -ForegroundColor Gray
+        Write-Host "    2. API permissions -> Add -> Microsoft Graph -> Application -> Mail.Send" -ForegroundColor Gray
+        Write-Host "    3. Grant admin consent for Mail.Send" -ForegroundColor Gray
+        Write-Host "    4. Certificates & secrets -> New client secret -> copy the VALUE (not ID)" -ForegroundColor Gray
+        Write-Host "    5. The sender must be a licensed M365 user or shared mailbox" -ForegroundColor Gray
+        Write-Host ""
+        $config.TenantId = Read-Host "  Azure Tenant (Directory) ID"
+        $config.ClientId = Read-Host "  App Registration (Client) ID"
+        $cssSS = Read-Host "  Client Secret VALUE" -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($cssSS)
+        try   { $config.ClientSecret = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $config.Sender = Read-Host "  FROM address (licensed M365 mailbox, e.g. alerts@contoso.com)"
+    }
+    else {
+        Write-Host ""
+        Write-Host "  -- SMTP Settings ------------------------------------------------------------" -ForegroundColor DarkGray
+        Write-Host "  Common configs:" -ForegroundColor Gray
+        Write-Host "    Office 365:  smtp.office365.com  port 587  (STARTTLS)" -ForegroundColor Gray
+        Write-Host "    Gmail:       smtp.gmail.com       port 587  (use App Password if 2FA enabled)" -ForegroundColor Gray
+        Write-Host ""
+        $config.SmtpServer   = Read-Host "  SMTP server"
+        $smtpPortIn = Read-Host "  SMTP port [587]"
+        $config.SmtpPort     = if ($smtpPortIn.Trim()) { [int]$smtpPortIn } else { 587 }
+        $config.SmtpUsername = Read-Host "  SMTP username"
+        $smtpPassSS = Read-Host "  SMTP password" -AsSecureString
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($smtpPassSS)
+        try   { $config.SmtpPassword = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+        $config.Sender = Read-Host "  FROM address (e.g. noreply@contoso.com)"
+    }
+
+    Save-EmailConfig -Config $config
+    $script:SendReport = $true
+    Write-Log "Email reporting configured: $($config.Method) -> $($config.Recipient)" -Level Success
+
+    # Offer a test send
+    Write-Host ""
+    $testNow = Read-Host "  Send a test email now to verify settings? [y/N]"
+    if ($testNow -match '^[Yy]') {
+        $savedCfg = Get-EmailConfig
+        try {
+            $testSubj = "[YW] Let's Encrypt - Test Email ($DomainName)"
+            $testBody = @"
+<html><body style="font-family:Arial,sans-serif;padding:20px;color:#333">
+<div style="max-width:560px;margin:0 auto">
+  <div style="background:#FF6600;padding:16px 20px;border-radius:6px 6px 0 0">
+    <span style="color:#fff;font-size:17px;font-weight:bold">Yeyland Wutani LLC</span>
+    <span style="color:#ffe0c0;font-size:12px;margin-left:8px">Building Better Systems</span>
+  </div>
+  <div style="background:#fff;padding:20px;border:1px solid #ddd;border-top:none">
+    <p style="font-size:16px;font-weight:bold;color:#28a745;margin:0 0 12px">&#10003; Test Email Successful</p>
+    <p>Email reporting is correctly configured for <strong>$DomainName</strong>.</p>
+    <p style="color:#666;font-size:13px">You will receive a report like this after each certificate renewal attempt.</p>
+  </div>
+  <div style="background:#f8f8f8;padding:10px 20px;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;font-size:11px;color:#999">
+    Let's Encrypt Certificate Manager v$ScriptVersion &bull; Yeyland Wutani LLC
+  </div>
+</div></body></html>
+"@
+            switch ($savedCfg.Method) {
+                'Graph' { Send-GraphEmail -Config $savedCfg -Subject $testSubj -HtmlBody $testBody }
+                'SMTP'  { Send-SmtpEmail  -Config $savedCfg -Subject $testSubj -HtmlBody $testBody }
+            }
+            Write-Host "  Test email sent successfully!" -ForegroundColor Green
+            Write-Log "Test email sent to $($savedCfg.Recipient)" -Level Success
+        }
+        catch {
+            Write-Host "  Test email failed: $($_.Exception.Message)" -ForegroundColor Red
+            Write-Host "  Check your credentials and try again (menu option 4 -> reconfigure email)." -ForegroundColor Yellow
+            Write-Log "Test email failed: $($_.Exception.Message)" -Level Warning
+        }
+    }
 }
 
 # ============================================================================
@@ -749,6 +967,733 @@ function Install-PoshAcmeModule {
     Install-Module -Name Posh-ACME -Scope AllUsers -Force -AllowClobber
     Import-Module Posh-ACME -Force
     Write-Log "Posh-ACME module installed and loaded" -Level Success
+}
+
+# ============================================================================
+# WATCHGUARD FIREBOX DEPLOYMENT
+# Deploys a Posh-ACME certificate to a locally-managed WatchGuard Firebox
+# via SSH (port 4118) + ephemeral in-process FTP server for cert transfer.
+# Supports: web-server-cert (Fireware Web UI SSL certificate)
+# Note: IKEv2 Mobile VPN cert assignment via CLI is not available on
+#       Fireware v12.10+ - that requires manual configuration in the Web UI.
+# ============================================================================
+
+function Install-PoshSshModule {
+    if (Get-Module -ListAvailable -Name Posh-SSH) {
+        Write-Log "Posh-SSH module is already installed" -Level Success
+        Import-Module Posh-SSH -Force
+        return
+    }
+
+    Write-Log "Installing Posh-SSH module from PowerShell Gallery..."
+
+    $nuget = Get-PackageProvider -Name NuGet -ErrorAction SilentlyContinue
+    if (-not $nuget -or $nuget.Version -lt [version]"2.8.5.201") {
+        Install-PackageProvider -Name NuGet -MinimumVersion 2.8.5.201 -Force -Scope AllUsers | Out-Null
+    }
+
+    $repo = Get-PSRepository -Name PSGallery
+    if ($repo.InstallationPolicy -ne 'Trusted') {
+        Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+    }
+
+    Install-Module -Name Posh-SSH -Scope AllUsers -Force -AllowClobber
+    Import-Module Posh-SSH -Force
+    Write-Log "Posh-SSH module installed and loaded" -Level Success
+}
+
+function Invoke-FireboxCommand {
+    <#
+    .SYNOPSIS
+        Sends a CLI command to a WatchGuard Firebox over an SSH shell stream
+        and waits for the prompt to return, then returns the buffered output.
+    #>
+    param(
+        $Stream,
+        [string]$Cmd,
+        [int]$TimeoutMs = 4000
+    )
+    $Stream.WriteLine($Cmd)
+    $deadline = [datetime]::UtcNow.AddMilliseconds($TimeoutMs)
+    $buf = ''
+    while ([datetime]::UtcNow -lt $deadline) {
+        Start-Sleep -Milliseconds 200
+        $chunk = $Stream.Read()
+        if ($chunk) { $buf += $chunk }
+        # WatchGuard prompts: "WG> " (main) or "WG(config)> " (config mode)
+        if ($buf -match '>\s*$') { break }
+    }
+    return $buf
+}
+
+function Save-FireboxCredentials {
+    <#
+    .SYNOPSIS
+        Saves Firebox connection parameters and SSH credentials to a
+        DPAPI/LocalMachine-encrypted JSON file so the scheduled task
+        (running as SYSTEM) can connect without interactive prompts.
+    #>
+    param([System.Management.Automation.PSCredential]$Credential)
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    $credFile = Join-Path $LogDir "firebox_creds.json"
+
+    # Encrypt username
+    $encUser = [Convert]::ToBase64String(
+        [System.Security.Cryptography.ProtectedData]::Protect(
+            [System.Text.Encoding]::UTF8.GetBytes($Credential.UserName),
+            $null,
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        )
+    )
+
+    # Decrypt SecureString to plain, encrypt with DPAPI, zero out plain
+    $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($Credential.Password)
+    try   { $plainPass = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+    finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    $encPass = [Convert]::ToBase64String(
+        [System.Security.Cryptography.ProtectedData]::Protect(
+            [System.Text.Encoding]::UTF8.GetBytes($plainPass),
+            $null,
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        )
+    )
+    $plainPass = $null
+
+    $store = @{
+        FireboxHost    = $script:FireboxHost
+        FireboxSshPort = $script:FireboxSshPort
+        FireboxLocalIP = $script:FireboxLocalIP
+        FireboxFtpPort = $script:FireboxFtpPort
+        SavedAt        = (Get-Date -Format 'o')
+        Username       = $encUser
+        Password       = $encPass
+    }
+
+    $store | ConvertTo-Json | Set-Content -Path $credFile -Encoding UTF8
+
+    # Restrict file to Administrators and SYSTEM only
+    try {
+        $acl = Get-Acl -Path $credFile
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'BUILTIN\Administrators', 'FullControl', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'NT AUTHORITY\SYSTEM', 'FullControl', 'Allow')))
+        Set-Acl -Path $credFile -AclObject $acl
+    }
+    catch {
+        Write-Log "Could not restrict firebox_creds.json permissions (non-fatal): $($_.Exception.Message)" -Level Warning
+    }
+
+    Write-Log "Firebox credentials saved (DPAPI/LocalMachine): $credFile" -Level Info
+}
+
+function Get-FireboxCredentials {
+    <#
+    .SYNOPSIS
+        Loads and decrypts saved Firebox credentials. Also restores
+        connection parameters (host, ports) that were not provided on the
+        command line.
+    #>
+    $credFile = Join-Path $LogDir "firebox_creds.json"
+    if (-not (Test-Path $credFile)) { return $null }
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    try {
+        $store = Get-Content -Path $credFile -Raw | ConvertFrom-Json
+
+        # Restore connection params into script scope from saved file
+        # (command-line params take priority if already set)
+        if (-not $script:FireboxHost    -and $store.FireboxHost)    { $script:FireboxHost    = $store.FireboxHost }
+        if (-not $script:FireboxLocalIP -and $store.FireboxLocalIP) { $script:FireboxLocalIP = $store.FireboxLocalIP }
+        if ($store.FireboxSshPort) { $script:FireboxSshPort = $store.FireboxSshPort }
+        if ($store.FireboxFtpPort) { $script:FireboxFtpPort = $store.FireboxFtpPort }
+
+        $username = [System.Text.Encoding]::UTF8.GetString(
+            [System.Security.Cryptography.ProtectedData]::Unprotect(
+                [Convert]::FromBase64String($store.Username), $null,
+                [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+        )
+        $passPlain = [System.Text.Encoding]::UTF8.GetString(
+            [System.Security.Cryptography.ProtectedData]::Unprotect(
+                [Convert]::FromBase64String($store.Password), $null,
+                [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+        )
+        $ss = New-Object System.Security.SecureString
+        foreach ($c in $passPlain.ToCharArray()) { $ss.AppendChar($c) }
+        $ss.MakeReadOnly()
+        $passPlain = $null
+
+        $cred = New-Object System.Management.Automation.PSCredential($username, $ss)
+        Write-Log "Loaded saved Firebox credentials for $username @ $($script:FireboxHost) (saved $($store.SavedAt))" -Level Info
+        return $cred
+    }
+    catch {
+        Write-Log "Failed to load saved Firebox credentials: $($_.Exception.Message)" -Level Warning
+        return $null
+    }
+}
+
+function Get-FireboxCredentialsInteractive {
+    <#
+    .SYNOPSIS
+        Prompts the operator for Firebox SSH credentials, offering to reuse
+        any previously saved credentials. Returns a PSCredential.
+    #>
+    Write-Host ""
+    Write-Host "  -- Firebox SSH Credentials -----------------------------------------------" -ForegroundColor DarkGray
+
+    # Offer to reuse saved credentials
+    $saved = Get-FireboxCredentials
+    if ($saved) {
+        $credFile = Join-Path $LogDir "firebox_creds.json"
+        $savedDate = (Get-Content $credFile -Raw | ConvertFrom-Json).SavedAt
+        Write-Host "  Found saved credentials for '$($saved.UserName)' (saved $savedDate)" -ForegroundColor Green
+        $reuse = Read-Host "  Use saved credentials? [Y/n]"
+        if ($reuse -eq '' -or $reuse -match '^[Yy]') {
+            return $saved
+        }
+        Write-Host ""
+    }
+
+    return (Get-Credential -Message "Firebox SSH credentials for $($script:FireboxHost)")
+}
+
+function Deploy-WatchGuardCert {
+    <#
+    .SYNOPSIS
+        Deploys a Posh-ACME certificate to a WatchGuard Firebox as the
+        Firebox web-server-cert (the SSL certificate used by the Firebox Web UI
+        and authentication portal).
+
+    .DESCRIPTION
+        1. Connects to the Firebox via SSH (Posh-SSH, default port 4118)
+        2. Snapshots the current certificate list to detect the new cert after import
+        3. Spins up an ephemeral in-process FTP server so the Firebox can pull the PFX
+        4. Runs: import certificate general-usage from ftp://... <pfx-password>
+        5. Diffs the certificate list to find the newly imported cert ID
+        6. Enters config mode and runs: web-server-cert third-party <id>
+        7. Confirms the activation and logs the result
+    #>
+    param(
+        $PACertificate,
+        [System.Management.Automation.PSCredential]$Credential
+    )
+
+    Write-Log "WatchGuard deployment: $($script:FireboxHost):$($script:FireboxSshPort) | FTP callback: $($script:FireboxLocalIP):$($script:FireboxFtpPort)"
+
+    # ------------------------------------------------------------------ #
+    # Resolve PFX path and password from Posh-ACME certificate object
+    # ------------------------------------------------------------------ #
+    $pfxPath = $PACertificate.PfxFullChain
+    if (-not $pfxPath -or -not (Test-Path $pfxPath)) { $pfxPath = $PACertificate.PfxFile }
+    if (-not $pfxPath -or -not (Test-Path $pfxPath)) {
+        throw "PFX file not found in Posh-ACME output. Certificate may not have been issued."
+    }
+
+    $pfxPlain = $PACertificate.PfxPass
+    if ($pfxPlain -is [System.Security.SecureString]) {
+        $bstr = [System.Runtime.InteropServices.Marshal]::SecureStringToBSTR($pfxPlain)
+        try   { $pfxPlain = [System.Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    if ([string]::IsNullOrEmpty($pfxPlain)) { $pfxPlain = 'poshacme' }
+
+    $pfxFile = Get-Item $pfxPath
+
+    # ------------------------------------------------------------------ #
+    # SSH connection
+    # ------------------------------------------------------------------ #
+    Write-Log "Connecting to Firebox via SSH..."
+    $session = New-SSHSession -ComputerName $script:FireboxHost -Port $script:FireboxSshPort `
+                   -Credential $Credential -AcceptKey -ErrorAction Stop
+    $stream  = New-SSHShellStream -SSHSession $session
+
+    $rs = $null; $ps = $null
+
+    try {
+        # Consume login banner - firmware version is in the banner (show version is not a valid command)
+        Start-Sleep -Milliseconds 1500
+        $banner = $stream.Read()
+        $fwVersion = if ($banner -match 'Fireware\s+(?:OS\s+)?[Vv]ersion\s+([\d\.]+)') { $Matches[1] } else { 'unknown' }
+        Write-Log "Firebox firmware: $fwVersion" -Level Success
+
+        # Snapshot cert IDs before import (give show certificate extra time - can list 300+ certs)
+        Write-Log "Reading current certificate list..."
+        $certOut = Invoke-FireboxCommand -Stream $stream -Cmd 'show certificate' -TimeoutMs 15000
+        $wsOut   = Invoke-FireboxCommand -Stream $stream -Cmd 'show web-server-cert'
+
+        $currentWs = if ($wsOut -match 'Default') { 'Default (self-signed)' }
+                     elseif ($wsOut -match 'Third.party') { 'Third-party (already customized)' }
+                     else { 'Unknown' }
+        Write-Log "Current web-server-cert: $currentWs" -Level Info
+
+        $certIdsBefore = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($line in ($certOut -split "`n")) {
+            if ($line -match '^\s*(\d{5,})\s') { [void]$certIdsBefore.Add($Matches[1]) }
+        }
+        Write-Log "Certificate IDs before import: $($certIdsBefore.Count)"
+
+        # ---------------------------------------------------------------- #
+        # Spin up minimal in-process FTP server (passive mode, one-shot)
+        # The Firebox pulls the PFX file from this server during import.
+        # ---------------------------------------------------------------- #
+        Write-Log "Starting ephemeral FTP server on $($script:FireboxLocalIP):$($script:FireboxFtpPort)..."
+
+        $ftpUser = 'wgcert'
+        $ftpPass = [System.Guid]::NewGuid().ToString('N').Substring(0, 12)   # random each run
+
+        $rsData = [hashtable]::Synchronized(@{
+            FilePath = $pfxFile.FullName
+            User     = $ftpUser
+            Password = $ftpPass
+            Port     = $script:FireboxFtpPort
+            LocalIP  = $script:FireboxLocalIP
+            Log      = [System.Collections.Generic.List[string]]::new()
+            Ready    = $false
+            Error    = $null
+        })
+
+        $ftpScript = {
+            param($d)
+            try {
+                $ctl = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $d.Port)
+                $ctl.Start()
+                $d.Ready = $true
+                $d.Log.Add("Listening on :$($d.Port)")
+
+                $client = $ctl.AcceptTcpClient()
+                $ns     = $client.GetStream()
+                $rd     = [System.IO.StreamReader]::new($ns)
+                $wr     = [System.IO.StreamWriter]::new($ns); $wr.AutoFlush = $true
+                $wr.WriteLine('220 wgcert ready')
+                $d.Log.Add("Client connected")
+
+                $dataListener = $null
+
+                while ($true) {
+                    $line = $rd.ReadLine()
+                    if ($null -eq $line) { break }
+                    $d.Log.Add(">> $line")
+                    $parts = $line -split ' ', 2
+                    $cmd   = $parts[0].ToUpper()
+                    $arg   = if ($parts.Count -gt 1) { $parts[1] } else { '' }
+
+                    switch ($cmd) {
+                        'USER' { if ($arg -eq $d.User) { $wr.WriteLine('331 Password required') } else { $wr.WriteLine('530 Bad user') } }
+                        'PASS' { if ($arg -eq $d.Password) { $wr.WriteLine('230 OK') } else { $wr.WriteLine('530 Bad pass') } }
+                        'SYST' { $wr.WriteLine('215 UNIX Type: L8') }
+                        'FEAT' { $wr.WriteLine("211-Features:`r`nPASV`r`n211 End") }
+                        'OPTS' { $wr.WriteLine('200 OK') }
+                        'PWD'  { $wr.WriteLine('257 "/" is cwd') }
+                        'CWD'  { $wr.WriteLine('250 OK') }
+                        'TYPE' { $wr.WriteLine('200 Type set') }
+                        'PASV' {
+                            $dataListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+                            $dataListener.Start()
+                            $dp      = ($dataListener.LocalEndpoint).Port
+                            $ipParts = $d.LocalIP -split '\.'
+                            $p1 = [math]::Floor($dp / 256); $p2 = $dp % 256
+                            $wr.WriteLine("227 Entering Passive Mode ($($ipParts -join ','),$p1,$p2)")
+                            $d.Log.Add("<< PASV port $dp")
+                        }
+                        'LIST' {
+                            $fname = [System.IO.Path]::GetFileName($d.FilePath)
+                            $sz    = (Get-Item $d.FilePath).Length
+                            $wr.WriteLine('150 Here comes the listing')
+                            $dc = $dataListener.AcceptTcpClient()
+                            $ds = $dc.GetStream()
+                            $dw = [System.IO.StreamWriter]::new($ds); $dw.AutoFlush = $true
+                            $dw.WriteLine("-rw-r--r-- 1 wg wg $sz Jan 01 00:00 $fname")
+                            $dw.Close(); $dc.Close(); $dataListener.Stop(); $dataListener = $null
+                            $wr.WriteLine('226 Transfer complete')
+                        }
+                        'NLST' {
+                            $fname = [System.IO.Path]::GetFileName($d.FilePath)
+                            $wr.WriteLine('150 Here comes the listing')
+                            $dc = $dataListener.AcceptTcpClient()
+                            $ds = $dc.GetStream()
+                            $dw = [System.IO.StreamWriter]::new($ds); $dw.AutoFlush = $true
+                            $dw.WriteLine($fname)
+                            $dw.Close(); $dc.Close(); $dataListener.Stop(); $dataListener = $null
+                            $wr.WriteLine('226 Transfer complete')
+                        }
+                        'RETR' {
+                            $d.Log.Add("Sending: $($d.FilePath)")
+                            $wr.WriteLine('150 Opening data connection')
+                            $dc    = $dataListener.AcceptTcpClient()
+                            $ds    = $dc.GetStream()
+                            $bytes = [System.IO.File]::ReadAllBytes($d.FilePath)
+                            $ds.Write($bytes, 0, $bytes.Length)
+                            $ds.Close(); $dc.Close(); $dataListener.Stop(); $dataListener = $null
+                            $d.Log.Add("Sent $($bytes.Length) bytes")
+                            $wr.WriteLine('226 Transfer complete')
+                            break   # one-shot: file delivered, we're done
+                        }
+                        'QUIT' { $wr.WriteLine('221 Bye'); break }
+                        default { $wr.WriteLine("500 Unknown: $cmd") }
+                    }
+                }
+                $client.Close(); $ctl.Stop()
+                $d.Log.Add("FTP server closed")
+            }
+            catch {
+                $d.Error = $_.Exception.Message
+                $d.Log.Add("ERROR: $($_.Exception.Message)")
+            }
+        }
+
+        $rs = [System.Management.Automation.Runspaces.RunspaceFactory]::CreateRunspace()
+        $rs.Open()
+        $ps = [System.Management.Automation.PowerShell]::Create()
+        $ps.Runspace = $rs
+        [void]$ps.AddScript($ftpScript).AddArgument($rsData)
+        $ftpHandle = $ps.BeginInvoke()
+
+        # Wait up to 5 s for the FTP server to be ready
+        $t0 = [datetime]::UtcNow
+        while (-not $rsData.Ready -and ([datetime]::UtcNow - $t0).TotalSeconds -lt 5) {
+            Start-Sleep -Milliseconds 100
+        }
+        if (-not $rsData.Ready) { throw "FTP server failed to start within 5 seconds." }
+        Write-Log "FTP server ready" -Level Success
+
+        # ---------------------------------------------------------------- #
+        # Import certificate via Firebox CLI
+        # ---------------------------------------------------------------- #
+        $pfxFileName = $pfxFile.Name
+        $ftpUrl      = "ftp://${ftpUser}:${ftpPass}@$($script:FireboxLocalIP):$($script:FireboxFtpPort)/${pfxFileName}"
+
+        Write-Log "Importing certificate (may take up to 30 s)..."
+        $importCmd = "import certificate general-usage from $ftpUrl $pfxPlain"
+        $importOut = Invoke-FireboxCommand -Stream $stream -Cmd $importCmd -TimeoutMs 30000
+
+        Write-Log "Import response: $($importOut.Trim() -replace '\s+', ' ')"
+
+        if ($importOut -match 'Edit Mode') {
+            throw "EDIT MODE CONFLICT: Another admin session is holding Edit Mode on the Firebox. Close WatchGuard System Manager / Policy Manager on all other machines, then retry."
+        }
+        if ($importOut -match '%Error') {
+            Write-Log "Import command returned a CLI error - review response above" -Level Warning
+        }
+
+        # ---------------------------------------------------------------- #
+        # Verify: diff cert list before/after to find the new cert ID
+        # ---------------------------------------------------------------- #
+        Write-Log "Verifying import..."
+        Start-Sleep -Milliseconds 1000
+        $certOut2 = Invoke-FireboxCommand -Stream $stream -Cmd 'show certificate' -TimeoutMs 15000
+
+        $newCertId = $null
+        foreach ($line in ($certOut2 -split "`n")) {
+            if ($line -match '^\s*(\d{5,})\s') {
+                $candidate = $Matches[1]
+                if (-not $certIdsBefore.Contains($candidate)) {
+                    $newCertId = $candidate
+                    Write-Log "New certificate ID: $newCertId" -Level Success
+                    break
+                }
+            }
+        }
+
+        if (-not $newCertId) {
+            throw "Certificate import could not be verified. No new certificate ID appeared in 'show certificate'. " +
+                  "Check for Edit Mode conflicts, FTP connectivity, and PFX password."
+        }
+
+        # ---------------------------------------------------------------- #
+        # Activate as web-server-cert (enter config mode, set, exit)
+        # ---------------------------------------------------------------- #
+        Write-Log "Activating certificate ID $newCertId as Firebox web-server-cert..."
+        $null = Invoke-FireboxCommand -Stream $stream -Cmd 'configure'
+        $wsSetOut = Invoke-FireboxCommand -Stream $stream -Cmd "web-server-cert third-party $newCertId"
+        $null = Invoke-FireboxCommand -Stream $stream -Cmd 'exit'
+
+        # Verify activation
+        $wsOut2 = Invoke-FireboxCommand -Stream $stream -Cmd 'show web-server-cert'
+        if ($wsOut2 -match 'Third.party') {
+            Write-Log "web-server-cert set successfully to third-party certificate $newCertId" -Level Success
+        }
+        else {
+            Write-Log "web-server-cert activation result: $($wsOut2.Trim() -replace '\s+',' ')" -Level Warning
+        }
+
+        # Log FTP server activity
+        foreach ($entry in $rsData.Log) { Write-Log "FTP: $entry" }
+        if ($rsData.Error) { Write-Log "FTP error: $($rsData.Error)" -Level Warning }
+
+        Write-Log "WatchGuard Firebox certificate deployment complete" -Level Success
+    }
+    finally {
+        # Always clean up SSH session and FTP runspace
+        if ($session) {
+            try { $session | Remove-SSHSession | Out-Null } catch { }
+        }
+        if ($ps -and $ftpHandle) {
+            try { $ps.EndInvoke($ftpHandle) } catch { }
+            try { $ps.Dispose() } catch { }
+        }
+        if ($rs) {
+            try { $rs.Close(); $rs.Dispose() } catch { }
+        }
+    }
+}
+
+# ============================================================================
+# EMAIL REPORTING
+# Optional status emails after each renewal run.
+# Supports Microsoft 365 Graph API (OAuth2 client credentials) and SMTP.
+# All secrets are DPAPI/LocalMachine-encrypted in email_config.json so the
+# scheduled task (running as SYSTEM) can send reports without prompting.
+# ============================================================================
+
+function Save-EmailConfig {
+    param([hashtable]$Config)
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    $store = [ordered]@{
+        Enabled   = $Config.Enabled
+        Method    = $Config.Method
+        Sender    = $Config.Sender
+        Recipient = $Config.Recipient
+        SavedAt   = (Get-Date -Format 'o')
+    }
+
+    if ($Config.Method -eq 'SMTP') {
+        $store.SmtpServer   = $Config.SmtpServer
+        $store.SmtpPort     = $Config.SmtpPort
+        $store.SmtpUsername = $Config.SmtpUsername
+        $store.SmtpPasswordEnc = [Convert]::ToBase64String(
+            [System.Security.Cryptography.ProtectedData]::Protect(
+                [System.Text.Encoding]::UTF8.GetBytes($Config.SmtpPassword),
+                $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+        )
+    }
+
+    if ($Config.Method -eq 'Graph') {
+        $store.TenantId = $Config.TenantId
+        $store.ClientId = $Config.ClientId
+        $store.ClientSecretEnc = [Convert]::ToBase64String(
+            [System.Security.Cryptography.ProtectedData]::Protect(
+                [System.Text.Encoding]::UTF8.GetBytes($Config.ClientSecret),
+                $null, [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+            )
+        )
+    }
+
+    $cfgFile = Join-Path $LogDir "email_config.json"
+    $store | ConvertTo-Json | Set-Content -Path $cfgFile -Encoding UTF8
+
+    try {
+        $acl = Get-Acl -Path $cfgFile
+        $acl.SetAccessRuleProtection($true, $false)
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'BUILTIN\Administrators', 'FullControl', 'Allow')))
+        $acl.AddAccessRule((New-Object System.Security.AccessControl.FileSystemAccessRule(
+            'NT AUTHORITY\SYSTEM', 'FullControl', 'Allow')))
+        Set-Acl -Path $cfgFile -AclObject $acl
+    }
+    catch {
+        Write-Log "Could not restrict email_config.json permissions (non-fatal): $($_.Exception.Message)" -Level Warning
+    }
+
+    Write-Log "Email config saved (DPAPI/LocalMachine): $cfgFile" -Level Info
+}
+
+function Get-EmailConfig {
+    $cfgFile = Join-Path $LogDir "email_config.json"
+    if (-not (Test-Path $cfgFile)) { return $null }
+    try {
+        return (Get-Content -Path $cfgFile -Raw | ConvertFrom-Json)
+    }
+    catch {
+        Write-Log "Failed to load email config: $($_.Exception.Message)" -Level Warning
+        return $null
+    }
+}
+
+function Send-GraphEmail {
+    param($Config, [string]$Subject, [string]$HtmlBody)
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    # Decrypt client secret
+    $secret = [System.Text.Encoding]::UTF8.GetString(
+        [System.Security.Cryptography.ProtectedData]::Unprotect(
+            [Convert]::FromBase64String($Config.ClientSecretEnc), $null,
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        )
+    )
+
+    # Acquire access token via client credentials flow
+    $tokenResp = Invoke-RestMethod -Method Post -ErrorAction Stop `
+        -Uri "https://login.microsoftonline.com/$($Config.TenantId)/oauth2/v2.0/token" `
+        -ContentType 'application/x-www-form-urlencoded' `
+        -Body @{
+            grant_type    = 'client_credentials'
+            client_id     = $Config.ClientId
+            client_secret = $secret
+            scope         = 'https://graph.microsoft.com/.default'
+        }
+    $secret = $null
+    $token  = $tokenResp.access_token
+
+    # Build and send message
+    $payload = @{
+        message = @{
+            subject = $Subject
+            body    = @{ contentType = 'HTML'; content = $HtmlBody }
+            toRecipients = @(@{ emailAddress = @{ address = $Config.Recipient } })
+        }
+    }
+
+    Invoke-RestMethod -Method Post -ErrorAction Stop `
+        -Uri "https://graph.microsoft.com/v1.0/users/$($Config.Sender)/sendMail" `
+        -Headers @{ Authorization = "Bearer $token" } `
+        -ContentType 'application/json' `
+        -Body ($payload | ConvertTo-Json -Depth 6) | Out-Null
+
+    $token = $null
+}
+
+function Send-SmtpEmail {
+    param($Config, [string]$Subject, [string]$HtmlBody)
+
+    Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
+
+    # Decrypt password
+    $passPlain = [System.Text.Encoding]::UTF8.GetString(
+        [System.Security.Cryptography.ProtectedData]::Unprotect(
+            [Convert]::FromBase64String($Config.SmtpPasswordEnc), $null,
+            [System.Security.Cryptography.DataProtectionScope]::LocalMachine
+        )
+    )
+
+    $mail = New-Object System.Net.Mail.MailMessage
+    $mail.From    = $Config.Sender
+    $mail.To.Add($Config.Recipient)
+    $mail.Subject = $Subject
+    $mail.Body    = $HtmlBody
+    $mail.IsBodyHtml = $true
+
+    $smtp = New-Object System.Net.Mail.SmtpClient($Config.SmtpServer, $Config.SmtpPort)
+    $smtp.EnableSsl    = $true
+    $smtp.Credentials  = New-Object System.Net.NetworkCredential($Config.SmtpUsername, $passPlain)
+    $passPlain = $null
+
+    try   { $smtp.Send($mail) }
+    finally { $smtp.Dispose(); $mail.Dispose() }
+}
+
+function Send-RenewalReport {
+    if ($script:ReportSent) { return }
+
+    $config = Get-EmailConfig
+    if (-not $config -or -not $config.Enabled) { return }
+
+    $status    = $script:ReportData.Status
+    $domain    = $script:ReportData.Domain
+    $mode      = if ($script:ReportData.Mode) { $script:ReportData.Mode } else { $script:OutputMode }
+    $startTime = $script:ReportData.StartTime
+    $message   = $script:ReportData.Message
+
+    # Colour and icon per status
+    $statusColor = switch ($status) {
+        'Success' { '#28a745' }
+        'Failed'  { '#dc3545' }
+        'Skipped' { '#6c757d' }
+        'Updated' { '#0d6efd' }
+        default   { '#6c757d' }
+    }
+    $statusIcon = switch ($status) {
+        'Success' { '&#10003;' }
+        'Failed'  { '&#10007;' }
+        'Skipped' { '&#8212;' }
+        'Updated' { '&#8635;' }
+        default   { '' }
+    }
+    $statusLabel = switch ($status) {
+        'Success' { 'Certificate Renewed Successfully' }
+        'Failed'  { 'Renewal Failed' }
+        'Skipped' { 'No Renewal Needed' }
+        'Updated' { 'Scheduled Task Updated' }
+        default   { $status }
+    }
+
+    # Subject line
+    $subject = "[YW] Let's Encrypt - $domain - $status"
+
+    # Build detail rows
+    $tdL = "style=`"padding:9px 4px;color:#666;font-size:13px;white-space:nowrap;vertical-align:top`""
+    $tdR = "style=`"padding:9px 4px;font-size:13px;word-break:break-all`""
+
+    $safeMsg = if ($message) {
+        ($message -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;').Trim() -replace "`n", '<br>'
+    } else { '' }
+
+    $rows  = "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Domain</td><td $tdR><strong>$domain</strong></td></tr>`n"
+    $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Deploy Mode</td><td $tdR>$mode</td></tr>`n"
+    if ($mode -eq 'WatchGuard' -and $script:FireboxHost) {
+        $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Firebox</td><td $tdR>$($script:FireboxHost):$($script:FireboxSshPort)</td></tr>`n"
+    }
+    if ($script:ReportData.NewExpiry) {
+        $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>New Expiry</td><td $tdR><strong>$($script:ReportData.NewExpiry)</strong></td></tr>`n"
+    }
+    if ($script:ReportData.CurrentExpiry) {
+        $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Cert Expiry</td><td $tdR>$($script:ReportData.CurrentExpiry)</td></tr>`n"
+    }
+    if ($script:ReportData.Thumbprint) {
+        $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Thumbprint</td><td $tdR><code style=`"font-size:11px`">$($script:ReportData.Thumbprint)</code></td></tr>`n"
+    }
+    if ($safeMsg) {
+        $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Details</td><td $tdR style=`"color:$statusColor`">$safeMsg</td></tr>`n"
+    }
+    $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Started</td><td $tdR>$($startTime.ToString('yyyy-MM-dd HH:mm:ss'))</td></tr>`n"
+    $rows += "<tr><td $tdL>Log File</td><td $tdR style=`"font-size:11px;color:#888`">$LogFile</td></tr>`n"
+
+    # HTML email body
+    $html = @"
+<!DOCTYPE html>
+<html><body style="margin:0;padding:20px;background:#f0f0f0;font-family:Arial,Helvetica,sans-serif">
+<div style="max-width:600px;margin:0 auto">
+  <div style="background:#FF6600;padding:18px 24px;border-radius:6px 6px 0 0">
+    <span style="color:#fff;font-size:19px;font-weight:bold">Yeyland Wutani LLC</span>
+    <span style="color:#ffe0c0;font-size:12px;margin-left:10px">Building Better Systems</span>
+  </div>
+  <div style="background:#fff;padding:24px;border:1px solid #ddd;border-top:none">
+    <p style="font-size:16px;font-weight:bold;margin:0 0 16px;color:#222">Let's Encrypt Certificate Report</p>
+    <div style="background:$statusColor;color:#fff;padding:11px 16px;border-radius:4px;margin-bottom:20px;font-size:15px;font-weight:bold">
+      $statusIcon&nbsp; $statusLabel
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      $rows
+    </table>
+  </div>
+  <div style="background:#f8f8f8;padding:10px 24px;border:1px solid #ddd;border-top:none;border-radius:0 0 6px 6px;font-size:11px;color:#999;text-align:center">
+    Let's Encrypt Certificate Manager v$ScriptVersion &bull; Yeyland Wutani LLC &bull; Automated Certificate Renewal
+  </div>
+</div>
+</body></html>
+"@
+
+    try {
+        switch ($config.Method) {
+            'Graph' { Send-GraphEmail -Config $config -Subject $subject -HtmlBody $html }
+            'SMTP'  { Send-SmtpEmail  -Config $config -Subject $subject -HtmlBody $html }
+        }
+        Write-Log "Renewal report sent to $($config.Recipient) via $($config.Method)" -Level Success
+        $script:ReportSent = $true
+    }
+    catch {
+        Write-Log "Failed to send renewal report: $($_.Exception.Message)" -Level Warning
+    }
 }
 
 # ============================================================================
@@ -1535,6 +2480,15 @@ function Install-RenewalTask {
     }
     # Persist the chosen deployment mode so the scheduled task uses the same target
     $argParts += "-DeployMode $script:OutputMode"
+
+    # WatchGuard connection parameters (credentials are in DPAPI-encrypted firebox_creds.json)
+    if ($script:OutputMode -eq 'WatchGuard') {
+        if ($script:FireboxHost)                   { $argParts += "-FireboxHost `"$script:FireboxHost`"" }
+        if ($script:FireboxSshPort -ne 4118)       { $argParts += "-FireboxSshPort $script:FireboxSshPort" }
+        if ($script:FireboxLocalIP)                { $argParts += "-FireboxLocalIP `"$script:FireboxLocalIP`"" }
+        if ($script:FireboxFtpPort -ne 2121)       { $argParts += "-FireboxFtpPort $script:FireboxFtpPort" }
+    }
+
     if ($Staging) { $argParts += "-Staging" }
     if ($CertStorePath -ne "Cert:\LocalMachine\WebHosting") {
         $argParts += "-CertStorePath `"$CertStorePath`""
@@ -1555,6 +2509,30 @@ function Install-RenewalTask {
         }
         else {
             Write-Log "WARNING: No saved DNS plugin credentials found. The scheduled task will fail on renewal unless credentials are saved first by running this script interactively." -Level Warning
+        }
+    }
+
+    # WatchGuard SSH credentials are saved to a DPAPI/LocalMachine-encrypted file.
+    if ($script:OutputMode -eq 'WatchGuard') {
+        $fbCredFile = Join-Path $LogDir "firebox_creds.json"
+        if (Test-Path $fbCredFile) {
+            Write-Log "Firebox credentials on file: $fbCredFile (DPAPI/LocalMachine encrypted)" -Level Info
+        }
+        else {
+            Write-Log "WARNING: No saved Firebox credentials found. The scheduled task will fail unless credentials are saved first by running this script interactively." -Level Warning
+        }
+    }
+
+    # Email reporting
+    if ($script:SendReport) {
+        $argParts += "-SendReport"
+        $emailCfgFile = Join-Path $LogDir "email_config.json"
+        if (Test-Path $emailCfgFile) {
+            $emailCfg = Get-EmailConfig
+            Write-Log "Email reporting on file: $emailCfgFile ($($emailCfg.Method) -> $($emailCfg.Recipient))" -Level Info
+        }
+        else {
+            Write-Log "WARNING: -SendReport specified but no email_config.json found. Configure email reporting interactively first." -Level Warning
         }
     }
 
@@ -1634,6 +2612,7 @@ try {
 
     # Handle scheduled task removal (direct parameter mode)
     if ($RemoveScheduledTask) {
+        $script:ReportData.Status = 'None'
         Uninstall-RenewalTask
         return
     }
@@ -1664,6 +2643,27 @@ try {
                 return
             }
             '4' {
+                # Update existing scheduled task: recollect credentials / reconfigure, no cert order
+                $shouldInstallTask = $true
+                $script:SkipCertOrder = $true
+                Write-Log "Mode: Update existing scheduled task (credentials / configuration refresh)"
+
+                $existing = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+                if ($existing) {
+                    Write-Host ""
+                    Write-Host "  Found existing task: $TaskName" -ForegroundColor Green
+                    Write-Host "  Current action: $($existing.Actions[0].Arguments)" -ForegroundColor Gray
+                    Write-Host ""
+                }
+                else {
+                    Write-Host ""
+                    Write-Host "  No existing task found for: $TaskName" -ForegroundColor Yellow
+                    Write-Host "  A new scheduled task will be created." -ForegroundColor Yellow
+                    Write-Host ""
+                }
+            }
+            '5' {
+                $script:ReportData.Status = 'None'
                 Write-Host "  Exiting." -ForegroundColor Gray
                 return
             }
@@ -1676,13 +2676,19 @@ try {
     # Ask about challenge type (HTTP-01, DNS-01, or DNS manual)
     Show-ChallengeTypeMenu
 
+    # Ask about email reporting (interactive only; non-interactive uses -SendReport flag + saved config)
+    Show-EmailReportMenu
+
+    # Capture final output mode for report
+    $script:ReportData.Mode = $script:OutputMode
+
     # Show run summary
     Write-Host ""
     Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
     Write-Host "  Domain:    $DomainName" -ForegroundColor White
     Write-Host "  Mode:      $(if ($Staging) { 'STAGING (test)' } else { 'PRODUCTION' })" -ForegroundColor White
     Write-Host "  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })" -ForegroundColor White
-    Write-Host "  Output:    $(switch ($script:OutputMode) { 'PFX' { "PFX export to $PfxOutputPath" } 'RDGateway' { 'RD Gateway (TSGateway) certificate binding' } default { 'IIS cert store + binding update' } })" -ForegroundColor White
+    Write-Host "  Output:    $(switch ($script:OutputMode) { 'PFX' { "PFX export to $PfxOutputPath" } 'RDGateway' { 'RD Gateway (TSGateway) certificate binding' } 'WatchGuard' { "WatchGuard Firebox $($script:FireboxHost):$($script:FireboxSshPort) (web-server-cert)" } default { 'IIS cert store + binding update' } })" -ForegroundColor White
     Write-Host "  Threshold: $RenewalDays days before expiry" -ForegroundColor White
     Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
     Write-Host ""
@@ -1700,13 +2706,52 @@ try {
     # Install Posh-ACME if needed
     Install-PoshAcmeModule
 
+    # ---- WatchGuard: install Posh-SSH and collect/save SSH credentials ----
+    if ($script:OutputMode -eq 'WatchGuard') {
+        Install-PoshSshModule
+
+        if ($script:isInteractive) {
+            $script:WgCredential = Get-FireboxCredentialsInteractive
+            # Save credentials to DPAPI-encrypted file for scheduled-task use
+            Save-FireboxCredentials -Credential $script:WgCredential
+        }
+        else {
+            $script:WgCredential = Get-FireboxCredentials
+            if (-not $script:WgCredential) {
+                throw "No saved Firebox credentials found. Run this script interactively once (menu option 1, 2, or 4) to save credentials for unattended renewal."
+            }
+        }
+    }
+
+    # ---- Update-task-only mode: skip cert order, just save config and reinstall task ----
+    if ($script:SkipCertOrder) {
+        Write-Log "Update task mode: skipping certificate order, reinstalling task only" -Level Info
+
+        $script:ReportData.Status  = 'Updated'
+        $script:ReportData.Message = "Scheduled task configuration refreshed. No certificate order was performed."
+        if ($shouldInstallTask) { Install-RenewalTask }
+
+        Write-Host ""
+        Write-Host "  ============================================================" -ForegroundColor Green
+        Write-Host "  Scheduled task updated successfully!" -ForegroundColor Green
+        if ($script:OutputMode -eq 'WatchGuard') {
+            Write-Host "  Firebox:    $($script:FireboxHost):$($script:FireboxSshPort)" -ForegroundColor Green
+            Write-Host "  Credentials saved (DPAPI/LocalMachine encrypted)" -ForegroundColor Green
+        }
+        Write-Host "  Task name:  $TaskName" -ForegroundColor Green
+        Write-Host "  ============================================================" -ForegroundColor Green
+        Write-Host ""
+        return
+    }
+
     # Clean old logs
     Remove-OldLogs
 
     # Check current certificate status (only in cert store when doing IIS output)
+    # WatchGuard and PFX modes don't use the Windows cert store as the source of truth.
     $currentCert = $null
     $oldThumbprint = $null
-    if ($script:IISAvailable -and -not $PfxOutputPath) {
+    if ($script:IISAvailable -and -not $PfxOutputPath -and $script:OutputMode -ne 'WatchGuard') {
         $currentCert = Get-CurrentCertificate -Domains $allDomains
         $oldThumbprint = if ($currentCert) { $currentCert.Thumbprint } else { $null }
     }
@@ -1717,9 +2762,13 @@ try {
     if (-not $needsRenewal) {
         Write-Log "Certificate is still valid and outside the renewal window. No action needed." -Level Success
 
-        if ($shouldInstallTask) {
-            Install-RenewalTask
+        $script:ReportData.Status = 'Skipped'
+        if ($currentCert) {
+            $script:ReportData.CurrentExpiry = $currentCert.NotAfter.ToString('yyyy-MM-dd')
+            $script:ReportData.Message = "Certificate is still valid. Expires $($currentCert.NotAfter.ToString('yyyy-MM-dd')). Renewal threshold: $RenewalDays days."
         }
+
+        if ($shouldInstallTask) { Install-RenewalTask }
 
         Write-Host ""
         Write-Host "  No renewal needed. Certificate expires $($currentCert.NotAfter)" -ForegroundColor Green
@@ -1739,6 +2788,10 @@ try {
 
             'PFX' {
                 $exportedPfx = Export-PfxToFolder -PACertificate $paCert
+
+                $script:ReportData.Status    = 'Success'
+                $script:ReportData.NewExpiry = $paCert.NotAfter.ToString('yyyy-MM-dd')
+                $script:ReportData.Message   = "PFX exported to $exportedPfx"
 
                 if ($shouldInstallTask) { Install-RenewalTask }
 
@@ -1766,6 +2819,11 @@ try {
                 # Remove old cert if it's no longer needed elsewhere
                 Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
 
+                $script:ReportData.Status     = 'Success'
+                $script:ReportData.NewExpiry  = $newCert.NotAfter.ToString('yyyy-MM-dd')
+                $script:ReportData.Thumbprint = $newCert.Thumbprint
+                $script:ReportData.Message    = "TSGateway service restarted. Active RD Gateway sessions were dropped."
+
                 if ($shouldInstallTask) { Install-RenewalTask }
 
                 Write-Host ""
@@ -1781,6 +2839,31 @@ try {
                 Write-Host ""
             }
 
+            'WatchGuard' {
+                # Deploy the certificate to the Firebox via SSH + ephemeral FTP
+                Deploy-WatchGuardCert -PACertificate $paCert -Credential $script:WgCredential
+
+                $script:ReportData.Status    = 'Success'
+                $script:ReportData.NewExpiry = $paCert.NotAfter.ToString('yyyy-MM-dd')
+                $script:ReportData.Message   = "Deployed to WatchGuard Firebox $($script:FireboxHost). web-server-cert updated."
+
+                if ($shouldInstallTask) { Install-RenewalTask }
+
+                Write-Host ""
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host "  WatchGuard Firebox certificate deployment complete!" -ForegroundColor Green
+                Write-Host "  Firebox:    $($script:FireboxHost):$($script:FireboxSshPort)" -ForegroundColor Green
+                Write-Host "  Expires:    $($paCert.NotAfter)" -ForegroundColor Green
+                if ($stagingNote) { Write-Host $stagingNote -ForegroundColor Yellow }
+                Write-Host ""
+                Write-Host "  The Firebox web-server-cert has been updated." -ForegroundColor Cyan
+                Write-Host "  Browsers connecting to the Firebox Web UI will now trust the new cert." -ForegroundColor Cyan
+                Write-Host "  NOTE: IKEv2 Mobile VPN cert requires manual update in the Web UI" -ForegroundColor Yellow
+                Write-Host "        (Fireware v12.10+ does not support IKEv2 cert assignment via CLI)." -ForegroundColor Yellow
+                Write-Host "  ============================================================" -ForegroundColor Green
+                Write-Host ""
+            }
+
             default {
                 # IIS path: import to store and update bindings
                 $newCert = Import-CertificateToStore -PACertificate $paCert
@@ -1788,6 +2871,10 @@ try {
                 Update-IISBindings -NewThumbprint $newCert.Thumbprint -OldThumbprint $oldThumbprint -Domains $allDomains
 
                 Remove-OldCertificate -OldThumbprint $oldThumbprint -NewThumbprint $newCert.Thumbprint
+
+                $script:ReportData.Status     = 'Success'
+                $script:ReportData.NewExpiry  = $newCert.NotAfter.ToString('yyyy-MM-dd')
+                $script:ReportData.Thumbprint = $newCert.Thumbprint
 
                 if ($shouldInstallTask) { Install-RenewalTask }
 
@@ -1807,8 +2894,23 @@ try {
     }
 }
 catch {
+    $script:ReportData.Status  = 'Failed'
+    $script:ReportData.Message = $_.Exception.Message
+
     Write-Log "FATAL: $($_.Exception.Message)" -Level Error
     Write-Log "Stack trace: $($_.ScriptStackTrace)" -Level Error
     Write-Log "Full log: $LogFile" -Level Error
     throw
+}
+finally {
+    # Send renewal report on all meaningful exit paths (success, failure, skipped, updated).
+    # 'None' means an early exit (remove task, exit menu) where no report is warranted.
+    if ($script:SendReport -and $script:ReportData.Status -ne 'None' -and -not $script:ReportSent) {
+        try {
+            Send-RenewalReport
+        }
+        catch {
+            Write-Log "Report send failed in finally block: $($_.Exception.Message)" -Level Warning
+        }
+    }
 }
