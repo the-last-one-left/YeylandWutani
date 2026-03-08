@@ -1,9 +1,15 @@
 # Automation
-PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, profile management, email infrastructure, and file management automation.
+PowerShell scripts for system provisioning, cleanup operations, migration preparation, software deployment, profile management, certificate lifecycle management, email infrastructure, and file management automation.
 
 ---
 
 ## Available Scripts
+
+### Certificate Management
+
+| Script | Description |
+|--------|-------------|
+| `Invoke-LetsEncryptRenewal.ps1` | Full Let's Encrypt certificate lifecycle management for MSP environments. Interactive guided setup or fully unattended via scheduled task. Supports IIS binding updates, RD Gateway, PFX export, and WatchGuard Firebox deployment via SSH. Handles HTTP-01 and DNS-01 (30+ provider plugins) challenges, wildcard and multi-domain SANs, DPAPI-encrypted credential storage, expired cert cleanup, and optional email reporting via Microsoft 365 Graph API or SMTP. |
 
 ### Server Provisioning
 
