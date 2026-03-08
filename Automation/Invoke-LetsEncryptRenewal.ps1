@@ -2,30 +2,36 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Automated Let's Encrypt Certificate Renewal v1.3
+    Automated Let's Encrypt Certificate Renewal v1.4.0
 
 .DESCRIPTION
     Automates the full Let's Encrypt certificate lifecycle using the ACME protocol
     via the Posh-ACME module. Designed for MSP environments where customers are
     transitioning to 90-day (and soon 47-day) certificate renewals.
 
-    When run interactively, presents a menu to choose between one-time issuance,
-    scheduled auto-renewal, or task removal. Works with or without IIS - when IIS
-    is present, you choose whether to import to IIS or export as PFX.
+    When run interactively, presents a guided menu for first-time setup. Subsequent
+    renewals run fully unattended as SYSTEM via a Windows Scheduled Task.
 
     Capabilities:
-    - Interactive menu for guided one-shot or scheduled operation
+    - Interactive guided menu: one-time, scheduled task, remove task, update task
     - New certificate issuance via HTTP-01 or DNS-01 challenge validation
     - Automatic IIS challenge response configuration (HTTP-01)
     - DNS-01 validation via 30+ providers (Azure, Cloudflare, GoDaddy, Route53, etc.)
     - Manual DNS mode for providers without API integration
     - Wildcard certificate support (requires DNS-01)
-    - PFX export mode for non-IIS servers (Apache, nginx, load balancers)
-    - Certificate renewal when approaching expiry threshold
-    - Automatic IIS binding updates (when IIS output mode is selected)
-    - Scheduled task installation for fully unattended operation
-    - Let's Encrypt staging environment support for testing
     - Multi-domain (SAN) certificate support
+    - Deployment targets: IIS, RD Gateway (TSGateway), PFX export, WatchGuard Firebox
+    - WatchGuard Firebox web-server-cert deployment via SSH + ephemeral FTP pipeline
+    - RD Gateway certificate binding via RDS PowerShell drive or WMI fallback
+    - PFX export mode for non-IIS servers (Apache, nginx, load balancers)
+    - Certificate renewal when approaching expiry threshold (default: 30 days)
+    - Automatic IIS binding updates (when IIS output mode is selected)
+    - Scheduled task installation for fully unattended operation (runs as SYSTEM)
+    - Shared Posh-ACME data directory (ProgramData) so SYSTEM and user share cert cache
+    - DPAPI/LocalMachine credential encryption for DNS plugin, Firebox SSH, and email
+    - Optional email reporting via Microsoft 365 Graph API or SMTP (success/failure/update)
+    - Automatic cleanup of expired Let's Encrypt certificates from the Windows cert store
+    - Let's Encrypt staging environment support for testing
     - Contact email registration for expiry notifications from Let's Encrypt
 
     Challenge Types:
@@ -935,8 +941,8 @@ function Test-Prerequisites {
         }
     }
 
-    # Verify certificate store path exists or fall back (only relevant for IIS output mode)
-    if ($script:IISAvailable -and -not $PfxOutputPath) {
+    # Verify certificate store path exists or fall back (IIS and RDGateway modes use the cert store)
+    if ($script:OutputMode -in @('IIS', 'RDGateway')) {
         if ($CertStorePath -eq "Cert:\LocalMachine\WebHosting") {
             try {
                 $null = Get-ChildItem $CertStorePath -ErrorAction Stop
@@ -2864,7 +2870,7 @@ try {
     #                   even when the cert is not imported into the Windows store.
     $currentCert = $null
     $oldThumbprint = $null
-    if ($script:IISAvailable -and -not $PfxOutputPath -and $script:OutputMode -ne 'WatchGuard') {
+    if ($script:OutputMode -in @('IIS', 'RDGateway')) {
         $currentCert = Get-CurrentCertificate -Domains $allDomains
         $oldThumbprint = if ($currentCert) { $currentCert.Thumbprint } else { $null }
     }
