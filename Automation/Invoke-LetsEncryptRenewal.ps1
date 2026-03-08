@@ -405,6 +405,12 @@ function Get-RDGatewayCurrentCert {
 function Install-RDGatewayCertificate {
     param([System.Security.Cryptography.X509Certificates.X509Certificate2]$Certificate)
 
+    # Validate TSGateway is present on this machine at deploy time.
+    # The menu always shows RDGateway as an option, so catch misconfigured runs here.
+    if (-not (Get-Service -Name TSGateway -ErrorAction SilentlyContinue)) {
+        throw "RD Gateway deployment selected but the TSGateway service was not found on this machine. This script must run on the RD Gateway server itself. Ensure the Remote Desktop Gateway role service is installed before running."
+    }
+
     $thumbprint = $Certificate.Thumbprint
     Write-Log "Binding certificate to RD Gateway (thumbprint: $thumbprint)"
 
@@ -475,22 +481,28 @@ function Show-CertificateOutputMenu {
         return
     }
 
-    # Build menu options dynamically based on what services are present
+    # Build menu options dynamically.
+    # IIS is only shown when detected (requires WebAdministration module).
+    # RD Gateway, PFX, and WatchGuard are always available — they are shown
+    # unconditionally, with a note when TSGateway is not detected locally.
     $menuOptions = [System.Collections.Generic.List[hashtable]]::new()
     if ($script:IISAvailable) {
         $menuOptions.Add(@{ Label = 'Import to IIS certificate store and update site bindings'; Mode = 'IIS' })
     }
-    if ($script:RDGAvailable) {
-        $menuOptions.Add(@{ Label = 'Bind to RD Gateway (TSGateway service) - updates gateway SSL certificate'; Mode = 'RDGateway' })
+    $rdgLabel = if ($script:RDGAvailable) {
+        'Bind to RD Gateway (TSGateway) - updates the gateway SSL certificate'
+    } else {
+        'Bind to RD Gateway (TSGateway) - [TSGateway not detected on this machine]'
     }
+    $menuOptions.Add(@{ Label = $rdgLabel; Mode = 'RDGateway' })
     $menuOptions.Add(@{ Label = 'Export as PFX file to a folder (for any web server / load balancer)'; Mode = 'PFX' })
     $menuOptions.Add(@{ Label = 'Deploy to WatchGuard Firebox (web-server-cert via SSH + FTP)'; Mode = 'WatchGuard' })
 
     Write-Host ""
     Write-Host "  How should the certificate be deployed?" -ForegroundColor White
     Write-Host ""
-    if (-not $script:IISAvailable -and -not $script:RDGAvailable) {
-        Write-Host "  No compatible local services (IIS, RD Gateway) detected on this server." -ForegroundColor Yellow
+    if (-not $script:IISAvailable) {
+        Write-Host "  IIS not detected - IIS binding option is unavailable on this server." -ForegroundColor Yellow
         Write-Host ""
     }
     for ($i = 0; $i -lt $menuOptions.Count; $i++) {
@@ -943,6 +955,18 @@ function Test-Prerequisites {
 # ============================================================================
 
 function Install-PoshAcmeModule {
+    # Pin Posh-ACME's data directory to a shared system path BEFORE loading the module.
+    # By default Posh-ACME stores accounts, orders, and certs in $env:LOCALAPPDATA,
+    # which differs between the interactive user and the SYSTEM account that runs the
+    # scheduled task.  Without this, SYSTEM finds no cached cert, creates a new ACME
+    # account, and re-issues a fresh certificate on every task run.
+    $paHome = Join-Path $env:ProgramData "YeylandWutani\PoshAcme"
+    if (-not (Test-Path $paHome)) {
+        New-Item -ItemType Directory -Path $paHome -Force | Out-Null
+    }
+    $env:POSHACME_HOME = $paHome
+    Write-Log "Posh-ACME data directory: $paHome"
+
     if (Get-Module -ListAvailable -Name Posh-ACME) {
         Write-Log "Posh-ACME module is already installed" -Level Success
         Import-Module Posh-ACME -Force
@@ -2441,6 +2465,86 @@ function Remove-OldCertificate {
     }
 }
 
+function Remove-ExpiredLetsEncryptCerts {
+    <#
+    .SYNOPSIS
+        Sweeps the Windows certificate stores for expired Let's Encrypt certificates
+        that are no longer bound to any IIS site and removes them.
+    .NOTES
+        Searches both Cert:\LocalMachine\WebHosting and Cert:\LocalMachine\My.
+        Any thumbprint currently assigned to an IIS SSL binding is always protected,
+        even if the certificate itself has expired (belt-and-suspenders safety).
+        Let's Encrypt certificates are identified by Issuer matching "Let.s Encrypt",
+        which covers all current and historical LE intermediates (R3, R10, R11, E5,
+        E6, and the legacy "Let's Encrypt Authority X3" series).
+    #>
+    param(
+        # Additional thumbprints to protect regardless of expiry (e.g. cert just issued).
+        [string[]]$ProtectThumbprints = @()
+    )
+
+    Write-Log "Scanning for expired Let's Encrypt certificates to clean up..."
+
+    # Collect thumbprints currently assigned to IIS SSL bindings (must not remove these).
+    $activeThumbs = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::OrdinalIgnoreCase
+    )
+
+    if ($script:IISAvailable) {
+        $bindings = Get-ChildItem "IIS:\SslBindings" -ErrorAction SilentlyContinue
+        foreach ($b in $bindings) {
+            if ($b.Thumbprint) { [void]$activeThumbs.Add($b.Thumbprint) }
+        }
+    }
+
+    # Also protect any caller-supplied thumbprints.
+    foreach ($t in $ProtectThumbprints) {
+        if ($t) { [void]$activeThumbs.Add($t) }
+    }
+
+    # Sweep both stores - certs may accumulate in either depending on deployment history.
+    $stores = @('Cert:\LocalMachine\WebHosting', 'Cert:\LocalMachine\My')
+    $now    = Get-Date
+    $removed = 0
+    $skipped = 0
+
+    foreach ($store in $stores) {
+        if (-not (Test-Path $store -ErrorAction SilentlyContinue)) { continue }
+
+        $expired = Get-ChildItem $store -ErrorAction SilentlyContinue | Where-Object {
+            $_.Issuer -match "Let.s Encrypt" -and $_.NotAfter -lt $now
+        }
+
+        foreach ($cert in $expired) {
+            if ($activeThumbs.Contains($cert.Thumbprint)) {
+                # Expired but still bound - leave it; IIS would break without it.
+                $msg = "Skipping expired LE cert still in active IIS binding: $($cert.Thumbprint) | Subject: $($cert.Subject) | Expired: $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+                Write-Log $msg -Level Warning
+                $skipped++
+                continue
+            }
+
+            try {
+                $cert | Remove-Item -Force -ErrorAction Stop
+                $msg = "Removed expired LE cert: $($cert.Thumbprint) | Subject: $($cert.Subject) | Expired: $($cert.NotAfter.ToString('yyyy-MM-dd'))"
+                Write-Log $msg -Level Info
+                $removed++
+            }
+            catch {
+                Write-Log "Could not remove expired LE cert $($cert.Thumbprint): $($_.Exception.Message)" -Level Warning
+            }
+        }
+    }
+
+    if ($removed -gt 0 -or $skipped -gt 0) {
+        $level = if ($removed -gt 0) { 'Success' } else { 'Info' }
+        Write-Log "Expired LE cert cleanup: $removed removed, $skipped skipped (still bound)" -Level $level
+    }
+    else {
+        Write-Log "No expired Let's Encrypt certificates found in store"
+    }
+}
+
 # ============================================================================
 # SCHEDULED TASK MANAGEMENT
 # ============================================================================
@@ -2747,13 +2851,43 @@ try {
     # Clean old logs
     Remove-OldLogs
 
-    # Check current certificate status (only in cert store when doing IIS output)
-    # WatchGuard and PFX modes don't use the Windows cert store as the source of truth.
+    # Sweep expired Let's Encrypt certificates from the Windows certificate store.
+    # Runs on every task execution regardless of whether renewal is needed.
+    # PFX and WatchGuard modes are included - they may have leftover store certs
+    # from previous runs or mode changes.  Active IIS bindings are always protected.
+    Remove-ExpiredLetsEncryptCerts
+
+    # Determine if the current certificate needs renewal.
+    # IIS / RDGateway:  check the Windows certificate store.
+    # WatchGuard / PFX: check the Posh-ACME local cert cache (shared system path set by
+    #                   Install-PoshAcmeModule) so the renewal threshold is respected
+    #                   even when the cert is not imported into the Windows store.
     $currentCert = $null
     $oldThumbprint = $null
     if ($script:IISAvailable -and -not $PfxOutputPath -and $script:OutputMode -ne 'WatchGuard') {
         $currentCert = Get-CurrentCertificate -Domains $allDomains
         $oldThumbprint = if ($currentCert) { $currentCert.Thumbprint } else { $null }
+    }
+    else {
+        # WatchGuard / PFX: load the cert from Posh-ACME's shared cache so that
+        # Test-CertificateNeedsRenewal can decide whether to skip this run.
+        # Set-PAServer is safe to call here (idempotent); it will be called again
+        # inside Invoke-AcmeCertificateOrder if renewal proceeds.
+        try {
+            $paServer = if ($Staging) { "LE_STAGE" } else { "LE_PROD" }
+            $null = Set-PAServer $paServer -ErrorAction Stop
+            $paCached = Get-PACertificate -MainDomain $DomainName -ErrorAction SilentlyContinue
+            if ($paCached -and $paCached.CertFile -and (Test-Path $paCached.CertFile -ErrorAction SilentlyContinue)) {
+                $currentCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($paCached.CertFile)
+                Write-Log "Posh-ACME cached cert: Subject=$($currentCert.Subject), Expires=$($currentCert.NotAfter.ToString('yyyy-MM-dd')), Thumbprint=$($currentCert.Thumbprint)"
+            }
+            else {
+                Write-Log "No cached Posh-ACME certificate found for $DomainName - will request a new one" -Level Info
+            }
+        }
+        catch {
+            Write-Log "Could not read Posh-ACME cert cache: $($_.Exception.Message). Proceeding with renewal." -Level Warning
+        }
     }
 
     # Decide whether to renew
@@ -2903,9 +3037,11 @@ catch {
     throw
 }
 finally {
-    # Send renewal report on all meaningful exit paths (success, failure, skipped, updated).
+    # Send renewal report on action-worthy exits only: Success, Failed, Updated.
+    # 'Skipped' (cert not yet due) fires on every daily task run and would be very chatty.
     # 'None' means an early exit (remove task, exit menu) where no report is warranted.
-    if ($script:SendReport -and $script:ReportData.Status -ne 'None' -and -not $script:ReportSent) {
+    $reportableStatuses = @('Success', 'Failed', 'Updated')
+    if ($script:SendReport -and $script:ReportData.Status -in $reportableStatuses -and -not $script:ReportSent) {
         try {
             Send-RenewalReport
         }
