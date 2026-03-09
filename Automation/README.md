@@ -61,6 +61,12 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 | `Convert-LegacyExcel.ps1` | Batch converts .xls files to .xlsx format |
 | `Convert-LegacyWord.ps1` | Batch converts .doc files to .docx format |
 
+### AI Chat Client
+
+| Script | Description |
+|--------|-------------|
+| `Invoke-HatzChat.ps1` | Interactive terminal chat client for Hatz AI API. Multi-model support (Claude, GPT-4, Gemini), file editing via search/replace blocks, folder context injection, tool integration, DPAPI-encrypted credential storage, conversation history, and visual feedback (spinner, token bar). |
+
 ---
 
 ## SMTP Relay Installation (Install-SMTPRelay.ps1)
@@ -870,11 +876,194 @@ The `Get-SPOMigrationReadiness.ps1` script checks for:
 
 ---
 
+## Hatz AI Chat Client (Invoke-HatzChat.ps1)
+
+Interactive terminal-based chat client for the Hatz AI API with file editing capabilities, conversation management, and tool integration.
+
+### Architecture
+
+```
+PowerShell Terminal
+    ↓ HTTPS (X-API-Key auth)
+Hatz AI API (ai.hatz.ai/v1)
+    ↓ Model selection
+Claude, GPT-4, Gemini, etc.
+```
+
+### Key Features
+
+| Feature | Description |
+|---------|-------------|
+| **Multi-Model Support** | Access all Hatz AI models (Claude Opus/Sonnet, GPT-4o, Gemini, etc.) |
+| **Conversation History** | Maintains context across turns with configurable history limit |
+| **File Editing** | `/edit` command with search/replace blocks for precise code changes |
+| **Folder Context** | `/folder` injects entire directories as conversation context |
+| **Tool Integration** | Enable web search, code execution, and other Hatz tools |
+| **System Prompts** | Persistent system prompts stored locally |
+| **DPAPI Encryption** | API keys encrypted at rest using Windows DPAPI |
+| **Live Spinner** | Animated spinner with elapsed time during API calls |
+| **Token Tracking** | Per-response and session token usage with context bar |
+| **Multiline Input** | `/multi` command for composing multi-line prompts |
+
+### Installation
+
+No installation required. Run directly from PowerShell 5.1+:
+
+```powershell
+# First run - prompts for API key (saved securely via DPAPI)
+.\Invoke-HatzChat.ps1
+
+# With specific model
+.\Invoke-HatzChat.ps1 -DefaultModel "anthropic.claude-sonnet-4-5"
+
+# Pass API key directly (not persisted)
+.\Invoke-HatzChat.ps1 -ApiKey "your-key-here"
+```
+
+### Commands Reference
+
+| Command | Description |
+|---------|-------------|
+| `/help` | Show all available commands |
+| `/quit` | Exit the chat session |
+| `/clear` | Clear conversation history (keeps system prompt) |
+| `/model` | Switch to a different model |
+| `/system` | View or update the system prompt |
+| `/history` | Display conversation history |
+| `/context` | Show current context size and token usage |
+| `/file <path>` | Inject a file's contents into the conversation |
+| `/folder [path]` | Inject files from a folder (selective or all) |
+| `/edit <path>` | Edit a file using AI-generated search/replace blocks |
+| `/run <path>` | Execute a script and capture output |
+| `/workspace [path]` | Set working directory for relative paths |
+| `/tools` | List and enable/disable available tools |
+| `/autotools` | Toggle automatic tool selection |
+| `/multi` | Enter multiline input mode (end with `.` on its own line) |
+
+### File Editing (`/edit`)
+
+The `/edit` command uses a search/replace block approach (inspired by Aider) for precise code modifications:
+
+```
+<<<<<<< SEARCH
+exact original lines to find
+=======
+replacement lines
+>>>>>>> REPLACE
+```
+
+**Benefits over full-file replacement:**
+
+| Approach | Tokens | Accuracy | Speed |
+|----------|--------|----------|-------|
+| Full file return | ~2000+ | Phantom edits possible | Slow, timeouts |
+| **Search/Replace** | ~100-300 | Only specified lines change | Fast |
+
+**Three-tier matching:**
+1. Exact substring match
+2. Normalized line endings (CRLF → LF)
+3. Whitespace-fuzzy (handles indentation variations)
+
+**Safety features:**
+- `.bak` file created before overwriting
+- Preview diff before applying
+- Partial application option if some blocks fail
+
+### Folder Injection (`/folder`)
+
+Inject directory contents as conversation context:
+
+```powershell
+/folder              # Lists files in workspace, prompts for selection
+/folder all          # Injects all text files (with progress bar)
+/folder C:\Projects  # Inject from specific path
+```
+
+Binary files are automatically excluded. Progress bar shows injection status for large directories.
+
+### Tool Integration
+
+Enable Hatz AI tools for enhanced capabilities:
+
+```powershell
+/tools                    # List available tools
+/tools google_search      # Enable specific tool
+/autotools               # Toggle automatic tool selection
+```
+
+Available tools include:
+- `google_search` - Web search
+- `tavily_search` - Research search
+- `firecrawl` - Web page content extraction
+- `code_interpreter` - Python code execution
+
+### UX Features
+
+| Feature | Description |
+|---------|-------------|
+| **Animated Spinner** | Shows `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` during API calls with elapsed time |
+| **Token Budget Bar** | Visual `[████████░░░░░░]` showing context window usage |
+| **Retry Countdown** | Live `[~] Retrying in 5s... 4s...` on transient errors |
+| **Command Hints** | `/edti` → `Did you mean: /edit` |
+| **Syntax Highlighting** | Basic code highlighting in responses (PS7+/Windows Terminal) |
+
+### Parameters
+
+| Parameter | Description | Default |
+|-----------|-------------|---------|
+| `-ApiBaseUrl` | Override API endpoint | `https://ai.hatz.ai/v1` |
+| `-EnvVarName` | Environment variable for API key | `HATZ_AI_API_KEY` |
+| `-ApiKey` | Pass API key directly (not persisted) | None |
+| `-DefaultModel` | Model to use without prompting | `anthropic.claude-opus-4-6` |
+| `-MaxHistory` | Max non-system messages kept (0 = unlimited) | `40` |
+
+### Credential Storage
+
+API keys are encrypted using Windows DPAPI and stored in:
+
+```
+%APPDATA%\HatzChat\api_key.clixml
+```
+
+DPAPI encrypts per-user/per-machine — the file cannot be decrypted on another machine or by another Windows user account.
+
+**Migration:** If a plaintext API key exists in the legacy environment variable, it's automatically migrated to the encrypted file and the env var is cleared.
+
+### Context Limits
+
+Built-in context window sizes for token budget tracking:
+
+| Model | Context Window |
+|-------|----------------|
+| `anthropic.claude-opus-4-6` | 200,000 |
+| `anthropic.claude-sonnet-4-5` | 200,000 |
+| `openai.gpt-4o` | 128,000 |
+| `openai.gpt-4-turbo` | 128,000 |
+| `google.gemini-2.0-flash` | 1,000,000 |
+
+### Requirements
+
+- PowerShell 5.1+ (native `Invoke-RestMethod`)
+- Internet access to Hatz AI API
+- Hatz AI API key (generate at Hatz Admin Dashboard > Settings)
+
+### Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| **Invalid API key** | Delete credential file and re-run: `Remove-Item "$env:APPDATA\HatzChat\api_key.clixml"` |
+| **Timeout on large requests** | Use `/edit` instead of pasting full files; timeouts are retried automatically |
+| **UTF-8 encoding issues** | Script sets console encoding to UTF-8; ensure Windows Terminal or PS7 for best results |
+| **Spinner not animating** | Legacy console detected; falls back to ASCII spinner `\|/-` |
+
+---
+
 ## Requirements
 
 | Script | Requirements |
 |--------|--------------|
 | `Invoke-LetsEncryptRenewal.ps1` | PowerShell 5.1+, Administrator rights, Internet access to Let's Encrypt ACME endpoints. Posh-ACME auto-installed. Posh-SSH auto-installed for WatchGuard mode. IIS optional (HTTP-01 / IIS binding). TSGateway service required on-box for RD Gateway mode. |
+| `Invoke-HatzChat.ps1` | PowerShell 5.1+, Internet access to Hatz AI API (`ai.hatz.ai`), Hatz AI API key. No additional modules required. |
 | `Install-SMTPRelay.ps1` | PowerShell 5.1+, Administrator rights, Internet access (NSSM download), Microsoft.Graph module (for auto app creation) |
 | `Deploy-RMMAgent.ps1` | PowerShell 5.1+, AD module (for AD query), PSExec.exe, Admin rights on targets |
 | `Reset-UserProfile.ps1` | PowerShell 5.1+, Local Administrator rights, User must be logged off |
