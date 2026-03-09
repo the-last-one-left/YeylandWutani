@@ -532,7 +532,7 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 
 ---
 
-## Get-M365SecurityAnalysis.ps1 (v10.7)
+## Get-M365SecurityAnalysis.ps1 (v11.3)
 
 **Capabilities:**
 - Sign-in log analysis with geolocation and high-risk ISP detection
@@ -541,6 +541,7 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 - Inbox rule analysis for data exfiltration patterns
 - Admin audit log monitoring with risk scoring
 - App registration analysis for OAuth abuse
+- **Hatz AI security analysis** — AI-powered review of all collected CSV data
 
 **Usage:**
 ```powershell
@@ -551,10 +552,49 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 # 1. Connect to Microsoft 365
 # 2. Set date range (default: 14 days)
 # 3. Run data collection operations
-# 4. Generate HTML security report
+# 4. Click "AI Analysis" to get AI-generated findings (requires Hatz AI API key)
+# 5. Generate HTML security report
 ```
 
 **Required Modules:** Microsoft.Graph.*, ExchangeOnlineManagement
+
+---
+
+### Hatz AI Analysis Feature
+
+After collecting data, click the **AI Analysis** button to send all CSV exports to Hatz AI for an expert-level security review powered by Claude Opus.
+
+**What the AI analyzes:**
+
+| Data Source | Analysis Focus |
+|-------------|---------------|
+| `UserLocationData.csv` | Successful sign-ins — unusual geographic patterns |
+| `UserLocationData_Failed.csv` | Non-success sign-ins — distinguishes real credential attacks from benign interrupts |
+| `UniqueSignInLocations.csv` | Aggregated sign-in patterns — brute-force and password-spray detection |
+| Inbox rules CSVs | External forwarding, auto-deletion, data exfiltration indicators |
+| App registration CSVs | Overprivileged OAuth apps, suspicious registrations |
+| MFA audit CSVs | Users without MFA, per-user MFA vs. Conditional Access coverage |
+
+**AI Finding Categories (priority order):**
+
+1. Users without MFA or with only per-user MFA (no Conditional Access coverage)
+2. Credential attacks — based on StatusCode 50126 (invalid password) and 50053 (lockout) only
+3. Suspicious inbox rules (external forwarding, auto-deletion)
+4. External or anonymous mailbox delegations
+5. Suspicious app registrations or overprivileged OAuth apps
+6. Conditional Access policy gaps
+7. Unusual geographic sign-in patterns
+
+**Smart attack detection:** The AI correctly distinguishes real brute-force attacks (StatusCode 50126/50053) from benign authentication interrupts (50140, 50058, 65001, etc.) that are frequently misidentified as failed logins.
+
+**API key storage:** Shares the DPAPI-encrypted credential file with `Invoke-HatzChat.ps1`. If you've already authenticated in HatzChat, no re-entry is required. The key is stored at `%APPDATA%\HatzChat\api_key.clixml` (per-user, per-machine encryption via Windows DPAPI).
+
+**Result dialog:** Analysis results appear in a resizable window with a **Save Report** button that exports findings as a timestamped `.txt` file alongside the other session exports.
+
+**Requirements for AI analysis:**
+- Hatz AI API key (generate at Hatz Admin Dashboard > Settings)
+- Internet access to `ai.hatz.ai`
+- Data collection must be run first (the AI reads the CSV exports)
 
 ---
 
