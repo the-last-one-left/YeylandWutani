@@ -474,6 +474,7 @@ function Invoke-ApplySearchReplace {
     )
 
     $content = $OriginalContent
+    $originalEol = if ($OriginalContent -match "`r`n") { "`r`n" } else { "`n" }
     $errors  = [System.Collections.ArrayList]::new()
     $applied = 0
 
@@ -518,13 +519,12 @@ function Invoke-ApplySearchReplace {
                 if ($match) {
                     # Replace those lines with the REPLACE block's lines
                     $replaceLines = $replace -split "`r?`n"
-                    $before = $contentLines[0..([Math]::Max(0, $i - 1))]
-                    if ($i -eq 0) { $before = @() }
+                    $before = if ($i -gt 0) { @($contentLines[0..($i - 1)]) } else { @() }
                     $after  = if (($i + $searchLines.Count) -lt $contentLines.Count) {
                         $contentLines[($i + $searchLines.Count)..($contentLines.Count - 1)]
                     } else { @() }
                     $contentLines = @($before) + @($replaceLines) + @($after)
-                    $content = $contentLines -join "`n"
+                    $content = $contentLines -join $originalEol
                     $applied++
                     $found = $true
                     break
@@ -1043,6 +1043,10 @@ function Start-HatzChat {
             $loadedSystemPrompt = Get-Content $script:SystemPromptFile -Raw -Encoding UTF8
             if (-not [string]::IsNullOrWhiteSpace($loadedSystemPrompt)) {
                 $loadedSystemPrompt = $loadedSystemPrompt.Trim()
+                if ($loadedSystemPrompt.Length -gt 10000) {
+                    Write-Host ('[!] Saved system prompt is {0:N0} chars — truncating to 10,000.' -f $loadedSystemPrompt.Length) -ForegroundColor Yellow
+                    $loadedSystemPrompt = $loadedSystemPrompt.Substring(0, 10000)
+                }
             } else {
                 $loadedSystemPrompt = $null
             }
@@ -1278,7 +1282,7 @@ function Start-HatzChat {
                 # Show progress while scanning large folders
                 $total = $folderFiles.Count
                 for ($fi = 0; $fi -lt $total; $fi++) {
-                    if ($total -gt 20) {
+                    if ($total -gt 50) {
                         $pct = [math]::Floor(($fi / $total) * 100)
                         Write-Progress -Activity 'Scanning files' -Status ('{0}/{1}' -f ($fi + 1), $total) -PercentComplete $pct
                     }
@@ -1286,7 +1290,7 @@ function Start-HatzChat {
                     $binTag = if (Test-IsBinaryFile -Path $folderFiles[$fi].FullName) { ' [binary]' } else { '' }
                     Write-Host ('  {0,3}. {1} ({2} bytes){3}' -f ($fi + 1), $rel, $folderFiles[$fi].Length, $binTag) -ForegroundColor DarkCyan
                 }
-                if ($total -gt 20) { Write-Progress -Activity 'Scanning files' -Completed }
+                if ($total -gt 50) { Write-Progress -Activity 'Scanning files' -Completed }
                 Write-Host ''
                 Write-Host '"all" to read all files, comma-separated numbers (e.g. 1,3) to select, or Enter for tree only' -ForegroundColor Gray
                 $folderChoice = (Read-Host -Prompt 'Select').Trim()
@@ -1320,7 +1324,7 @@ function Start-HatzChat {
                     
                     # Context size warning
                     $ctxChars = $pendingContext.Length
-                    $estTokens = [math]::Ceiling($ctxChars / 4)
+                    $estTokens = [math]::Ceiling($ctxChars / 3)
                     $maxCtx = if ($script:ContextLimits.ContainsKey($currentModel)) {
                         $script:ContextLimits[$currentModel]
                     } else { 200000 }
@@ -1353,7 +1357,7 @@ function Start-HatzChat {
                     
                     # Context size warning
                     $ctxChars = $pendingContext.Length
-                    $estTokens = [math]::Ceiling($ctxChars / 4)
+                    $estTokens = [math]::Ceiling($ctxChars / 3)
                     $maxCtx = if ($script:ContextLimits.ContainsKey($currentModel)) {
                         $script:ContextLimits[$currentModel]
                     } else { 200000 }
@@ -1394,10 +1398,30 @@ function Start-HatzChat {
                     continue
                 }
             }
+            else {
+                # Blanket confirmation for all non-destructive commands as well
+                Write-Host ('[>] Run: {0}' -f $cmdToRun) -ForegroundColor DarkYellow
+                $confirm = (Read-Host -Prompt 'Execute? (y/n)').Trim().ToLower()
+                if ($confirm -ne 'y') {
+                    Write-Host '[*] Cancelled.' -ForegroundColor Cyan
+                    Write-Host ''
+                    continue
+                }
+            }
 
             Write-Host ('[>] Running: {0}' -f $cmdToRun) -ForegroundColor DarkYellow
             try {
-                $runOutput = Invoke-Expression $cmdToRun 2>&1 | Out-String
+                $runJob = Start-Job -ScriptBlock { param($cmd) Invoke-Expression $cmd 2>&1 } -ArgumentList $cmdToRun
+                $completed = $runJob | Wait-Job -Timeout 30
+                if (-not $completed) {
+                    $runJob | Stop-Job
+                    $runJob | Remove-Job -Force
+                    Write-Host '[!] Command timed out after 30s.' -ForegroundColor Red
+                    Write-Host ''
+                    continue
+                }
+                $runOutput = $runJob | Receive-Job | Out-String
+                $runJob | Remove-Job
                 Write-Host '+-- Command Output ----------------------------------------' -ForegroundColor DarkYellow
                 Write-Host $runOutput -ForegroundColor DarkGray
                 Write-Host '+----------------------------------------------------------' -ForegroundColor DarkYellow
@@ -1438,6 +1462,7 @@ function Start-HatzChat {
                         $prevUser.content += "`n`nAdditional instruction: $extraInstruction"
                     }
                     $userInput = $prevUser.content
+                    $pendingContext = ''  # Original context is already baked into $prevUser.content
                     Write-Host '[*] Retrying last message...' -ForegroundColor Cyan
                     # Remove the user message too — it will be re-added in the send logic below
                     $conversationHistory.RemoveAt($conversationHistory.Count - 1)
@@ -1516,10 +1541,13 @@ function Start-HatzChat {
             }
             $sessionFile = Join-Path $script:SessionDir "$sessionName.json"
             $sessionData = @{
-                model       = $currentModel
-                temperature = $temperature
-                messages    = $conversationHistory.ToArray()
-                saved       = (Get-Date -Format 'o')
+                model              = $currentModel
+                temperature        = $temperature
+                messages           = $conversationHistory.ToArray()
+                toolsToUse         = $toolsToUse
+                autoToolSelection  = $autoToolSelection
+                workspacePath      = $workspacePath
+                saved              = (Get-Date -Format 'o')
             }
             $sessionData | ConvertTo-Json -Depth 10 |
                 Set-Content -Path $sessionFile -Encoding UTF8
@@ -1572,6 +1600,9 @@ function Start-HatzChat {
                 }
                 if ($sessionData.model)       { $currentModel = $sessionData.model }
                 if ($sessionData.temperature)  { $temperature  = [double]$sessionData.temperature }
+                if ($sessionData.toolsToUse)          { $toolsToUse        = @($sessionData.toolsToUse) }
+                if ($null -ne $sessionData.autoToolSelection) { $autoToolSelection = [bool]$sessionData.autoToolSelection }
+                if ($sessionData.workspacePath)        { $workspacePath     = $sessionData.workspacePath }
                 $msgCount = $conversationHistory.Count
                 Write-Host ('[+] Loaded session: {0} ({1} messages, model: {2})' -f $loadName, $msgCount, $currentModel) -ForegroundColor Green
             }
@@ -1684,22 +1715,25 @@ Instruction: $editInstruction
 
             # Send without conversation history to keep payload small
             $editMsgs = @(@{ role = 'user'; content = $editPrompt })
-            $editResult = Invoke-HatzChatWithSpinner -ApiBaseUrl $ApiBaseUrl `
-                                                      -ApiKey $ApiKey `
-                                                      -Model $currentModel `
-                                                      -Messages $editMsgs `
-                                                      -Temperature 0.2 `
-                                                      -TimeoutMs 180000 `
-                                                      -SpinnerMessage 'Generating edit' 
 
-            if ($null -eq $editResult) {
-                Write-Host '[!] Edit request failed.' -ForegroundColor Red
-                # Record failure in history so user can /retry with context
-                [void]$conversationHistory.Add(@{ role = 'user'; content = $editPrompt })
-                [void]$conversationHistory.Add(@{ role = 'assistant'; content = '[Edit request failed — no response from API]' })
-                Write-Host ''
-                continue
-            }
+            # Refinement loop
+            while ($true) {
+                $editResult = Invoke-HatzChatWithSpinner -ApiBaseUrl $ApiBaseUrl `
+                                                          -ApiKey $ApiKey `
+                                                          -Model $currentModel `
+                                                          -Messages $editMsgs `
+                                                          -Temperature 0.2 `
+                                                          -TimeoutMs 180000 `
+                                                          -SpinnerMessage 'Generating edit' 
+
+                if ($null -eq $editResult) {
+                    Write-Host '[!] Edit request failed.' -ForegroundColor Red
+                    # Record failure in history so user can /retry with context
+                    [void]$conversationHistory.Add(@{ role = 'user'; content = $editPrompt })
+                    [void]$conversationHistory.Add(@{ role = 'assistant'; content = '[Edit request failed — no response from API]' })
+                    Write-Host ''
+                    break
+                }
 
             $editResp = $editResult.Response
             $rawReply = $editResp.choices[0].message.content
@@ -1737,15 +1771,15 @@ Instruction: $editInstruction
                     } else {
                         Write-Host '[*] Edit cancelled.' -ForegroundColor Cyan
                     }
+                    break
                 } else {
                     Write-Host '[!] Could not parse model response at all. Raw reply:' -ForegroundColor Red
                     Write-Host $rawReply -ForegroundColor DarkGray
                     # Record in history so user can /retry
                     [void]$conversationHistory.Add(@{ role = 'user';      content = $editPrompt })
                     [void]$conversationHistory.Add(@{ role = 'assistant'; content = $rawReply   })
+                    break
                 }
-                Write-Host ''
-                continue
             }
 
             # --- Preview the changes ---
@@ -1769,12 +1803,12 @@ Instruction: $editInstruction
                     if ($partialChoice -ne 'y') {
                         Write-Host '[*] Edit cancelled.' -ForegroundColor Cyan
                         Write-Host ''
-                        continue
+                        break
                     }
                 } else {
                     Write-Host '[!] No blocks could be applied. Edit cancelled.' -ForegroundColor Red
                     Write-Host ''
-                    continue
+                    break
                 }
             }
 
@@ -1786,12 +1820,23 @@ Instruction: $editInstruction
                 Write-Host '  (No effective changes)' -ForegroundColor DarkGray
                 Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
                 Write-Host ''
-                continue
+                break
             }
             Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
             Write-Host ''
 
-            $applyChoice = (Read-Host -Prompt 'Apply changes? (y/n)').Trim().ToLower()
+            $applyChoice = (Read-Host -Prompt 'Apply changes? (y/n) or [r]efine').Trim().ToLower()
+
+            if ($applyChoice -eq 'r' -or $applyChoice -eq 'refine') {
+                $refineInput = Read-Host -Prompt 'Enter feedback for the model'
+                if (-not [string]::IsNullOrWhiteSpace($refineInput)) {
+                    $editMsgs += @{ role = 'assistant'; content = $rawReply }
+                    $editMsgs += @{ role = 'user';      content = "The edit was not applied. Feedback: $refineInput`n`nPlease try again, providing ONLY the SEARCH/REPLACE blocks." }
+                    Write-Host '[*] Refining edit...' -ForegroundColor Cyan
+                    continue
+                }
+            }
+
             if ($applyChoice -eq 'y') {
                 # Write a timestamped backup before overwriting (safety net)
                 $bakDir  = Join-Path (Split-Path $resolvedEdit) '.hatz-backups'
@@ -1809,8 +1854,10 @@ Instruction: $editInstruction
                 Write-Host '[*] Edit cancelled.' -ForegroundColor Cyan
             }
             Write-Host ''
-            continue
+            break
         }
+        continue
+    }
 
         elseif ($trimmedInput -eq '/help') {
             Write-Host '  Session:' -ForegroundColor Gray
@@ -1851,7 +1898,7 @@ Instruction: $editInstruction
                 if ($ml.Trim() -eq '.') { break }
                 [void]$multiLines.Add($ml)
             }
-            if ($multiLines.Count -eq 0) {
+            if ($multiLines.Count -eq 0 -or ($multiLines -join "`n").Trim() -eq '') {
                 Write-Host '[*] No input captured.' -ForegroundColor Cyan
                 Write-Host ''
                 continue
@@ -2009,6 +2056,7 @@ Instruction: $editInstruction
                 200000  # Default assumption
             }
             Show-TokenBar -Used $inputTok -Max $maxCtx
+            Write-Host '  (bar = last request context usage)' -ForegroundColor DarkGray
             
             # Additional warning when critically full
             if ($inputTok -gt ($maxCtx * 0.85)) {
