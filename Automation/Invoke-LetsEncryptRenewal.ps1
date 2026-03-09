@@ -1,4 +1,4 @@
-#Requires -RunAsAdministrator
+﻿#Requires -RunAsAdministrator
 #Requires -Version 5.1
 <#
 .SYNOPSIS
@@ -283,6 +283,11 @@ $script:SkipCertOrder  = $false
 $script:WgCredential   = $null
 $script:SendReport     = $SendReport.IsPresent
 $script:ReportSent     = $false
+$script:ChallengeType  = $ChallengeType
+$script:DnsPlugin      = $DnsPlugin
+$script:DnsPluginArgs  = $DnsPluginArgs
+$script:PfxOutputPath  = $PfxOutputPath
+$script:CertStorePath  = $CertStorePath
 $script:ReportData     = @{
     Status        = 'None'    # 'Success' | 'Failed' | 'Skipped' | 'Updated' | 'None'
     Domain        = $DomainName
@@ -297,6 +302,7 @@ $ScriptVersion = "1.4.0"
 $TaskName = "LetsEncrypt Certificate Renewal - $DomainName"
 $LogDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt"
 $LogFile = Join-Path $LogDir "renewal_$(Get-Date -Format 'yyyyMMdd_HHmmss').log"
+$lockFile = Join-Path $LogDir ".renewal.lock"
 $ChallengeSiteName = "LetsEncrypt-Challenge-$($DomainName -replace '\.', '-')"
 
 # ============================================================================
@@ -815,9 +821,13 @@ function Show-EmailReportMenu {
             Write-Log "Test email sent to $($savedCfg.Recipient)" -Level Success
         }
         catch {
-            Write-Host "  Test email failed: $($_.Exception.Message)" -ForegroundColor Red
+            $detail = $_.Exception.Message
+            if ($_.ErrorDetails.Message) {
+                try { $body = $_.ErrorDetails.Message | ConvertFrom-Json; $detail += " - $($body.error.message)" } catch {}
+            }
+            Write-Host "  Test email failed: $detail" -ForegroundColor Red
             Write-Host "  Check your credentials and try again (menu option 4 -> reconfigure email)." -ForegroundColor Yellow
-            Write-Log "Test email failed: $($_.Exception.Message)" -Level Warning
+            Write-Log "Test email failed: $detail" -Level Warning
         }
     }
 }
@@ -834,20 +844,15 @@ function Test-Prerequisites {
     $acmeUrl = "https://$acmeEndpoint/directory"
 
     # Detect this server's public IP for logging
-    try {
-        $publicIP = (Invoke-RestMethod -Uri "https://api.ipify.org" -TimeoutSec 10 -ErrorAction Stop).Trim()
-        Write-Log "Server public IP: $publicIP" -Level Info
-    }
-    catch {
-        # Try fallbacks
+    $publicIP = $null
+    foreach ($ipSvc in @('https://api.ipify.org', 'https://icanhazip.com')) {
         try {
-            $publicIP = (Invoke-RestMethod -Uri "https://icanhazip.com" -TimeoutSec 10 -ErrorAction Stop).Trim()
-            Write-Log "Server public IP: $publicIP" -Level Info
-        }
-        catch {
-            Write-Log "Could not determine server public IP (not fatal)" -Level Warning
-        }
+            $publicIP = (Invoke-RestMethod -Uri $ipSvc -TimeoutSec 5 -ErrorAction Stop).Trim()
+            break
+        } catch { continue }
     }
+    if ($publicIP) { Write-Log "Server public IP: $publicIP" -Level Info }
+    else { Write-Log "Could not determine server public IP (not fatal)" -Level Warning }
 
     # Test actual HTTPS connectivity to the ACME directory endpoint (avoids split-DNS issues)
     try {
@@ -910,8 +915,8 @@ function Test-Prerequisites {
     }
 
     # Re-check after potential fallback from HTTP to DNS
-    if ($ChallengeType -eq 'Dns') {
-        if (-not $DnsPlugin) {
+    if ($script:ChallengeType -eq 'Dns') {
+        if (-not $script:DnsPlugin) {
             if ($script:isInteractive) {
                 Write-Host ""
                 Write-Host "  Common DNS plugins: AzureDns, Cloudflare, GoDaddy, Route53, Namecheap, OVH" -ForegroundColor Gray
@@ -926,9 +931,9 @@ function Test-Prerequisites {
                 throw "DNS-01 challenge requires -DnsPlugin parameter. Run 'Get-PAPlugin' to see available plugins, or use -ChallengeType DnsManual for manual TXT record creation."
             }
         }
-        Write-Log "DNS-01 challenge mode: plugin=$DnsPlugin, propagation wait=${DnsSleep}s" -Level Info
+        Write-Log "DNS-01 challenge mode: plugin=$($script:DnsPlugin), propagation wait=${DnsSleep}s" -Level Info
     }
-    elseif ($ChallengeType -eq 'DnsManual') {
+    elseif ($script:ChallengeType -eq 'DnsManual') {
         Write-Log "DNS-01 manual mode: you will be prompted to create TXT records during validation" -Level Warning
         Write-Log "Manual DNS mode is NOT suitable for unattended scheduled task renewals" -Level Warning
     }
@@ -943,7 +948,7 @@ function Test-Prerequisites {
 
     # Verify certificate store path exists or fall back (IIS and RDGateway modes use the cert store)
     if ($script:OutputMode -in @('IIS', 'RDGateway')) {
-        if ($CertStorePath -eq "Cert:\LocalMachine\WebHosting") {
+        if ($script:CertStorePath -eq "Cert:\LocalMachine\WebHosting") {
             try {
                 $null = Get-ChildItem $CertStorePath -ErrorAction Stop
             }
@@ -952,7 +957,7 @@ function Test-Prerequisites {
                 Write-Log "WebHosting store unavailable, falling back to LocalMachine\My" -Level Warning
             }
         }
-        Write-Log "Certificate store: $CertStorePath" -Level Info
+        Write-Log "Certificate store: $($script:CertStorePath)" -Level Info
     }
 }
 
@@ -1051,7 +1056,7 @@ function Invoke-FireboxCommand {
         $chunk = $Stream.Read()
         if ($chunk) { $buf += $chunk }
         # WatchGuard prompts: "WG> " (main) or "WG(config)> " (config mode)
-        if ($buf -match '>\s*$') { break }
+        if ($buf -match 'WG[^>]*>\s*$') { break }
     }
     return $buf
 }
@@ -1245,8 +1250,17 @@ function Deploy-WatchGuardCert {
     $stream  = New-SSHShellStream -SSHSession $session
 
     $rs = $null; $ps = $null
+    $fwRuleName = "YW-LetsEncrypt-FTP-Temp-$($script:FireboxFtpPort)"
+    $fwDataRuleName = "YW-LetsEncrypt-FTP-Data-Temp-$($script:FireboxFtpPort)"
+    $dataPort = $script:FireboxFtpPort + 1
 
     try {
+        # Open temporary firewall rules for FTP control and data ports
+        New-NetFirewallRule -DisplayName $fwRuleName -Direction Inbound -Protocol TCP `
+            -LocalPort $script:FireboxFtpPort -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+        New-NetFirewallRule -DisplayName $fwDataRuleName -Direction Inbound -Protocol TCP `
+            -LocalPort $dataPort -Action Allow -Profile Any -ErrorAction SilentlyContinue | Out-Null
+        Write-Log "Temporary firewall rules created for FTP ports $($script:FireboxFtpPort) and $dataPort" -Level Info
         # Consume login banner - firmware version is in the banner (show version is not a valid command)
         Start-Sleep -Milliseconds 1500
         $banner = $stream.Read()
@@ -1283,9 +1297,11 @@ function Deploy-WatchGuardCert {
             User     = $ftpUser
             Password = $ftpPass
             Port     = $script:FireboxFtpPort
+            DataPort = $dataPort
             LocalIP  = $script:FireboxLocalIP
             Log      = [System.Collections.Generic.List[string]]::new()
             Ready    = $false
+            Done     = $false
             Error    = $null
         })
 
@@ -1305,8 +1321,9 @@ function Deploy-WatchGuardCert {
                 $d.Log.Add("Client connected")
 
                 $dataListener = $null
+                $done = $false
 
-                while ($true) {
+                while (-not $done) {
                     $line = $rd.ReadLine()
                     if ($null -eq $line) { break }
                     $d.Log.Add(">> $line")
@@ -1324,7 +1341,7 @@ function Deploy-WatchGuardCert {
                         'CWD'  { $wr.WriteLine('250 OK') }
                         'TYPE' { $wr.WriteLine('200 Type set') }
                         'PASV' {
-                            $dataListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, 0)
+                            $dataListener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Any, $d.DataPort)
                             $dataListener.Start()
                             $dp      = ($dataListener.LocalEndpoint).Port
                             $ipParts = $d.LocalIP -split '\.'
@@ -1363,12 +1380,13 @@ function Deploy-WatchGuardCert {
                             $ds.Close(); $dc.Close(); $dataListener.Stop(); $dataListener = $null
                             $d.Log.Add("Sent $($bytes.Length) bytes")
                             $wr.WriteLine('226 Transfer complete')
-                            break   # one-shot: file delivered, we're done
+                            $done = $true   # one-shot: file delivered, exit the while loop
                         }
-                        'QUIT' { $wr.WriteLine('221 Bye'); break }
+                        'QUIT' { $wr.WriteLine('221 Bye'); $done = $true }
                         default { $wr.WriteLine("500 Unknown: $cmd") }
                     }
                 }
+                $d.Done = $true
                 $client.Close(); $ctl.Stop()
                 $d.Log.Add("FTP server closed")
             }
@@ -1460,7 +1478,10 @@ function Deploy-WatchGuardCert {
         Write-Log "WatchGuard Firebox certificate deployment complete" -Level Success
     }
     finally {
-        # Always clean up SSH session and FTP runspace
+        # Always clean up SSH session, FTP runspace, and firewall rules
+        if ($stream) {
+            try { $stream.Close() } catch { }
+        }
         if ($session) {
             try { $session | Remove-SSHSession | Out-Null } catch { }
         }
@@ -1471,6 +1492,10 @@ function Deploy-WatchGuardCert {
         if ($rs) {
             try { $rs.Close(); $rs.Dispose() } catch { }
         }
+        # Remove temporary firewall rules
+        Remove-NetFirewallRule -DisplayName $fwRuleName -ErrorAction SilentlyContinue
+        Remove-NetFirewallRule -DisplayName $fwDataRuleName -ErrorAction SilentlyContinue
+        Write-Log "Temporary FTP firewall rules removed" -Level Info
     }
 }
 
@@ -1519,7 +1544,7 @@ function Save-EmailConfig {
     }
 
     $cfgFile = Join-Path $LogDir "email_config.json"
-    $store | ConvertTo-Json | Set-Content -Path $cfgFile -Encoding UTF8
+    $store | ConvertTo-Json -Depth 10 | Set-Content -Path $cfgFile -Encoding UTF8
 
     try {
         $acl = Get-Acl -Path $cfgFile
@@ -1588,7 +1613,7 @@ function Send-GraphEmail {
         -Uri "https://graph.microsoft.com/v1.0/users/$($Config.Sender)/sendMail" `
         -Headers @{ Authorization = "Bearer $token" } `
         -ContentType 'application/json' `
-        -Body ($payload | ConvertTo-Json -Depth 6) | Out-Null
+        -Body ($payload | ConvertTo-Json -Depth 10) | Out-Null
 
     $token = $null
 }
@@ -1807,7 +1832,7 @@ function Get-CurrentCertificate {
     $primaryDomain = $Domains[0]
 
     # Search for existing certificates matching the domain
-    $certs = Get-ChildItem $CertStorePath -ErrorAction SilentlyContinue | Where-Object {
+    $certs = Get-ChildItem $script:CertStorePath -ErrorAction SilentlyContinue | Where-Object {
         $_.Subject -match [regex]::Escape($primaryDomain) -or
         ($_.DnsNameList -and ($_.DnsNameList.Unicode -contains $primaryDomain))
     } | Sort-Object NotAfter -Descending
@@ -1861,7 +1886,7 @@ function Invoke-AcmeCertificateOrder {
     Write-Log "Requesting certificate for: $($Domains -join ', ')"
 
     # Build challenge parameters based on challenge type
-    switch ($ChallengeType) {
+    switch ($script:ChallengeType) {
         'Http' {
             $certParams = Build-HttpChallengeParams -Domains $Domains
         }
@@ -1873,48 +1898,78 @@ function Invoke-AcmeCertificateOrder {
         }
     }
 
+    $maxAttempts = 2
+    $lastError = $null
     $matchedSites = @()
-    try {
-        # For HTTP-01, set up IIS challenge infrastructure
-        if ($ChallengeType -eq 'Http') {
-            $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
-            New-AcmeChallengeConfig -ChallengePath $challengeDir
-            $matchedSites = Add-ChallengeToMatchingSites -Domains $Domains -ChallengePath $challengeDir
-        }
 
-        if ($ChallengeType -eq 'Dns') {
-            Write-Log "Submitting certificate order - Posh-ACME will create a DNS TXT record then wait ${DnsSleep}s for propagation before asking Let's Encrypt to verify. This is normal; please wait..." -Level Info
-        }
-
-        $paCert = New-PACertificate @certParams
-
-        if (-not $paCert) {
-            $errorHint = switch ($ChallengeType) {
-                'Http'      { "Check that port 80 is accessible from the internet and DNS points to this server." }
-                'Dns'       { "Check DNS plugin credentials and that the plugin can create TXT records in your DNS zone." }
-                'DnsManual' { "Check that TXT records were created correctly and had time to propagate." }
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            # For HTTP-01, set up IIS challenge infrastructure
+            if ($script:ChallengeType -eq 'Http') {
+                $challengeDir = Join-Path $env:ProgramData "YeylandWutani\LetsEncrypt\challenges"
+                New-AcmeChallengeConfig -ChallengePath $challengeDir
+                $matchedSites = Add-ChallengeToMatchingSites -Domains $Domains -ChallengePath $challengeDir
             }
-            throw "Certificate order failed. $errorHint"
+
+            if ($script:ChallengeType -eq 'Dns') {
+                Write-Host ""
+                Write-Host "  `u{231B} DNS propagation wait (~${DnsSleep}s) - do not interrupt..." -ForegroundColor Yellow
+                Write-Host ""
+                Write-Log "Submitting certificate order - Posh-ACME will create a DNS TXT record then wait ${DnsSleep}s for propagation before asking Let's Encrypt to verify. This is normal; please wait..." -Level Info
+            }
+
+            $paCert = New-PACertificate @certParams
+
+            if (-not $paCert) {
+                $errorHint = switch ($script:ChallengeType) {
+                    'Http'      { "Check that port 80 is accessible from the internet and DNS points to this server." }
+                    'Dns'       { "Check DNS plugin credentials and that the plugin can create TXT records in your DNS zone." }
+                    'DnsManual' { "Check that TXT records were created correctly and had time to propagate." }
+                }
+                throw "Certificate order failed. $errorHint"
+            }
+
+            $envLabel = if ($Staging) { "STAGING " } else { "" }
+            Write-Log "${envLabel}Certificate obtained successfully!" -Level Success
+            Write-Log "  Thumbprint: $($paCert.Thumbprint)"
+            Write-Log "  Expires: $($paCert.NotAfter)"
+
+            # Persist DNS plugin credentials after every successful issuance so scheduled
+            # task renewals (running as SYSTEM) can load them without prompting.
+            if ($script:ChallengeType -eq 'Dns' -and $script:DnsPlugin -and $script:DnsPluginArgs) {
+                Save-PluginCredentials -Plugin $script:DnsPlugin -PluginArgs $script:DnsPluginArgs
+            }
+
+            return $paCert
         }
+        catch {
+            $lastError = $_
 
-        Write-Log "Certificate obtained successfully!" -Level Success
-        Write-Log "  Thumbprint: $($paCert.Thumbprint)"
-        Write-Log "  Expires: $($paCert.NotAfter)"
+            # Provide specific guidance for common ACME errors
+            $msg = $_.Exception.Message
+            if ($msg -match 'rateLimited') {
+                Write-Log "RATE LIMITED: Let's Encrypt rate limit reached. Wait at least 1 hour before retrying. Use -Staging for testing." -Level Error
+            }
+            elseif ($msg -match 'unauthorized|Incorrect TXT') {
+                Write-Log "AUTHORIZATION FAILED: The challenge response was rejected. For DNS-01, verify your API credentials and that the TXT record was created in the correct zone." -Level Error
+            }
 
-        # Persist DNS plugin credentials after every successful issuance so scheduled
-        # task renewals (running as SYSTEM) can load them without prompting.
-        if ($ChallengeType -eq 'Dns' -and $DnsPlugin -and $script:DnsPluginArgs) {
-            Save-PluginCredentials -Plugin $DnsPlugin -PluginArgs $script:DnsPluginArgs
+            if ($attempt -lt $maxAttempts) {
+                $wait = 60 * $attempt
+                Write-Log "Certificate order attempt $attempt failed: $($_.Exception.Message). Retrying in ${wait}s..." -Level Warning
+                Start-Sleep -Seconds $wait
+            }
         }
-
-        return $paCert
+        finally {
+            # Clean up HTTP-01 challenge virtual directories
+            foreach ($siteName in $matchedSites) {
+                Remove-ChallengeVirtualDirectory -SiteName $siteName
+            }
+            $matchedSites = @()
+        }
     }
-    finally {
-        # Clean up HTTP-01 challenge virtual directories
-        foreach ($siteName in $matchedSites) {
-            Remove-ChallengeVirtualDirectory -SiteName $siteName
-        }
-    }
+
+    throw $lastError
 }
 
 function Build-HttpChallengeParams {
@@ -1983,7 +2038,7 @@ function Save-PluginCredentials {
         }
     }
 
-    $store | ConvertTo-Json -Depth 5 | Set-Content -Path $credFile -Encoding UTF8
+    $store | ConvertTo-Json -Depth 10 | Set-Content -Path $credFile -Encoding UTF8
 
     # Restrict file access to Administrators and SYSTEM only
     try {
@@ -2011,8 +2066,8 @@ function Get-PluginCredentials {
     try {
         $store = Get-Content -Path $credFile -Raw | ConvertFrom-Json
 
-        if ($store.Plugin -ne $DnsPlugin) {
-            Write-Log "Saved credentials are for plugin '$($store.Plugin)' but current plugin is '$DnsPlugin' - skipping" -Level Warning
+        if ($store.Plugin -ne $script:DnsPlugin) {
+            Write-Log "Saved credentials are for plugin '$($store.Plugin)' but current plugin is '$($script:DnsPlugin)' - skipping" -Level Warning
             return $null
         }
 
@@ -2038,7 +2093,7 @@ function Get-PluginCredentials {
             }
         }
 
-        Write-Log "Loaded saved DNS plugin credentials for $DnsPlugin (saved $($store.SavedAt))" -Level Info
+        Write-Log "Loaded saved DNS plugin credentials for $($script:DnsPlugin) (saved $($store.SavedAt))" -Level Info
         return $result
     }
     catch {
@@ -2155,30 +2210,31 @@ function Get-DnsPluginArgsInteractive {
 function Build-DnsChallengeParams {
     param([string[]]$Domains)
 
-    Write-Log "Using DNS-01 challenge with plugin: $DnsPlugin"
+    Write-Log "Using DNS-01 challenge with plugin: $($script:DnsPlugin)"
 
-    # Validate the plugin exists in Posh-ACME
-    # Posh-ACME v4+ uses Get-PAPlugin without parameters; older versions used -List
-    $availablePlugins = $null
-    try {
-        $availablePlugins = Get-PAPlugin -ErrorAction Stop
-    }
-    catch {
-        Write-Log "Could not enumerate DNS plugins (non-fatal, will attempt to use '$DnsPlugin' directly)" -Level Warning
-    }
-    if ($availablePlugins -and $DnsPlugin -notin $availablePlugins.Name) {
-        $pluginList = ($availablePlugins.Name | Sort-Object) -join ', '
-        throw "DNS plugin '$DnsPlugin' not found. Available plugins: $pluginList"
+    # Validate the plugin exists in Posh-ACME (only in interactive mode to avoid overhead on scheduled runs)
+    if ($script:isInteractive) {
+        $availablePlugins = $null
+        try {
+            $availablePlugins = Get-PAPlugin -ErrorAction Stop
+        }
+        catch {
+            Write-Log "Could not enumerate DNS plugins (non-fatal, will attempt to use '$($script:DnsPlugin)' directly)" -Level Warning
+        }
+        if ($availablePlugins -and $script:DnsPlugin -notin $availablePlugins.Name) {
+            $pluginList = ($availablePlugins.Name | Sort-Object) -join ', '
+            throw "DNS plugin '$($script:DnsPlugin)' not found. Available plugins: $pluginList"
+        }
     }
 
     # Resolve plugin credentials:
     #   1. Use args passed on the command line
     #   2. If interactive (menu-driven run), prompt the user with provider instructions
     #   3. If non-interactive (scheduled task), load from the DPAPI-encrypted credential store
-    $resolvedPluginArgs = $DnsPluginArgs
+    $resolvedPluginArgs = $script:DnsPluginArgs
     if (-not $resolvedPluginArgs) {
         if ($script:isInteractive) {
-            $resolvedPluginArgs = Get-DnsPluginArgsInteractive -Plugin $DnsPlugin
+            $resolvedPluginArgs = Get-DnsPluginArgsInteractive -Plugin $script:DnsPlugin
         }
         else {
             $resolvedPluginArgs = Get-PluginCredentials
@@ -2197,7 +2253,7 @@ function Build-DnsChallengeParams {
         Domain     = $Domains
         AcceptTOS  = $true
         Contact    = $ContactEmail
-        Plugin     = $DnsPlugin
+        Plugin     = $script:DnsPlugin
         Force      = $ForceRenewal.IsPresent
         DnsSleep   = $DnsSleep
         Verbose    = $false
@@ -2267,7 +2323,7 @@ function Add-ChallengeToMatchingSites {
 function Import-CertificateToStore {
     param($PACertificate)
 
-    Write-Log "Importing certificate to store: $CertStorePath"
+    Write-Log "Importing certificate to store: $($script:CertStorePath)"
 
     $pfxPath = $PACertificate.PfxFullChain
     if (-not $pfxPath -or -not (Test-Path $pfxPath)) {
@@ -2286,7 +2342,7 @@ function Import-CertificateToStore {
     $securePass = ConvertTo-SecureString -String $pfxPass -Force -AsPlainText
 
     # Import to the target certificate store
-    $importedCert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation $CertStorePath -Password $securePass -Exportable
+    $importedCert = Import-PfxCertificate -FilePath $pfxPath -CertStoreLocation $script:CertStorePath -Password $securePass -Exportable
 
     Write-Log "Certificate imported: Thumbprint=$($importedCert.Thumbprint)" -Level Success
     return $importedCert
@@ -2336,6 +2392,11 @@ function Export-PfxToFolder {
         Copy-Item -Path $chainFile -Destination $destChain -Force
         Write-Log "Chain file exported: $destChain" -Level Success
     }
+
+    # Remove old password files for this domain before writing the new one
+    Get-ChildItem -Path $PfxOutputPath -Filter "${safeDomain}_*_password.txt" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -ne "${safeDomain}_${timestamp}_password.txt" } |
+        Remove-Item -Force -ErrorAction SilentlyContinue
 
     # Save the PFX password to a file
     $pfxPass = $PACertificate.PfxPass
@@ -2452,13 +2513,25 @@ function Remove-OldCertificate {
 
     if (-not $OldThumbprint -or $OldThumbprint -eq $NewThumbprint) { return }
 
-    # Only remove old cert if it's no longer bound anywhere
-    $stillInUse = Get-ChildItem "IIS:\SslBindings" -ErrorAction SilentlyContinue | Where-Object {
-        $_.Thumbprint -eq $OldThumbprint
+    # Check if old cert is still bound to RD Gateway
+    if ($script:OutputMode -eq 'RDGateway') {
+        $gwCert = Get-RDGatewayCurrentCert
+        if ($gwCert -and $gwCert.Thumbprint -eq $OldThumbprint) {
+            Write-Log "Old cert $OldThumbprint is still bound to RD Gateway - keeping" -Level Warning
+            return
+        }
+    }
+
+    # Only remove old cert if it's no longer bound to any IIS site
+    $stillInUse = $false
+    if ($script:IISAvailable) {
+        $stillInUse = Get-ChildItem "IIS:\SslBindings" -ErrorAction SilentlyContinue | Where-Object {
+            $_.Thumbprint -eq $OldThumbprint
+        }
     }
 
     if (-not $stillInUse) {
-        $oldCert = Get-ChildItem $CertStorePath -ErrorAction SilentlyContinue | Where-Object {
+        $oldCert = Get-ChildItem $script:CertStorePath -ErrorAction SilentlyContinue | Where-Object {
             $_.Thumbprint -eq $OldThumbprint
         }
         if ($oldCert) {
@@ -2579,8 +2652,8 @@ function Install-RenewalTask {
     if ($ChallengeType -ne 'Http') {
         $argParts += "-ChallengeType $ChallengeType"
     }
-    if ($DnsPlugin) {
-        $argParts += "-DnsPlugin `"$DnsPlugin`""
+    if ($script:DnsPlugin) {
+        $argParts += "-DnsPlugin `"$($script:DnsPlugin)`""
     }
     if ($DnsSleep -ne 120) {
         $argParts += "-DnsSleep $DnsSleep"
@@ -2600,19 +2673,19 @@ function Install-RenewalTask {
     }
 
     if ($Staging) { $argParts += "-Staging" }
-    if ($CertStorePath -ne "Cert:\LocalMachine\WebHosting") {
-        $argParts += "-CertStorePath `"$CertStorePath`""
+    if ($script:CertStorePath -ne "Cert:\LocalMachine\WebHosting") {
+        $argParts += "-CertStorePath `"$($script:CertStorePath)`""
     }
 
     # Warn about DnsManual mode with scheduled tasks
-    if ($ChallengeType -eq 'DnsManual') {
+    if ($script:ChallengeType -eq 'DnsManual') {
         Write-Log "WARNING: DnsManual challenge type requires interactive input and is NOT compatible with scheduled tasks!" -Level Warning
         Write-Log "Consider switching to -ChallengeType Dns with a -DnsPlugin for automated renewals" -Level Warning
     }
 
     # DNS plugin credentials are saved to a DPAPI/LocalMachine-encrypted file during cert
     # issuance and loaded automatically by the scheduled task (running as SYSTEM).
-    if ($DnsPlugin) {
+    if ($script:DnsPlugin) {
         $credFile = Join-Path $LogDir "plugin_creds.json"
         if (Test-Path $credFile) {
             Write-Log "DNS plugin credentials on file: $credFile (DPAPI/LocalMachine encrypted)" -Level Info
@@ -2702,7 +2775,15 @@ function Remove-OldLogs {
     $maxLogAge = 90
     $cutoff = (Get-Date).AddDays(-$maxLogAge)
     $oldLogs = Get-ChildItem -Path $LogDir -Filter "renewal_*.log" -ErrorAction SilentlyContinue |
-        Where-Object { $_.LastWriteTime -lt $cutoff }
+        Where-Object {
+            if ($_.Name -match 'renewal_(\d{8})_') {
+                try {
+                    [datetime]::ParseExact($Matches[1], 'yyyyMMdd', $null) -lt $cutoff
+                } catch { $false }
+            } else {
+                $_.CreationTime -lt $cutoff
+            }
+        }
 
     foreach ($log in $oldLogs) {
         Remove-Item $log.FullName -Force -ErrorAction SilentlyContinue
@@ -2717,6 +2798,24 @@ function Remove-OldLogs {
 # MAIN EXECUTION
 # ============================================================================
 
+function Enter-RenewalLock {
+    if (Test-Path $lockFile) {
+        $lockAge = (Get-Date) - (Get-Item $lockFile).LastWriteTime
+        if ($lockAge.TotalHours -lt 2) {
+            throw "Another renewal process is running (lock file age: $($lockAge.TotalMinutes.ToString('0')) min). Remove $lockFile manually if this is stale."
+        }
+        Write-Log "Stale lock file found (age: $($lockAge.TotalHours.ToString('0.0'))h) - removing" -Level Warning
+    }
+    if (-not (Test-Path $LogDir)) {
+        New-Item -ItemType Directory -Path $LogDir -Force | Out-Null
+    }
+    Set-Content -Path $lockFile -Value "$PID $(Get-Date -Format 'o')" -Force
+}
+
+function Exit-RenewalLock {
+    Remove-Item -Path $lockFile -Force -ErrorAction SilentlyContinue
+}
+
 try {
     Write-Banner
 
@@ -2726,6 +2825,9 @@ try {
         Uninstall-RenewalTask
         return
     }
+
+    # Acquire lock to prevent concurrent runs
+    Enter-RenewalLock
 
     # Track whether we should install the scheduled task
     $shouldInstallTask = $InstallScheduledTask.IsPresent
@@ -2789,6 +2891,13 @@ try {
     # Ask about email reporting (interactive only; non-interactive uses -SendReport flag + saved config)
     Show-EmailReportMenu
 
+    # Sync script-scoped variables back to local scope after all interactive decisions
+    $ChallengeType = $script:ChallengeType
+    $DnsPlugin     = $script:DnsPlugin
+    $DnsPluginArgs = $script:DnsPluginArgs
+    $PfxOutputPath = $script:PfxOutputPath
+    $CertStorePath = $script:CertStorePath
+
     # Capture final output mode for report
     $script:ReportData.Mode = $script:OutputMode
 
@@ -2797,8 +2906,8 @@ try {
     Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
     Write-Host "  Domain:    $DomainName" -ForegroundColor White
     Write-Host "  Mode:      $(if ($Staging) { 'STAGING (test)' } else { 'PRODUCTION' })" -ForegroundColor White
-    Write-Host "  Challenge: $(switch ($ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $DnsPlugin)" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })" -ForegroundColor White
-    Write-Host "  Output:    $(switch ($script:OutputMode) { 'PFX' { "PFX export to $PfxOutputPath" } 'RDGateway' { 'RD Gateway (TSGateway) certificate binding' } 'WatchGuard' { "WatchGuard Firebox $($script:FireboxHost):$($script:FireboxSshPort) (web-server-cert)" } default { 'IIS cert store + binding update' } })" -ForegroundColor White
+    Write-Host "  Challenge: $(switch ($script:ChallengeType) { 'Http' { 'HTTP-01 (IIS webroot)' } 'Dns' { "DNS-01 (plugin: $($script:DnsPlugin))" } 'DnsManual' { 'DNS-01 (manual TXT record)' } })" -ForegroundColor White
+    Write-Host "  Output:    $(switch ($script:OutputMode) { 'PFX' { "PFX export to $($script:PfxOutputPath)" } 'RDGateway' { 'RD Gateway (TSGateway) certificate binding' } 'WatchGuard' { "WatchGuard Firebox $($script:FireboxHost):$($script:FireboxSshPort) (web-server-cert)" } default { 'IIS cert store + binding update' } })" -ForegroundColor White
     Write-Host "  Threshold: $RenewalDays days before expiry" -ForegroundColor White
     Write-Host "  -----------------------------------------------------------" -ForegroundColor Gray
     Write-Host ""
@@ -2812,6 +2921,17 @@ try {
 
     # Run prerequisite checks
     Test-Prerequisites
+
+    # Confirm production issuance interactively (rate limits apply)
+    if ($script:isInteractive -and -not $Staging -and -not $script:SkipCertOrder) {
+        Write-Host ""
+        $confirm = Read-Host "  Issue a PRODUCTION certificate for $($allDomains -join ', ')? [y/N]"
+        if ($confirm -notmatch '^[Yy]') {
+            Write-Host "  Aborted." -ForegroundColor Yellow
+            $script:ReportData.Status = 'None'
+            return
+        }
+    }
 
     # Install Posh-ACME if needed
     Install-PoshAcmeModule
@@ -2858,12 +2978,17 @@ try {
     Remove-OldLogs
 
     # Sweep expired Let's Encrypt certificates from the Windows certificate store.
-    # Runs on every task execution regardless of whether renewal is needed.
-    # PFX and WatchGuard modes are included - they may have leftover store certs
-    # from previous runs or mode changes.  Active IIS bindings are always protected.
-    Remove-ExpiredLetsEncryptCerts
+    # Only runs after an actual renewal, or once a week to avoid unnecessary overhead.
+    $lastSweepFile = Join-Path $LogDir ".last_cert_sweep"
+    $shouldSweep = $false
+    if (-not (Test-Path $lastSweepFile)) {
+        $shouldSweep = $true
+    } else {
+        $lastSweep = (Get-Item $lastSweepFile).LastWriteTime
+        $shouldSweep = ((Get-Date) - $lastSweep).TotalDays -ge 7
+    }
 
-    # Determine if the current certificate needs renewal.
+    # Determine if the current certificate needs renewal (this may set $shouldSweep below).
     # IIS / RDGateway:  check the Windows certificate store.
     # WatchGuard / PFX: check the Posh-ACME local cert cache (shared system path set by
     #                   Install-PoshAcmeModule) so the renewal threshold is respected
@@ -2902,9 +3027,16 @@ try {
     if (-not $needsRenewal) {
         Write-Log "Certificate is still valid and outside the renewal window. No action needed." -Level Success
 
+        # Run periodic cert sweep even when no renewal is needed
+        if ($shouldSweep) {
+            Remove-ExpiredLetsEncryptCerts
+            Set-Content -Path $lastSweepFile -Value (Get-Date -Format 'o')
+        }
+
         $script:ReportData.Status = 'Skipped'
         if ($currentCert) {
             $script:ReportData.CurrentExpiry = $currentCert.NotAfter.ToString('yyyy-MM-dd')
+            $script:ReportData.Thumbprint    = $currentCert.Thumbprint
             $script:ReportData.Message = "Certificate is still valid. Expires $($currentCert.NotAfter.ToString('yyyy-MM-dd')). Renewal threshold: $RenewalDays days."
         }
 
@@ -2916,9 +3048,19 @@ try {
         return
     }
 
+    # Always sweep after a renewal
+    $shouldSweep = $true
+
     # Perform the certificate order/renewal
     if ($PSCmdlet.ShouldProcess($DomainName, "Request/renew Let's Encrypt certificate")) {
         $paCert = Invoke-AcmeCertificateOrder -Domains $allDomains
+
+        # Sweep expired LE certs after successful renewal
+        if ($shouldSweep) {
+            $protectThumbs = @($paCert.Thumbprint)
+            Remove-ExpiredLetsEncryptCerts -ProtectThumbprints $protectThumbs
+            Set-Content -Path $lastSweepFile -Value (Get-Date -Format 'o')
+        }
 
         $stagingNote = if ($Staging) {
             "`n  NOTE: This is a STAGING certificate (not browser-trusted).`n  Run again without -Staging for a production certificate."
@@ -3034,6 +3176,7 @@ try {
     }
 }
 catch {
+    Exit-RenewalLock
     $script:ReportData.Status  = 'Failed'
     $script:ReportData.Message = $_.Exception.Message
 
@@ -3043,6 +3186,7 @@ catch {
     throw
 }
 finally {
+    Exit-RenewalLock
     # Send renewal report on action-worthy exits only: Success, Failed, Updated.
     # 'Skipped' (cert not yet due) fires on every daily task run and would be very chatty.
     # 'None' means an early exit (remove task, exit menu) where no report is warranted.
