@@ -162,6 +162,9 @@ DEFAULT_CONFIG = {
     # ── testssl.sh deep TLS analysis ──────────────────────────────────────
     "enable_testssl": True,
     "testssl_ports": [443, 8443, 636, 993, 995],
+    "testssl_timeout": 30,            # max seconds per host:port before killing testssl
+    "testssl_connect_timeout": 5,     # --connect-timeout passed to testssl.sh (fast-fail)
+    "testssl_scan_budget": 300,       # total seconds budget across all hosts (5 min)
     # ── Nikto web vulnerability scanning ──────────────────────────────────
     "enable_nikto": True,
     "nikto_max_time": 300,            # max seconds per host (default 5 min)
@@ -4393,11 +4396,18 @@ def phase17_testssl(hosts: list, config: dict) -> dict:
         return {"available": False, "hosts_audited": 0, "findings": []}
 
     tls_ports = config.get("testssl_ports", [443, 8443, 636, 993, 995])
+    per_host_timeout = int(config.get("testssl_timeout", 30))
+    connect_timeout = int(config.get("testssl_connect_timeout", 5))
+    scan_budget = int(config.get("testssl_scan_budget", 300))
+    budget_used = 0
     results_by_host = {}
     all_findings = []
     hosts_audited = 0
 
     for host in hosts:
+        if budget_used >= scan_budget:
+            logger.info("  testssl.sh scan budget exhausted — skipping remaining hosts.")
+            break
         ip = host.get("ip", "")
         open_ports = set(host.get("open_ports", []))
         target_ports = [p for p in tls_ports if p in open_ports]
@@ -4406,15 +4416,20 @@ def phase17_testssl(hosts: list, config: dict) -> dict:
 
         host_findings = []
         for port in target_ports:
+            if budget_used >= scan_budget:
+                break
             import tempfile, os as _os
             with tempfile.NamedTemporaryFile(suffix=".json", delete=False) as tf:
                 json_out = tf.name
+            t0 = time.time()
             try:
                 proc = subprocess.run(
                     [str(TESTSSL_BIN), "--jsonfile", json_out,
                      "--quiet", "--warnings", "off",
+                     "--connect-timeout", str(connect_timeout),
+                     "--openssl-timeout", str(connect_timeout),
                      f"{ip}:{port}"],
-                    capture_output=True, text=True, timeout=90,
+                    capture_output=True, text=True, timeout=per_host_timeout,
                 )
                 if _os.path.exists(json_out) and _os.path.getsize(json_out) > 0:
                     with open(json_out) as jf:
@@ -4441,10 +4456,11 @@ def phase17_testssl(hosts: list, config: dict) -> dict:
                                 "severity": mapped_sev,
                             })
             except subprocess.TimeoutExpired:
-                logger.warning(f"  testssl.sh timeout for {ip}:{port}")
+                logger.warning(f"  testssl.sh timeout for {ip}:{port} ({per_host_timeout}s)")
             except Exception as e:
                 logger.debug(f"  testssl.sh error for {ip}:{port}: {e}")
             finally:
+                budget_used += time.time() - t0
                 try:
                     _os.unlink(json_out)
                 except Exception:
