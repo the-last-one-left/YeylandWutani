@@ -57,6 +57,10 @@ $OutputEncoding          = [System.Text.Encoding]::UTF8
 $script:CredFile = Join-Path $env:APPDATA 'HatzChat\api_key.clixml'
 # Persisted system prompt (plain text — not sensitive)
 $script:SystemPromptFile = Join-Path $env:APPDATA 'HatzChat\system_prompt.txt'
+# Session save/load directory
+$script:SessionDir = Join-Path $env:APPDATA 'HatzChat\sessions'
+# Track original file states for /diff (populated on first /edit or /file per path)
+$script:OriginalFileStates = @{}
 
 # --- Region: API Key Management -----------------------------------------------
 
@@ -561,95 +565,193 @@ function Show-SearchReplacePlan {
 
 # --- Region: UX Helper Functions ----------------------------------------------
 
-function Invoke-WithSpinner {
+function Invoke-HatzChatWithSpinner {
     <#
     .SYNOPSIS
-        Runs a scriptblock in a background runspace while displaying an animated spinner.
+        Calls the chat completion API in a background runspace while showing
+        an animated spinner on the main thread.
     .DESCRIPTION
-        Provides visual feedback during long-running operations like API calls.
-        The spinner shows elapsed time and a custom message.
-    .PARAMETER ScriptBlock
-        The code to execute in the background.
-    .PARAMETER Message
-        Status message displayed alongside the spinner.
-    .PARAMETER DoneMessage
-        Message displayed when the operation completes.
-    .PARAMETER Parameters
-        Hashtable of parameters to pass to the scriptblock.
+        Provides visual feedback during API calls by running the HTTP request
+        in a background runspace while displaying an animated spinner with
+        elapsed time on the main thread.
+    .PARAMETER ApiBaseUrl
+        The base URL of the API.
+    .PARAMETER ApiKey
+        The API key for authentication.
+    .PARAMETER Model
+        The model name or agent-{id} to use.
+    .PARAMETER Messages
+        Array of message objects (role + content).
+    .PARAMETER Temperature
+        Sampling temperature (0.0 - 2.0).
+    .PARAMETER ToolsToUse
+        Optional array of tool names to enable.
+    .PARAMETER AutoToolSelection
+        Let the API automatically select relevant tools.
+    .PARAMETER TimeoutMs
+        Request timeout in milliseconds.
+    .PARAMETER SpinnerMessage
+        Message displayed alongside the spinner.
     #>
     param(
-        [scriptblock]$ScriptBlock,
-        [string]$Message = 'Thinking',
-        [string]$DoneMessage = 'Done',
-        [hashtable]$Parameters = @{}
+        [string]$ApiBaseUrl,
+        [string]$ApiKey,
+        [string]$Model,
+        [array]$Messages,
+        [double]$Temperature = 0.7,
+        [string[]]$ToolsToUse = @(),
+        [bool]$AutoToolSelection = $false,
+        [int]$TimeoutMs = 120000,
+        [string]$SpinnerMessage = 'Thinking'
     )
 
-    # Braille spinner frames - works well in Windows Terminal and modern consoles
     $frames = @('⠋','⠙','⠹','⠸','⠼','⠴','⠦','⠧','⠇','⠏')
-    # Fallback for legacy consoles that may not render Unicode well
     $fallbackFrames = @('|','/','-','\')
-    
-    # Detect if console supports Unicode (Windows Terminal, PS7, etc.)
-    $useUnicode = $true
-    try {
-        $testChar = [char]0x28FF  # Braille character
-        if ($Host.UI.RawUI.WindowTitle -match 'cmd\.exe') { $useUnicode = $false }
-    } catch { $useUnicode = $false }
-    
+    $useUnicode = -not ($Host.UI.RawUI.WindowTitle -match 'cmd\.exe')
     $spinFrames = if ($useUnicode) { $frames } else { $fallbackFrames }
 
-    # Create runspace and pass parameters
-    $ps = [PowerShell]::Create()
-    
-    # Add parameters as variables in the runspace
-    foreach ($key in $Parameters.Keys) {
-        $ps.Runspace.SessionStateProxy.SetVariable($key, $Parameters[$key])
+    # --- Pre-serialize the request on the main thread (has access to everything) ---
+    $bodyHash = @{
+        model       = $Model
+        messages    = $Messages
+        stream      = $false
+        temperature = $Temperature
     }
-    
-    $ps.AddScript($ScriptBlock) | Out-Null
-    
-    # Add parameters as arguments if scriptblock expects them
-    foreach ($key in $Parameters.Keys) {
-        $ps.AddParameter($key, $Parameters[$key]) | Out-Null
-    }
-    
+    if ($ToolsToUse.Count -gt 0) { $bodyHash['tools_to_use']       = $ToolsToUse }
+    if ($AutoToolSelection)       { $bodyHash['auto_tool_selection'] = $true       }
+
+    $bodyJson  = $bodyHash | ConvertTo-Json -Depth 10 -Compress
+    $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($bodyJson)
+    $uri       = "$ApiBaseUrl/chat/completions"
+
+    # --- Launch the HTTP call in a background runspace ---
+    $rs = [RunspaceFactory]::CreateRunspace()
+    $rs.Open()
+    $ps = [PowerShell]::Create().AddScript({
+        param($uri, $bodyBytes, $ApiKey, $TimeoutMs)
+
+        $maxRetries = 2
+        $retryWait  = 3
+        $lastError  = $null
+
+        for ($attempt = 0; $attempt -le $maxRetries; $attempt++) {
+            try {
+                $req               = [System.Net.HttpWebRequest]::Create($uri)
+                $req.Method        = 'POST'
+                $req.ContentType   = 'application/json; charset=utf-8'
+                $req.ContentLength = $bodyBytes.Length
+                $req.Timeout       = $TimeoutMs
+                $req.Headers.Add('X-API-Key', $ApiKey)
+
+                $reqStream = $req.GetRequestStream()
+                $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+                $reqStream.Close()
+
+                $resp     = $req.GetResponse()
+                $reader   = [System.IO.StreamReader]::new($resp.GetResponseStream(), [System.Text.Encoding]::UTF8)
+                $jsonText = $reader.ReadToEnd()
+                $reader.Close()
+                $resp.Close()
+
+                return @{ Success = $true; Json = $jsonText; Error = $null }
+            }
+            catch [System.Net.WebException] {
+                $statusCode = $null
+                $errorBody  = ''
+                $isTimeout  = $_.Exception.Status -eq [System.Net.WebExceptionStatus]::Timeout
+
+                if ($_.Exception.Response) {
+                    $statusCode = [int]$_.Exception.Response.StatusCode
+                    try {
+                        $errReader = [System.IO.StreamReader]::new(
+                            $_.Exception.Response.GetResponseStream(),
+                            [System.Text.Encoding]::UTF8)
+                        $errorBody = $errReader.ReadToEnd()
+                        $errReader.Close()
+                    } catch { }
+                }
+
+                $isTransient = $isTimeout -or ($null -ne $statusCode -and $statusCode -ge 500)
+                if ($isTransient -and $attempt -lt $maxRetries) {
+                    Start-Sleep -Seconds ($retryWait * [math]::Pow(2, $attempt))
+                    continue
+                }
+
+                $lastError = if ($errorBody) { "HTTP $statusCode : $errorBody" } else { $_.Exception.Message }
+            }
+        }
+        return @{ Success = $false; Json = $null; Error = $lastError }
+    }).AddArgument($uri).AddArgument($bodyBytes).AddArgument($ApiKey).AddArgument($TimeoutMs)
+
+    $ps.Runspace = $rs
     $handle = $ps.BeginInvoke()
-    
-    $i = 0
+
+    # --- Spin on the main thread until the background call finishes ---
+    $i  = 0
     $sw = [System.Diagnostics.Stopwatch]::StartNew()
-    
+
     while (-not $handle.IsCompleted) {
         $elapsed = '{0:F1}s' -f $sw.Elapsed.TotalSeconds
-        $frame = $spinFrames[$i % $spinFrames.Count]
-        Write-Host ("`r  {0} {1} ({2})  " -f $frame, $Message, $elapsed) -NoNewline -ForegroundColor Cyan
+        $frame   = $spinFrames[$i % $spinFrames.Count]
+        Write-Host ("`r  {0} {1} ({2})  " -f $frame, $SpinnerMessage, $elapsed) -NoNewline -ForegroundColor Cyan
         Start-Sleep -Milliseconds 100
         $i++
     }
-    
     $sw.Stop()
-    
-    # Clear the spinner line and show completion
+
+    # --- Collect result ---
+    $result = $ps.EndInvoke($handle)
+    $ps.Dispose()
+    $rs.Close()
+
     $checkmark = if ($useUnicode) { '✓' } else { '+' }
-    Write-Host ("`r  {0} {1} ({2:F1}s)          " -f $checkmark, $DoneMessage, $sw.Elapsed.TotalSeconds) -ForegroundColor Green
-    
-    # Get results and handle errors
-    $result = $null
-    try {
-        $result = $ps.EndInvoke($handle)
-        if ($ps.HadErrors) {
-            foreach ($err in $ps.Streams.Error) {
-                Write-Host ('[!] Background error: {0}' -f $err) -ForegroundColor Red
-            }
+    $elapsedSec = $sw.Elapsed.TotalSeconds
+
+    if ($result -and $result.Success) {
+        Write-Host ("`r  {0} Response received ({1:F1}s)          " -f $checkmark, $elapsedSec) -ForegroundColor Green
+        return [PSCustomObject]@{
+            Response = ($result.Json | ConvertFrom-Json)
+            Elapsed  = $elapsedSec
         }
     }
-    catch {
-        Write-Host ('[!] Spinner execution error: {0}' -f $_) -ForegroundColor Red
+    else {
+        $errMsg = if ($result) { $result.Error } else { 'Unknown error' }
+        Write-Host ("`r  [!] API Error ({0:F1}s)                    " -f $elapsedSec) -ForegroundColor Red
+        Write-Host ('      {0}' -f $errMsg) -ForegroundColor DarkRed
+        Write-Host ''
+        return $null
     }
-    finally {
-        $ps.Dispose()
+}
+
+function Read-MultilineInput {
+    <#
+    .SYNOPSIS
+        Reads multiline input from the user interactively.
+    .DESCRIPTION
+        Prompts the user for multiline input. Type a line containing only "."
+        to finish input. Returns the combined text or $null if cancelled.
+    .PARAMETER Prompt
+        Optional prompt message to display before entering multiline mode.
+    #>
+    param(
+        [string]$Prompt = 'Enter text (type "." on its own line to finish, or leave empty to cancel)'
+    )
+
+    Write-Host "[*] $Prompt" -ForegroundColor Cyan
+    $lines = [System.Collections.ArrayList]::new()
+    while ($true) {
+        Write-Host '... ' -ForegroundColor DarkYellow -NoNewline
+        $line = Read-Host
+        if ($line.Trim() -eq '.') { break }
+        [void]$lines.Add($line)
     }
     
-    return $result
+    if ($lines.Count -eq 0) {
+        return $null
+    }
+    
+    Write-Host ('[*] {0} lines captured.' -f $lines.Count) -ForegroundColor Cyan
+    return ($lines -join "`n")
 }
 
 function Show-TokenBar {
@@ -931,6 +1033,9 @@ function Start-HatzChat {
         $modelDisplay = $modelDisplay.Substring(0, 45) + '...'
     }
 
+    # Session-level temperature (overridable via /temp)
+    $temperature = 0.7
+
     # Load persisted system prompt if one exists
     $loadedSystemPrompt = $null
     if (Test-Path $script:SystemPromptFile) {
@@ -958,32 +1063,14 @@ function Start-HatzChat {
         }
     } else { '(none)' }
 
-    Write-Host ''
-    Write-Host '+==========================================================' -ForegroundColor Green
-    Write-Host '|  Hatz AI Chat Session                                    ' -ForegroundColor Green
-    Write-Host ('|  Model    : {0}' -f $modelDisplay) -ForegroundColor Green
-    Write-Host '|  Autotools: ON  (use /autotools to toggle)               ' -ForegroundColor Green
     $histNote = if ($MaxHistory -gt 0) { 'last {0} messages' -f $MaxHistory } else { 'unlimited' }
-    Write-Host ('|  History  : {0,-43}|' -f $histNote) -ForegroundColor Green
-    Write-Host ('|  SysPrompt: {0,-43}|' -f $sysPromptDisplay) -ForegroundColor Green
-    Write-Host '+==========================================================' -ForegroundColor Green
-    Write-Host '|  Commands:                                               ' -ForegroundColor Green
-    Write-Host '|    /quit       - Exit the chat                           ' -ForegroundColor Green
-    Write-Host '|    /clear      - Clear conversation history              ' -ForegroundColor Green
-    Write-Host '|    /model      - Switch to a different model             ' -ForegroundColor Green
-    Write-Host '|    /system     - Set a system prompt                     ' -ForegroundColor Green
-    Write-Host '|    /history    - Show conversation message count         ' -ForegroundColor Green
-    Write-Host '|    /tools      - Toggle tools (search, code, etc.)       ' -ForegroundColor Green
-    Write-Host '|    /autotools  - Toggle auto tool selection              ' -ForegroundColor Green
-    Write-Host '|  Local folder commands:                                  ' -ForegroundColor Green
-    Write-Host '|    /file <path>      - Inject file into next message     ' -ForegroundColor Green
-    Write-Host '|    /folder <path>    - Inject folder tree / files        ' -ForegroundColor Green
-    Write-Host '|    /run <cmd>        - Run command, inject output        ' -ForegroundColor Green
-    Write-Host '|    /edit <path>      - Ask model to edit a file          ' -ForegroundColor Green
-    Write-Host '|    /workspace <path> - Set base folder for rel. paths    ' -ForegroundColor Green
-    Write-Host '|    /context          - Show pending context size         ' -ForegroundColor Green
-    Write-Host '|    /help             - Show these commands               ' -ForegroundColor Green
-    Write-Host '+==========================================================' -ForegroundColor Green
+
+    Write-Host ''
+    Write-Host ('+== Hatz AI Chat | {0} | History: {1} | Autotools: ON ==' -f $modelDisplay, $histNote) -ForegroundColor Green
+    if ($loadedSystemPrompt) {
+        Write-Host ('    SysPrompt: {0}' -f $sysPromptDisplay) -ForegroundColor DarkGray
+    }
+    Write-Host '    /help for commands | /quit to exit' -ForegroundColor DarkGray
     Write-Host ''
 
     # Initialize state
@@ -1005,7 +1092,19 @@ function Start-HatzChat {
 
     # Main chat loop
     while ($true) {
-        Write-Host 'You: ' -ForegroundColor Yellow -NoNewline
+        # Build contextual prompt with turn number and state indicators
+        $promptParts = @()
+        if ($pendingContext) {
+            $ctxKB = [math]::Round($pendingContext.Length / 1024, 1)
+            $promptParts += '{0}KB ctx' -f $ctxKB
+        }
+        if ($toolsToUse.Count -gt 0) { $promptParts += 'tools' }
+        if ($temperature -ne 0.7) { $promptParts += 't={0}' -f $temperature }
+
+        $promptSuffix = if ($promptParts.Count -gt 0) { ' [{0}]' -f ($promptParts -join '|') } else { '' }
+        $turnNumber   = @($conversationHistory | Where-Object { $_.role -eq 'user' }).Count + 1
+
+        Write-Host ('[{0}] You{1}: ' -f $turnNumber, $promptSuffix) -ForegroundColor Yellow -NoNewline
         $userInput = Read-Host
 
         # Skip empty input
@@ -1218,6 +1317,17 @@ function Start-HatzChat {
                     Write-Progress -Activity 'Injecting files' -Completed
                     $skipNote = if ($skipped -gt 0) { ", $skipped binary skipped" } else { '' }
                     Write-Host ('[*] Injected tree + {0} text file(s){1}.' -f $injected, $skipNote) -ForegroundColor Cyan
+                    
+                    # Context size warning
+                    $ctxChars = $pendingContext.Length
+                    $estTokens = [math]::Ceiling($ctxChars / 4)
+                    $maxCtx = if ($script:ContextLimits.ContainsKey($currentModel)) {
+                        $script:ContextLimits[$currentModel]
+                    } else { 200000 }
+                    if ($estTokens -gt ($maxCtx * 0.5)) {
+                        Write-Host ('[!] Warning: injected context is ~{0:N0} tokens ({1}% of context window)' -f $estTokens, [math]::Floor(($estTokens/$maxCtx)*100)) -ForegroundColor Red
+                        Write-Host '    Consider selecting fewer files or using /clear first.' -ForegroundColor DarkYellow
+                    }
                 }
                 elseif ($folderChoice -ne '') {
                     $picks = $folderChoice -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ -match '^\d+$' }
@@ -1240,6 +1350,17 @@ function Start-HatzChat {
                         }
                     }
                     Write-Host ('[*] Injected tree + {0} selected file(s).' -f $pickCount) -ForegroundColor Cyan
+                    
+                    # Context size warning
+                    $ctxChars = $pendingContext.Length
+                    $estTokens = [math]::Ceiling($ctxChars / 4)
+                    $maxCtx = if ($script:ContextLimits.ContainsKey($currentModel)) {
+                        $script:ContextLimits[$currentModel]
+                    } else { 200000 }
+                    if ($estTokens -gt ($maxCtx * 0.5)) {
+                        Write-Host ('[!] Warning: injected context is ~{0:N0} tokens ({1}% of context window)' -f $estTokens, [math]::Floor(($estTokens/$maxCtx)*100)) -ForegroundColor Red
+                        Write-Host '    Consider selecting fewer files or using /clear first.' -ForegroundColor DarkYellow
+                    }
                 }
                 else {
                     Write-Host '[*] Injected folder tree only.' -ForegroundColor Cyan
@@ -1277,12 +1398,198 @@ function Start-HatzChat {
             Write-Host ('[>] Running: {0}' -f $cmdToRun) -ForegroundColor DarkYellow
             try {
                 $runOutput = Invoke-Expression $cmdToRun 2>&1 | Out-String
+                Write-Host '+-- Command Output ----------------------------------------' -ForegroundColor DarkYellow
                 Write-Host $runOutput -ForegroundColor DarkGray
+                Write-Host '+----------------------------------------------------------' -ForegroundColor DarkYellow
                 $pendingContext += ("`n`n[Command: {0}]`n``````text`n{1}``````" -f $cmdToRun, $runOutput)
                 Write-Host '[*] Command output injected into context.' -ForegroundColor Cyan
             }
             catch {
                 Write-Host ('[!] Error: {0}' -f $_) -ForegroundColor Red
+            }
+            Write-Host ''
+            continue
+        }
+
+        # -- /context --
+        # -- /copy --
+        elseif ($trimmedInput -eq '/copy') {
+            $lastAssistant = $conversationHistory | Where-Object { $_.role -eq 'assistant' } | Select-Object -Last 1
+            if ($lastAssistant) {
+                $lastAssistant.content | Set-Clipboard
+                Write-Host '[*] Last response copied to clipboard.' -ForegroundColor Cyan
+            } else {
+                Write-Host '[*] No assistant response to copy.' -ForegroundColor Cyan
+            }
+            Write-Host ''
+            continue
+        }
+
+        # -- /retry [extra instruction] --
+        elseif ($trimmedInput -match '^/retry\s*(.*)$') {
+            $extraInstruction = $Matches[1].Trim()
+            # Need at least one assistant + one user message to retry
+            if ($conversationHistory.Count -ge 2) {
+                $lastRole = $conversationHistory[$conversationHistory.Count - 1].role
+                if ($lastRole -eq 'assistant') {
+                    $conversationHistory.RemoveAt($conversationHistory.Count - 1)  # remove assistant
+                    $prevUser = $conversationHistory[$conversationHistory.Count - 1]
+                    if ($extraInstruction) {
+                        $prevUser.content += "`n`nAdditional instruction: $extraInstruction"
+                    }
+                    $userInput = $prevUser.content
+                    Write-Host '[*] Retrying last message...' -ForegroundColor Cyan
+                    # Remove the user message too — it will be re-added in the send logic below
+                    $conversationHistory.RemoveAt($conversationHistory.Count - 1)
+                    # Fall through to message processing
+                } else {
+                    Write-Host '[!] Last message is not from the assistant. Nothing to retry.' -ForegroundColor Yellow
+                    Write-Host ''
+                    continue
+                }
+            } else {
+                Write-Host '[!] No conversation to retry.' -ForegroundColor Yellow
+                Write-Host ''
+                continue
+            }
+        }
+
+        # -- /undo <path> --
+        elseif ($trimmedInput -match '^/undo\s+(.+)$') {
+            $undoPath = $Matches[1].Trim().Trim('"')
+            $resolvedUndo = if ($workspacePath -and -not [System.IO.Path]::IsPathRooted($undoPath)) {
+                Join-Path $workspacePath $undoPath
+            } else { $undoPath }
+
+            $bakDir = Join-Path (Split-Path $resolvedUndo) '.hatz-backups'
+            $leaf   = Split-Path $resolvedUndo -Leaf
+            $baks   = @(Get-ChildItem $bakDir -Filter "$leaf.*.bak" -ErrorAction SilentlyContinue |
+                        Sort-Object LastWriteTime -Descending)
+
+            if ($baks.Count -eq 0) {
+                Write-Host '[!] No backups found.' -ForegroundColor Yellow
+            } else {
+                Write-Host ('  Backups for {0}:' -f $leaf) -ForegroundColor Cyan
+                for ($bi = 0; $bi -lt $baks.Count; $bi++) {
+                    Write-Host ('  {0}. {1}  ({2})' -f ($bi+1), $baks[$bi].Name, $baks[$bi].LastWriteTime) -ForegroundColor Gray
+                }
+                $pick = Read-Host -Prompt 'Restore which backup? (number or Enter to cancel)'
+                $parsed = 0
+                if ([int]::TryParse($pick, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le $baks.Count) {
+                    Copy-Item $baks[$parsed-1].FullName $resolvedUndo -Force
+                    Write-Host ('[+] Restored from {0}' -f $baks[$parsed-1].Name) -ForegroundColor Green
+                }
+            }
+            Write-Host ''
+            continue
+        }
+
+        # -- /diff <path> --
+        elseif ($trimmedInput -match '^/diff\s+(.+)$') {
+            $rawDiffPath = $Matches[1].Trim().Trim('"')
+            $resolvedDiff = if ($workspacePath -and -not [System.IO.Path]::IsPathRooted($rawDiffPath)) {
+                Join-Path $workspacePath $rawDiffPath
+            } else { $rawDiffPath }
+
+            if ($script:OriginalFileStates.ContainsKey($resolvedDiff)) {
+                $currentContent = Get-Content $resolvedDiff -Raw -Encoding UTF8
+                Write-Host ('+-- Changes since session start: {0} --' -f $resolvedDiff) -ForegroundColor Yellow
+                $hasChanges = Show-LineDiff -Original $script:OriginalFileStates[$resolvedDiff] -Updated $currentContent
+                if (-not $hasChanges) {
+                    Write-Host '  (No changes from baseline)' -ForegroundColor DarkGray
+                }
+                Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
+            } else {
+                Write-Host '[*] No baseline recorded for this file. Use /edit or /file first.' -ForegroundColor Cyan
+            }
+            Write-Host ''
+            continue
+        }
+
+        # -- /save [name] --
+        elseif ($trimmedInput -match '^/save\s*(.*)$') {
+            $sessionName = if ($Matches[1].Trim()) { $Matches[1].Trim() } else {
+                'session-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+            }
+            if (-not (Test-Path $script:SessionDir)) {
+                New-Item -ItemType Directory -Path $script:SessionDir -Force | Out-Null
+            }
+            $sessionFile = Join-Path $script:SessionDir "$sessionName.json"
+            $sessionData = @{
+                model       = $currentModel
+                temperature = $temperature
+                messages    = $conversationHistory.ToArray()
+                saved       = (Get-Date -Format 'o')
+            }
+            $sessionData | ConvertTo-Json -Depth 10 |
+                Set-Content -Path $sessionFile -Encoding UTF8
+            Write-Host ('[+] Session saved: {0}' -f $sessionFile) -ForegroundColor Green
+            Write-Host ''
+            continue
+        }
+
+        # -- /load [name] --
+        elseif ($trimmedInput -match '^/load\s*(.*)$') {
+            $loadName = $Matches[1].Trim()
+            if (-not (Test-Path $script:SessionDir)) {
+                Write-Host '[!] No saved sessions found.' -ForegroundColor Yellow
+                Write-Host ''
+                continue
+            }
+            if ([string]::IsNullOrWhiteSpace($loadName)) {
+                $sessions = @(Get-ChildItem $script:SessionDir -Filter '*.json' -ErrorAction SilentlyContinue |
+                              Sort-Object LastWriteTime -Descending)
+                if ($sessions.Count -eq 0) {
+                    Write-Host '[!] No saved sessions found.' -ForegroundColor Yellow
+                    Write-Host ''
+                    continue
+                }
+                Write-Host '  Saved sessions:' -ForegroundColor Cyan
+                for ($si = 0; $si -lt $sessions.Count; $si++) {
+                    Write-Host ('  {0}. {1}  ({2})' -f ($si+1), $sessions[$si].BaseName, $sessions[$si].LastWriteTime) -ForegroundColor Gray
+                }
+                $pick = Read-Host -Prompt 'Load which session? (number or Enter to cancel)'
+                $parsed = 0
+                if ([int]::TryParse($pick, [ref]$parsed) -and $parsed -ge 1 -and $parsed -le $sessions.Count) {
+                    $loadName = $sessions[$parsed-1].BaseName
+                } else {
+                    Write-Host '[*] Cancelled.' -ForegroundColor Cyan
+                    Write-Host ''
+                    continue
+                }
+            }
+            $sessionFile = Join-Path $script:SessionDir "$loadName.json"
+            if (-not (Test-Path $sessionFile)) {
+                Write-Host ('[!] Session not found: {0}' -f $sessionFile) -ForegroundColor Red
+                Write-Host ''
+                continue
+            }
+            try {
+                $sessionData = Get-Content $sessionFile -Raw -Encoding UTF8 | ConvertFrom-Json
+                $conversationHistory.Clear()
+                foreach ($msg in $sessionData.messages) {
+                    [void]$conversationHistory.Add(@{ role = $msg.role; content = $msg.content })
+                }
+                if ($sessionData.model)       { $currentModel = $sessionData.model }
+                if ($sessionData.temperature)  { $temperature  = [double]$sessionData.temperature }
+                $msgCount = $conversationHistory.Count
+                Write-Host ('[+] Loaded session: {0} ({1} messages, model: {2})' -f $loadName, $msgCount, $currentModel) -ForegroundColor Green
+            }
+            catch {
+                Write-Host ('[!] Failed to load session: {0}' -f $_) -ForegroundColor Red
+            }
+            Write-Host ''
+            continue
+        }
+
+        # -- /temp <value> --
+        elseif ($trimmedInput -match '^/temp(?:erature)?\s+([\d.]+)$') {
+            $newTemp = [double]$Matches[1]
+            if ($newTemp -ge 0.0 -and $newTemp -le 2.0) {
+                $temperature = $newTemp
+                Write-Host ('[*] Temperature set to {0}' -f $temperature) -ForegroundColor Cyan
+            } else {
+                Write-Host '[!] Temperature must be between 0.0 and 2.0' -ForegroundColor Red
             }
             Write-Host ''
             continue
@@ -1316,12 +1623,32 @@ function Start-HatzChat {
                 continue
             }
 
-            $origContent   = Get-Content $resolvedEdit -Raw -Encoding UTF8
+            $origContent = Get-Content $resolvedEdit -Raw -Encoding UTF8
+
+            # Record baseline for /diff if first time touching this file
+            if (-not $script:OriginalFileStates.ContainsKey($resolvedEdit)) {
+                $script:OriginalFileStates[$resolvedEdit] = $origContent
+            }
+
             $editExt       = [System.IO.Path]::GetExtension($resolvedEdit).TrimStart('.')
             $editLineCount = ($origContent -split "`r?`n").Count
             Write-Host ('[*] Edit: {0}  ({1} lines)' -f $resolvedEdit, $editLineCount) -ForegroundColor Cyan
 
-            $editInstruction = (Read-Host -Prompt 'Describe the change').Trim()
+            # Support both single-line and multiline instructions
+            Write-Host 'Describe the change (or type /multi for multiline):' -ForegroundColor Cyan
+            $rawInstruction = (Read-Host).Trim()
+            
+            if ($rawInstruction -eq '/multi') {
+                $editInstruction = Read-MultilineInput -Prompt 'Enter edit instructions (type "." on its own line to finish)'
+                if ($null -eq $editInstruction) {
+                    Write-Host '[!] No instruction given - cancelled.' -ForegroundColor Yellow
+                    Write-Host ''
+                    continue
+                }
+            } else {
+                $editInstruction = $rawInstruction
+            }
+            
             if ([string]::IsNullOrWhiteSpace($editInstruction)) {
                 Write-Host '[!] No instruction given - cancelled.' -ForegroundColor Yellow
                 Write-Host ''
@@ -1357,23 +1684,24 @@ Instruction: $editInstruction
 
             # Send without conversation history to keep payload small
             $editMsgs = @(@{ role = 'user'; content = $editPrompt })
-            Write-Host '[*] Requesting edit (search/replace mode)...' -ForegroundColor Cyan -NoNewline
-            $editStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $editResp = Invoke-HatzChatCompletion -ApiBaseUrl $ApiBaseUrl `
-                                                   -ApiKey $ApiKey `
-                                                   -Model $currentModel `
-                                                   -Messages $editMsgs `
-                                                   -Temperature 0.2 `
-                                                   -TimeoutMs 180000
-            $editStopwatch.Stop()
-            Write-Host ("`r[*] Edit response received ({0:F1}s)           " -f $editStopwatch.Elapsed.TotalSeconds) -ForegroundColor Cyan
+            $editResult = Invoke-HatzChatWithSpinner -ApiBaseUrl $ApiBaseUrl `
+                                                      -ApiKey $ApiKey `
+                                                      -Model $currentModel `
+                                                      -Messages $editMsgs `
+                                                      -Temperature 0.2 `
+                                                      -TimeoutMs 180000 `
+                                                      -SpinnerMessage 'Generating edit' 
 
-            if ($null -eq $editResp) {
+            if ($null -eq $editResult) {
                 Write-Host '[!] Edit request failed.' -ForegroundColor Red
+                # Record failure in history so user can /retry with context
+                [void]$conversationHistory.Add(@{ role = 'user'; content = $editPrompt })
+                [void]$conversationHistory.Add(@{ role = 'assistant'; content = '[Edit request failed — no response from API]' })
                 Write-Host ''
                 continue
             }
 
+            $editResp = $editResult.Response
             $rawReply = $editResp.choices[0].message.content
 
             # --- Parse SEARCH/REPLACE blocks ---
@@ -1412,6 +1740,9 @@ Instruction: $editInstruction
                 } else {
                     Write-Host '[!] Could not parse model response at all. Raw reply:' -ForegroundColor Red
                     Write-Host $rawReply -ForegroundColor DarkGray
+                    # Record in history so user can /retry
+                    [void]$conversationHistory.Add(@{ role = 'user';      content = $editPrompt })
+                    [void]$conversationHistory.Add(@{ role = 'assistant'; content = $rawReply   })
                 }
                 Write-Host ''
                 continue
@@ -1462,8 +1793,12 @@ Instruction: $editInstruction
 
             $applyChoice = (Read-Host -Prompt 'Apply changes? (y/n)').Trim().ToLower()
             if ($applyChoice -eq 'y') {
-                # Write a .bak before overwriting (safety net)
-                $bakPath = $resolvedEdit + '.bak'
+                # Write a timestamped backup before overwriting (safety net)
+                $bakDir  = Join-Path (Split-Path $resolvedEdit) '.hatz-backups'
+                if (-not (Test-Path $bakDir)) { New-Item -ItemType Directory -Path $bakDir -Force | Out-Null }
+                $stamp   = Get-Date -Format 'yyyyMMdd-HHmmss'
+                $bakName = '{0}.{1}.bak' -f (Split-Path $resolvedEdit -Leaf), $stamp
+                $bakPath = Join-Path $bakDir $bakName
                 [System.IO.File]::WriteAllText($bakPath, $origContent, [System.Text.Encoding]::UTF8)
                 [System.IO.File]::WriteAllText($resolvedEdit, $result.Content, [System.Text.Encoding]::UTF8)
                 Write-Host ('[+] Saved: {0}' -f $resolvedEdit) -ForegroundColor Green
@@ -1478,6 +1813,7 @@ Instruction: $editInstruction
         }
 
         elseif ($trimmedInput -eq '/help') {
+            Write-Host '  Session:' -ForegroundColor Gray
             Write-Host '  /quit             - Exit the chat' -ForegroundColor Gray
             Write-Host '  /clear            - Clear conversation history' -ForegroundColor Gray
             Write-Host '  /model            - Switch to a different model' -ForegroundColor Gray
@@ -1485,11 +1821,18 @@ Instruction: $editInstruction
             Write-Host '  /history          - Show conversation message count' -ForegroundColor Gray
             Write-Host '  /tools            - Toggle tools (search, code, etc.)' -ForegroundColor Gray
             Write-Host '  /autotools        - Toggle auto tool selection' -ForegroundColor Gray
+            Write-Host '  /temp <0.0-2.0>   - Set sampling temperature' -ForegroundColor Gray
+            Write-Host '  /save [name]      - Save conversation to disk' -ForegroundColor Gray
+            Write-Host '  /load [name]      - Load a saved conversation' -ForegroundColor Gray
+            Write-Host '  /copy             - Copy last response to clipboard' -ForegroundColor Gray
+            Write-Host '  /retry [note]     - Resend last message (optionally with edits)' -ForegroundColor Gray
             Write-Host '  Local folder:' -ForegroundColor Gray
             Write-Host '  /file <path>      - Inject file content into next message' -ForegroundColor Gray
             Write-Host '  /folder <path>    - Inject folder tree and/or files' -ForegroundColor Gray
             Write-Host '  /run <cmd>        - Run a command, inject output into context' -ForegroundColor Gray
             Write-Host '  /edit <path>      - Model edits a local file (shows diff, confirms)' -ForegroundColor Gray
+            Write-Host '  /undo <path>      - Restore file from timestamped backup' -ForegroundColor Gray
+            Write-Host '  /diff <path>      - Show cumulative changes since session start' -ForegroundColor Gray
             Write-Host '  /workspace <path> - Set base folder for relative paths' -ForegroundColor Gray
             Write-Host '  /context          - Show pending context size' -ForegroundColor Gray
             Write-Host '  /multi            - Enter multiline input mode' -ForegroundColor Gray
@@ -1521,7 +1864,9 @@ Instruction: $editInstruction
         # -- Unknown slash command --
         elseif ($trimmedInput.StartsWith('/')) {
             $allCmds = @('/quit','/clear','/model','/system','/history','/tools',
-                         '/autotools','/file','/folder','/run','/edit','/workspace','/context','/multi','/help')
+                         '/autotools','/file','/folder','/run','/edit','/undo','/diff',
+                         '/workspace','/context','/multi','/help','/copy','/retry',
+                         '/save','/load','/temp','/temperature')
             $partial = ($trimmedInput -split ' ')[0]
             $cmdMatches = @($allCmds | Where-Object { $_ -like "$partial*" })
             if ($cmdMatches.Count -eq 1) {
@@ -1553,43 +1898,39 @@ Instruction: $editInstruction
         # Image generation models don't support temperature, tools, or conversation history.
         # Sending those params can cause the upstream provider to reject the request.
         $isImageModel = $currentModel -match '(?i)(image|imgen|dall.?e|imagen|flux|stable.diffusion)'
+        $apiResult = $null
         if ($isImageModel) {
             # Image models: send only the latest user message — no history, no tools
             $imageMsgs = @(@{ role = 'user'; content = $finalContent })
-            Write-Host '  [*] Sending image request...' -ForegroundColor DarkGray -NoNewline
-            $apiStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $response  = Invoke-HatzChatCompletion -ApiBaseUrl $ApiBaseUrl `
-                                                   -ApiKey $ApiKey `
-                                                   -Model $currentModel `
-                                                   -Messages $imageMsgs `
-                                                   -Temperature 1.0 `
-                                                   -AutoToolSelection $false
-            $apiStopwatch.Stop()
-            $apiElapsed = $apiStopwatch.Elapsed.TotalSeconds
-            Write-Host ("`r  [*] Response received ({0:F1}s)      " -f $apiElapsed) -ForegroundColor DarkGray
+            $apiResult = Invoke-HatzChatWithSpinner -ApiBaseUrl $ApiBaseUrl `
+                                                    -ApiKey $ApiKey `
+                                                    -Model $currentModel `
+                                                    -Messages $imageMsgs `
+                                                    -Temperature 1.0 `
+                                                    -AutoToolSelection $false `
+                                                    -SpinnerMessage 'Generating image' 
         } else {
             $isImageModel = $false
-            Write-Host '  [*] Sending request...' -ForegroundColor DarkGray -NoNewline
-            $apiStopwatch = [System.Diagnostics.Stopwatch]::StartNew()
-            $response = Invoke-HatzChatCompletion -ApiBaseUrl $ApiBaseUrl `
-                                                   -ApiKey $ApiKey `
-                                                   -Model $currentModel `
-                                                   -Messages $conversationHistory.ToArray() `
-                                                   -Temperature 0.7 `
-                                                   -ToolsToUse $toolsToUse `
-                                                   -AutoToolSelection $autoToolSelection
-            $apiStopwatch.Stop()
-            $apiElapsed = $apiStopwatch.Elapsed.TotalSeconds
-            Write-Host ("`r  [*] Response received ({0:F1}s)      " -f $apiElapsed) -ForegroundColor DarkGray
+            $apiResult = Invoke-HatzChatWithSpinner -ApiBaseUrl $ApiBaseUrl `
+                                                    -ApiKey $ApiKey `
+                                                    -Model $currentModel `
+                                                    -Messages $conversationHistory.ToArray() `
+                                                    -Temperature $temperature `
+                                                    -ToolsToUse $toolsToUse `
+                                                    -AutoToolSelection $autoToolSelection `
+                                                    -SpinnerMessage 'Thinking'
         }
 
-        if ($null -eq $response) {
+        if ($null -eq $apiResult) {
             # Remove failed message so it can be retried
             $conversationHistory.RemoveAt($conversationHistory.Count - 1)
             Write-Host '[!] Request failed. Your message was not added to history.' -ForegroundColor Yellow
             Write-Host ''
             continue
         }
+
+        $response    = $apiResult.Response
+        $apiElapsed  = $apiResult.Elapsed
 
         # -- Extract and display the assistant reply --
         # content can be a plain string (chat) or an array of parts (image models
@@ -1611,7 +1952,7 @@ Instruction: $editInstruction
 
         Write-Host ''
         Write-Host 'Assistant:' -ForegroundColor Green
-        Write-Host $assistantMessage
+        Write-HighlightedResponse -Text $assistantMessage
         Write-Host ''
 
         # For image models: scan the ENTIRE response JSON for URLs (the image URL may
@@ -1740,6 +2081,10 @@ if (-not $selectedModel) {
 }
 
 # Step 4: Start the interactive chat
-Start-HatzChat -ApiBaseUrl $ApiBaseUrl -ApiKey $resolvedKey -Model $selectedModel -MaxHistory $MaxHistory
-
-Write-Host 'Goodbye!' -ForegroundColor Cyan
+try {
+    Start-HatzChat -ApiBaseUrl $ApiBaseUrl -ApiKey $resolvedKey -Model $selectedModel -MaxHistory $MaxHistory
+}
+finally {
+    Write-Host ''
+    Write-Host 'Goodbye!' -ForegroundColor Cyan
+}
