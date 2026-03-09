@@ -406,6 +406,157 @@ function Show-LineDiff {
     return $hasChanges
 }
 
+# --- Region: Search/Replace Diff Engine --------------------------------------
+
+function ConvertFrom-SearchReplaceBlocks {
+    <#
+    .SYNOPSIS
+        Parses model output for SEARCH/REPLACE blocks.
+        Returns an array of @{ Search = '...'; Replace = '...' } pairs.
+    .NOTES
+        Format (inspired by Aider / git conflict markers):
+            <<<<<<< SEARCH
+            exact original text
+            =======
+            new replacement text
+            >>>>>>> REPLACE
+
+        The model may include explanation text outside the blocks - it's ignored.
+    #>
+    param([string]$Text)
+
+    $blocks  = [System.Collections.ArrayList]::new()
+
+    # Strip an optional outer code fence that wraps all the blocks.
+    # Models sometimes wrap everything in ```diff ... ``` or ```text ... ```
+    $stripped = $Text -replace '(?s)\A\s*```[^\n]*\n(.*)\n```\s*\z', '$1'
+
+    $pattern = '(?sm)^<{6,7}\s*SEARCH\s*\r?\n(.*?)^={6,7}\s*\r?\n(.*?)^>{6,7}\s*REPLACE\s*$'
+    $matches = [regex]::Matches($stripped, $pattern)
+
+    foreach ($m in $matches) {
+        # Trim exactly one trailing newline from each group (the marker's own linebreak)
+        $searchText  = $m.Groups[1].Value -replace '\r?\n$', ''
+        $replaceText = $m.Groups[2].Value -replace '\r?\n$', ''
+        [void]$blocks.Add(@{
+            Search  = $searchText
+            Replace = $replaceText
+        })
+    }
+
+    return $blocks
+}
+
+function Invoke-ApplySearchReplace {
+    <#
+    .SYNOPSIS
+        Applies an ordered list of SEARCH/REPLACE blocks to file content.
+    .DESCRIPTION
+        For each block, finds the SEARCH text in the current content and replaces
+        it with the REPLACE text. Blocks are applied sequentially (each sees the
+        result of the previous).
+
+        If an exact match fails, tries whitespace-normalized matching (collapse
+        runs of whitespace, trim lines) as a fallback - models sometimes
+        reformat indentation.
+
+        Returns @{ Success = $bool; Content = '...'; Errors = @('...') }
+    #>
+    param(
+        [string]$OriginalContent,
+        [array]$Blocks
+    )
+
+    $content = $OriginalContent
+    $errors  = [System.Collections.ArrayList]::new()
+    $applied = 0
+
+    foreach ($block in $Blocks) {
+        $search  = $block.Search
+        $replace = $block.Replace
+
+        # --- Attempt 1: Exact substring match ---
+        $idx = $content.IndexOf($search, [StringComparison]::Ordinal)
+        if ($idx -ge 0) {
+            $content = $content.Remove($idx, $search.Length).Insert($idx, $replace)
+            $applied++
+            continue
+        }
+
+        # --- Attempt 2: Normalize line endings then retry ---
+        $contentNorm = $content -replace "`r`n", "`n"
+        $searchNorm  = $search  -replace "`r`n", "`n"
+        $idx = $contentNorm.IndexOf($searchNorm, [StringComparison]::Ordinal)
+        if ($idx -ge 0) {
+            $replaceNorm = $replace -replace "`r`n", "`n"
+            $content = $contentNorm.Remove($idx, $searchNorm.Length).Insert($idx, $replaceNorm)
+            $applied++
+            continue
+        }
+
+        # --- Attempt 3: Whitespace-normalized fuzzy match ---
+        # Collapse each line's leading/trailing whitespace for matching,
+        # but apply using original indentation from the REPLACE block.
+        $found = $false
+        $contentLines = $content -split "`r?`n"
+        $searchLines  = $search  -split "`r?`n"
+
+        if ($searchLines.Count -le $contentLines.Count) {
+            for ($i = 0; $i -le ($contentLines.Count - $searchLines.Count); $i++) {
+                $match = $true
+                for ($j = 0; $j -lt $searchLines.Count; $j++) {
+                    $cLine = $contentLines[$i + $j].Trim()
+                    $sLine = $searchLines[$j].Trim()
+                    if ($cLine -ne $sLine) { $match = $false; break }
+                }
+                if ($match) {
+                    # Replace those lines with the REPLACE block's lines
+                    $replaceLines = $replace -split "`r?`n"
+                    $before = $contentLines[0..([Math]::Max(0, $i - 1))]
+                    if ($i -eq 0) { $before = @() }
+                    $after  = if (($i + $searchLines.Count) -lt $contentLines.Count) {
+                        $contentLines[($i + $searchLines.Count)..($contentLines.Count - 1)]
+                    } else { @() }
+                    $contentLines = @($before) + @($replaceLines) + @($after)
+                    $content = $contentLines -join "`n"
+                    $applied++
+                    $found = $true
+                    break
+                }
+            }
+        }
+
+        if (-not $found) {
+            $preview = if ($search.Length -gt 80) { $search.Substring(0, 77) + '...' } else { $search }
+            [void]$errors.Add("Could not locate SEARCH block: $preview")
+        }
+    }
+
+    return @{
+        Success = ($errors.Count -eq 0)
+        Content = $content
+        Applied = $applied
+        Errors  = $errors
+    }
+}
+
+function Show-SearchReplacePlan {
+    <#
+    .SYNOPSIS
+        Displays a colored preview of what each SEARCH/REPLACE block will do.
+    #>
+    param([array]$Blocks)
+
+    for ($i = 0; $i -lt $Blocks.Count; $i++) {
+        Write-Host ('  --- Change {0}/{1} ---' -f ($i + 1), $Blocks.Count) -ForegroundColor Yellow
+        $sLines = $Blocks[$i].Search  -split "`r?`n"
+        $rLines = $Blocks[$i].Replace -split "`r?`n"
+        foreach ($l in $sLines) { Write-Host ('  - {0}' -f $l) -ForegroundColor Red }
+        foreach ($l in $rLines) { Write-Host ('  + {0}' -f $l) -ForegroundColor Green }
+        Write-Host ''
+    }
+}
+
 # --- Region: Model Selection --------------------------------------------------
 
 function Select-HatzModel {
@@ -835,6 +986,7 @@ function Start-HatzChat {
             continue
         }
 
+
         # -- /edit <path> --
         elseif ($trimmedInput -match '^/edit\s+(.+)$') {
             $rawEditPath = $Matches[1].Trim().Trim('"')
@@ -848,43 +1000,54 @@ function Start-HatzChat {
                 continue
             }
 
-            $origContent  = Get-Content $resolvedEdit -Raw -Encoding UTF8
-            $editExt      = [System.IO.Path]::GetExtension($resolvedEdit).TrimStart('.')
+            $origContent   = Get-Content $resolvedEdit -Raw -Encoding UTF8
+            $editExt       = [System.IO.Path]::GetExtension($resolvedEdit).TrimStart('.')
             $editLineCount = ($origContent -split "`r?`n").Count
             Write-Host ('[*] Edit: {0}  ({1} lines)' -f $resolvedEdit, $editLineCount) -ForegroundColor Cyan
-            if ($editLineCount -gt 300) {
-                Write-Host ('  [!] Large file ({0} lines). The model must regenerate the entire file.' -f $editLineCount) -ForegroundColor DarkYellow
-                Write-Host '      Consider targeting a specific function or section with a narrower' -ForegroundColor DarkYellow
-                Write-Host '      instruction (e.g. "in function Foo, change X to Y").' -ForegroundColor DarkYellow
-                Write-Host '      Proceeding with a 5-minute timeout...' -ForegroundColor DarkGray
-            }
+
             $editInstruction = (Read-Host -Prompt 'Describe the change').Trim()
             if ([string]::IsNullOrWhiteSpace($editInstruction)) {
-                Write-Host '[!] No instruction given — cancelled.' -ForegroundColor Yellow
+                Write-Host '[!] No instruction given - cancelled.' -ForegroundColor Yellow
                 Write-Host ''
                 continue
             }
 
+            # --- Build the search/replace prompt ---
             $editPrompt = @"
+I need you to edit this file. Return ONLY the changes using SEARCH/REPLACE blocks.
+
+Rules:
+- Each block must contain the EXACT original text in the SEARCH section
+- Copy the original text character-for-character (including indentation and whitespace)
+- Include enough surrounding context lines (2-3) to make the match unique
+- You may use multiple blocks for multiple changes - they are applied in order
+- Do NOT return the entire file. Only return the changed sections.
+- No explanation outside the blocks.
+
+Format:
+<<<<<<< SEARCH
+exact original lines to find
+=======
+replacement lines
+>>>>>>> REPLACE
+
 File: $resolvedEdit
 ``````$editExt
 $origContent
 ``````
 
 Instruction: $editInstruction
-
-Reply with ONLY the complete updated file inside a single code block. No explanation before or after.
 "@
-            # Do NOT include conversation history — sending history + a large file
-            # causes KeepAliveFailure because the payload becomes too large.
+
+            # Send without conversation history to keep payload small
             $editMsgs = @(@{ role = 'user'; content = $editPrompt })
-            Write-Host '[*] Requesting edit from model...' -ForegroundColor Cyan
+            Write-Host '[*] Requesting edit (search/replace mode)...' -ForegroundColor Cyan
             $editResp = Invoke-HatzChatCompletion -ApiBaseUrl $ApiBaseUrl `
                                                    -ApiKey $ApiKey `
                                                    -Model $currentModel `
                                                    -Messages $editMsgs `
                                                    -Temperature 0.2 `
-                                                   -TimeoutMs 300000
+                                                   -TimeoutMs 180000
 
             if ($null -eq $editResp) {
                 Write-Host '[!] Edit request failed.' -ForegroundColor Red
@@ -894,33 +1057,98 @@ Reply with ONLY the complete updated file inside a single code block. No explana
 
             $rawReply = $editResp.choices[0].message.content
 
-            # Pick the *largest* code block — handles responses where the model
-            # thinks aloud before the final code fence, or has nested fences.
-            $codeMatches = [regex]::Matches($rawReply, '(?s)```[^\n]*\n(.*?)```')
-            if ($codeMatches.Count -gt 0) {
-                $best       = $codeMatches |
-                                Sort-Object { $_.Groups[1].Value.Length } -Descending |
-                                Select-Object -First 1
-                $newContent = $best.Groups[1].Value
-            } else {
-                $newContent = $rawReply
+            # --- Parse SEARCH/REPLACE blocks ---
+            $blocks = ConvertFrom-SearchReplaceBlocks -Text $rawReply
+
+            if ($blocks.Count -eq 0) {
+                # Fallback: model may have returned a full file in a code block anyway.
+                Write-Host '[!] No SEARCH/REPLACE blocks found in response.' -ForegroundColor DarkYellow
+                Write-Host '    Falling back to full-file extraction...' -ForegroundColor DarkYellow
+
+                $codeMatches = [regex]::Matches($rawReply, '(?s)```[^\n]*\n(.*?)```')
+                if ($codeMatches.Count -gt 0) {
+                    $best       = $codeMatches |
+                                    Sort-Object { $_.Groups[1].Value.Length } -Descending |
+                                    Select-Object -First 1
+                    $newContent = $best.Groups[1].Value
+
+                    Write-Host ''
+                    Write-Host '+-- Proposed diff (- original  + new) -------------------------' -ForegroundColor Yellow
+                    $hasChanges = Show-LineDiff -Original $origContent -Updated $newContent
+                    if (-not $hasChanges) {
+                        Write-Host '  (No changes detected)' -ForegroundColor DarkGray
+                    }
+                    Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
+                    Write-Host ''
+
+                    $applyChoice = (Read-Host -Prompt 'Apply changes? (y/n)').Trim().ToLower()
+                    if ($applyChoice -eq 'y') {
+                        [System.IO.File]::WriteAllText($resolvedEdit, $newContent, [System.Text.Encoding]::UTF8)
+                        Write-Host ('[+] Saved: {0}' -f $resolvedEdit) -ForegroundColor Green
+                        [void]$conversationHistory.Add(@{ role = 'user';      content = $editPrompt })
+                        [void]$conversationHistory.Add(@{ role = 'assistant'; content = $rawReply   })
+                    } else {
+                        Write-Host '[*] Edit cancelled.' -ForegroundColor Cyan
+                    }
+                } else {
+                    Write-Host '[!] Could not parse model response at all. Raw reply:' -ForegroundColor Red
+                    Write-Host $rawReply -ForegroundColor DarkGray
+                }
+                Write-Host ''
+                continue
             }
 
-            # Show diff with actual line numbers (positional, not set-based)
+            # --- Preview the changes ---
             Write-Host ''
-            Write-Host '+-- Proposed diff (- original  + new) -------------------------' -ForegroundColor Yellow
-            $hasChanges = Show-LineDiff -Original $origContent -Updated $newContent
+            Write-Host ('+-- {0} change(s) proposed ----------------------------------' -f $blocks.Count) -ForegroundColor Yellow
+            Show-SearchReplacePlan -Blocks $blocks
+            Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
+            Write-Host ''
+
+            # --- Apply the blocks ---
+            $result = Invoke-ApplySearchReplace -OriginalContent $origContent -Blocks $blocks
+
+            if ($result.Errors.Count -gt 0) {
+                Write-Host ('[!] {0} block(s) could not be matched:' -f $result.Errors.Count) -ForegroundColor Red
+                foreach ($err in $result.Errors) {
+                    Write-Host ('    {0}' -f $err) -ForegroundColor DarkRed
+                }
+                if ($result.Applied -gt 0) {
+                    Write-Host ('[*] {0} block(s) matched successfully.' -f $result.Applied) -ForegroundColor DarkYellow
+                    $partialChoice = (Read-Host -Prompt 'Apply partial changes? (y/n)').Trim().ToLower()
+                    if ($partialChoice -ne 'y') {
+                        Write-Host '[*] Edit cancelled.' -ForegroundColor Cyan
+                        Write-Host ''
+                        continue
+                    }
+                } else {
+                    Write-Host '[!] No blocks could be applied. Edit cancelled.' -ForegroundColor Red
+                    Write-Host ''
+                    continue
+                }
+            }
+
+            # Show the final unified diff of original vs patched
+            Write-Host ''
+            Write-Host '+-- Final diff ------------------------------------------------' -ForegroundColor Yellow
+            $hasChanges = Show-LineDiff -Original $origContent -Updated $result.Content
             if (-not $hasChanges) {
-                Write-Host '  (No changes detected)' -ForegroundColor DarkGray
+                Write-Host '  (No effective changes)' -ForegroundColor DarkGray
+                Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
+                Write-Host ''
+                continue
             }
             Write-Host '+--------------------------------------------------------------' -ForegroundColor Yellow
             Write-Host ''
 
             $applyChoice = (Read-Host -Prompt 'Apply changes? (y/n)').Trim().ToLower()
             if ($applyChoice -eq 'y') {
-                [System.IO.File]::WriteAllText($resolvedEdit, $newContent, [System.Text.Encoding]::UTF8)
+                # Write a .bak before overwriting (safety net)
+                $bakPath = $resolvedEdit + '.bak'
+                [System.IO.File]::WriteAllText($bakPath, $origContent, [System.Text.Encoding]::UTF8)
+                [System.IO.File]::WriteAllText($resolvedEdit, $result.Content, [System.Text.Encoding]::UTF8)
                 Write-Host ('[+] Saved: {0}' -f $resolvedEdit) -ForegroundColor Green
-                # Add the exchange to history so context carries forward
+                Write-Host ('[+] Backup: {0}' -f $bakPath) -ForegroundColor DarkGray
                 [void]$conversationHistory.Add(@{ role = 'user';      content = $editPrompt })
                 [void]$conversationHistory.Add(@{ role = 'assistant'; content = $rawReply   })
             } else {
