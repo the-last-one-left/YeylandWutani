@@ -7929,8 +7929,8 @@ function Invoke-CompromiseDetection {
                 }
             }
             
-            $isSuccessfulSignIn = ($signIn.Status -eq "0" -or [string]::IsNullOrEmpty($signIn.Status))
-            $isFailedSignIn = (-not [string]::IsNullOrEmpty($signIn.Status) -and $signIn.Status -ne "0")
+            $isSuccessfulSignIn = ($signIn.StatusCode -eq "0" -or [string]::IsNullOrEmpty($signIn.StatusCode))
+            $isFailedSignIn = (-not [string]::IsNullOrEmpty($signIn.StatusCode) -and $signIn.StatusCode -ne "0")
             $isUnusual = $signIn.IsUnusualLocation -eq $true
             
             # Only flag unusual locations for successful sign-ins
