@@ -220,39 +220,6 @@ begin {
     }
     #endregion
 
-    #region Phase progress helpers
-    $script:PhaseNum    = 0
-    $script:TotalPhases = 3  # baseline: recon, scan, post-scan
-    if ($ScanProfile -ne 'Quick')                 { $script:TotalPhases++ }  # 1b multi-subnet
-    if ($ScanPorts -and $ScanProfile -ne 'Quick') { $script:TotalPhases++ }  # 4 service enum
-    if ($EnableGatewayProbe)                       { $script:TotalPhases++ }  # 4b gateway
-    if ($EnableWMI)                                { $script:TotalPhases++ }  # 5 WMI
-    if ($EnableAD)                                 { $script:TotalPhases++ }  # 6 AD
-    if ($EnableSecurityObs)                        { $script:TotalPhases++ }  # 7 security
-
-    function Update-PhaseBar {
-        param([string]$Name, [string]$Detail = '')
-        if ($Quiet) { return }
-        $script:PhaseNum++
-        $pct    = [math]::Min([int]($script:PhaseNum / $script:TotalPhases * 100), 99)
-        $status = "[$($script:PhaseNum)/$($script:TotalPhases)] $Name"
-        if ($Detail) { $status += " - $Detail" }
-        Write-Progress -Id 0 -Activity "YW Network Discovery v$ScriptVersion" `
-                       -Status $status -PercentComplete $pct
-    }
-
-    function Write-SubProgress {
-        param([string]$Activity, [string]$Status, [int]$Pct)
-        if ($Quiet) { return }
-        Write-Progress -Id 1 -ParentId 0 -Activity $Activity `
-                       -Status $Status -PercentComplete ([math]::Min($Pct, 99))
-    }
-
-    function Clear-SubBar {
-        if (-not $Quiet) { Write-Progress -Id 1 -Completed -ErrorAction SilentlyContinue }
-    }
-    #endregion
-
     #region Port definitions (35 common ports)
     $CommonPorts = @{
         21    = 'FTP'
@@ -741,7 +708,7 @@ begin {
         $gw = @{ IP = $GatewayIP; Vendor = ''; Product = ''; Confidence = ''; Source = ''; SysDescr = '' }
         if (-not $GatewayIP) { return $gw }
 
-        # 1. SNMP sysDescr - highest confidence
+        # 1. SNMP sysDescr — highest confidence
         foreach ($c in $Communities) {
             $snmp = Invoke-SNMPGet -IP $GatewayIP -Community $c -TimeoutMs 2000
             if ($snmp.CommunityOK -and $snmp.SysDescr) {
@@ -761,7 +728,7 @@ begin {
             }
         }
 
-        # 2. HTTP title/server header - medium confidence
+        # 2. HTTP title/server header — medium confidence
         foreach ($port in @(80, 443, 8080, 8443)) {
             $http = Get-HTTPTitleInfo -IP $GatewayIP -Port $port
             if ($http.Title -or $http.Server) {
@@ -895,7 +862,7 @@ begin {
         }
 
         # LDAP fallback via .NET DirectoryServices (anonymous bind, for non-domain-joined hosts)
-        $result.Error = 'AD module unavailable - LDAP probe not attempted (requires RSAT)'
+        $result.Error = 'AD module unavailable — LDAP probe not attempted (requires RSAT)'
         return $result
     }
     #endregion
@@ -1098,7 +1065,6 @@ begin {
 
 process {
     #region Phase 1: Network Reconnaissance
-    Update-PhaseBar 'Network Reconnaissance'
     if (-not $Quiet) { Write-Host "[Phase 1] Network Reconnaissance..." -ForegroundColor Cyan }
 
     $defaultGateway = Get-DefaultGateway
@@ -1152,7 +1118,6 @@ process {
 
     #region Phase 1b: Multi-Subnet Discovery
     if ($ScanProfile -ne 'Quick' -and $Subnet) {
-        Update-PhaseBar 'Multi-Subnet Discovery' "probing $($Subnet.Count) known subnet(s)"
         if (-not $Quiet) { Write-Host "[Phase 1b] Multi-subnet discovery..." -ForegroundColor Cyan }
         $extraNets = Invoke-MultiSubnetDiscovery -KnownSubnets $Subnet
         if ($extraNets.Count -gt 0) {
@@ -1167,9 +1132,8 @@ process {
     #endregion
 
     #region Phase 2: Parallel Host Discovery + Port Scan
-    $scanMode = if ($ScanPorts) { "port scan ($($CommonPorts.Count) ports)" } else { "ping only" }
-    Update-PhaseBar 'Host Discovery' "$($AllIPs.Count) IPs | $scanMode | $ThrottleLimit threads"
     if (-not $Quiet) {
+        $scanMode = if ($ScanPorts) { "port scan ($($CommonPorts.Count) ports)" } else { "ping only" }
         Write-Host "[Phase 2] Scanning $($AllIPs.Count) IPs ($scanMode, $ThrottleLimit threads)..." -ForegroundColor Cyan
     }
 
@@ -1184,34 +1148,26 @@ process {
         $runspaces += [PSCustomObject]@{ Pipe = $ps; Handle = $ps.BeginInvoke() }
     }
 
-    $completed = 0; $online = 0; $Results = @()
+    $completed = 0; $Results = @()
     while ($runspaces.Handle.IsCompleted -contains $false) {
         $runspaces | Where-Object { $_.Handle.IsCompleted } | ForEach-Object {
-            $r = $_.Pipe.EndInvoke($_.Handle)
-            $Results += $r; $_.Pipe.Dispose(); $completed++
-            if ($r.Status -eq 'Online') { $online++ }
-            if (-not $Quiet) {
+            $Results += $_.Pipe.EndInvoke($_.Handle)
+            $_.Pipe.Dispose(); $completed++
+            if (-not $Quiet -and $completed % 25 -eq 0) {
                 $pct = [math]::Round($completed / $AllIPs.Count * 100, 1)
-                $lastIP = $r.IPAddress
-                Write-SubProgress -Activity "Scanning" `
-                    -Status "$completed/$($AllIPs.Count) ($pct%) | $online online | last: $lastIP" `
-                    -Pct $pct
+                Write-Progress -Activity "Scanning" -Status "$completed / $($AllIPs.Count) ($pct%)" -PercentComplete $pct
             }
         }
         $runspaces = $runspaces | Where-Object { -not $_.Handle.IsCompleted }
         Start-Sleep -Milliseconds 50
     }
     # Collect remaining
-    $runspaces | ForEach-Object {
-        $r = $_.Pipe.EndInvoke($_.Handle); $Results += $r; $_.Pipe.Dispose(); $completed++
-        if ($r.Status -eq 'Online') { $online++ }
-    }
+    $runspaces | ForEach-Object { $Results += $_.Pipe.EndInvoke($_.Handle); $_.Pipe.Dispose() }
     $pool.Close(); $pool.Dispose()
-    Clear-SubBar
+    Write-Progress -Activity "Scanning" -Completed
     #endregion
 
-    #region Post-scan: MAC enrichment + NetBIOS (Phase 3)
-    Update-PhaseBar 'Post-Scan Enrichment' "MAC | NetBIOS | vendor"
+    #region Post-scan: MAC enrichment via Get-NetNeighbor
     if (-not $Quiet) { Write-Host "  Enriching MAC addresses via ARP table..." -ForegroundColor Gray }
     try {
         $neighbors = Get-NetNeighbor -AddressFamily IPv4 -ErrorAction SilentlyContinue |
@@ -1239,16 +1195,10 @@ process {
             $prefixToMac = @{}
             $unknownVendors | ForEach-Object { if (-not $prefixToMac.ContainsKey($_.MACPrefix)) { $prefixToMac[$_.MACPrefix] = $_.MACAddress } }
             if (-not $Quiet) { Write-Host "  MAC vendor API: looking up $($prefixToMac.Count) unique prefixes..." -ForegroundColor Gray }
-            $macIdx = 0
             foreach ($pfx in $prefixToMac.Keys) {
-                $macIdx++
-                Write-SubProgress -Activity "MAC Vendor Lookup" `
-                    -Status "$macIdx/$($prefixToMac.Count): $pfx" `
-                    -Pct ([int]($macIdx / $prefixToMac.Count * 100))
                 $v = Get-MacVendorFromAPI -MacAddress $prefixToMac[$pfx] -MacPrefix $pfx -Cache $script:MacVendorCache
                 $Results | Where-Object { $_.MACPrefix -eq $pfx } | ForEach-Object { $_.Vendor = $v }
             }
-            Clear-SubBar
         }
     }
     #endregion
@@ -1258,12 +1208,8 @@ process {
                 ($_.OpenPorts -contains 445 -or $_.OpenPorts -contains 139 -or $_.OpenPorts -contains 135 -or $_.OpenPorts -contains 3389) })
     if ($needNB.Count -gt 0 -and -not ($ScanProfile -eq 'Quick')) {
         if (-not $Quiet) { Write-Host "  NetBIOS resolution for $($needNB.Count) Windows device(s)..." -ForegroundColor Gray }
-        $nbResolved = 0; $nbIdx = 0
+        $nbResolved = 0
         foreach ($dev in $needNB) {
-            $nbIdx++
-            Write-SubProgress -Activity "NetBIOS Resolution" `
-                -Status "$nbIdx/$($needNB.Count): $($dev.IPAddress)" `
-                -Pct ([int]($nbIdx / $needNB.Count * 100))
             try {
                 $job = Start-Job -ScriptBlock { param($ip) & nbtstat -A $ip 2>$null } -ArgumentList $dev.IPAddress
                 $done = Wait-Job $job -Timeout 3
@@ -1279,7 +1225,6 @@ process {
                 Remove-Job $job -Force -ErrorAction SilentlyContinue
             } catch {}
         }
-        Clear-SubBar
         if (-not $Quiet) { Write-Host "  NetBIOS: resolved $nbResolved hostname(s)." -ForegroundColor Gray }
     }
     #endregion
@@ -1296,19 +1241,13 @@ process {
         $webPorts      = @(80, 443, 8080, 8443)
         $sslPorts      = @(443, 636, 465, 993, 995, 5986, 8443)
 
-        Update-PhaseBar 'Service Enumeration' "$($onlineDevices.Count) hosts | HTTP | SSL | SNMP"
         if (-not $Quiet) { Write-Host "[Phase 4] Service enumeration ($($onlineDevices.Count) hosts)..." -ForegroundColor Cyan }
 
         $devCount = 0
         foreach ($dev in $onlineDevices) {
             $devCount++
-            if (-not $Quiet) {
-                $tasks = @('HTTP')
-                if ($EnableSSL)  { $tasks += 'SSL' }
-                if ($EnableSNMP -and $dev.OpenPorts -contains 161) { $tasks += 'SNMP' }
-                Write-SubProgress -Activity "Service Enumeration" `
-                    -Status "$devCount/$($onlineDevices.Count) | $($dev.IPAddress) | $($tasks -join ', ')" `
-                    -Pct ([int]($devCount / $onlineDevices.Count * 100))
+            if (-not $Quiet -and $devCount % 10 -eq 0) {
+                Write-Progress -Activity "Service Enumeration" -Status "$devCount / $($onlineDevices.Count)" -PercentComplete ($devCount / $onlineDevices.Count * 100)
             }
 
             # HTTP title grabbing
@@ -1357,14 +1296,14 @@ process {
                 }
             }
         }
-        Clear-SubBar
+        Write-Progress -Activity "Service Enumeration" -Completed
     }
     #endregion
 
     #region Gateway fingerprinting
     $gatewayInfo = @{}
     if ($EnableGatewayProbe -and $defaultGateway) {
-        Update-PhaseBar 'Gateway Fingerprinting' $defaultGateway
+        if (-not $Quiet) { Write-Host "[Phase 4b] Gateway fingerprinting: $defaultGateway..." -ForegroundColor Cyan }
         $gatewayInfo = Invoke-GatewayFingerprint -GatewayIP $defaultGateway -Communities $SNMPCommunities
         if ($gatewayInfo.Vendor -and -not $Quiet) {
             Write-Host "  Gateway: $($gatewayInfo.Vendor) $($gatewayInfo.Product) (confidence: $($gatewayInfo.Confidence))" -ForegroundColor Green
@@ -1379,13 +1318,13 @@ process {
             $_.Status -eq 'Online' -and
             ($_.OpenPorts -contains 445 -or $_.OpenPorts -contains 3389 -or $_.OpenPorts -contains 5985 -or $_.OpenPorts -contains 5986)
         })
-        Update-PhaseBar 'WMI / CIM Queries' "$($windowsHosts.Count) Windows host(s)"
+        if (-not $Quiet) { Write-Host "[Phase 5] WMI queries on $($windowsHosts.Count) Windows host(s)..." -ForegroundColor Cyan }
         $wmiCount = 0
         foreach ($dev in $windowsHosts) {
             $wmiCount++
-            Write-SubProgress -Activity "WMI Queries" `
-                -Status "$wmiCount/$($windowsHosts.Count) | $($dev.IPAddress)" `
-                -Pct ([int]($wmiCount / [math]::Max($windowsHosts.Count, 1) * 100))
+            if (-not $Quiet) {
+                Write-Progress -Activity "WMI Queries" -Status "$wmiCount / $($windowsHosts.Count): $($dev.IPAddress)" -PercentComplete ($wmiCount / $windowsHosts.Count * 100)
+            }
             $wmiResult = Invoke-WMIHostQuery -ComputerName $dev.IPAddress -Credential $WMICredential
             $dev | Add-Member -NotePropertyName WMIData -NotePropertyValue $wmiResult -Force
             if ($wmiResult.Success) {
@@ -1395,7 +1334,7 @@ process {
                 if (-not $Quiet) { Write-Host "  $($dev.IPAddress): $($wmiResult.OSName) | $($wmiResult.RAM_GB) GB RAM | Uptime: $($wmiResult.UptimeDays)d" -ForegroundColor Gray }
             }
         }
-        Clear-SubBar
+        Write-Progress -Activity "WMI Queries" -Completed
         if (-not $Quiet) { Write-Host "  WMI: $($wmiDevices.Count) successful out of $($windowsHosts.Count) attempts." -ForegroundColor Green }
     }
     #endregion
@@ -1403,7 +1342,7 @@ process {
     #region Phase 6: Active Directory Enumeration
     $adInfo = @{ Available = $false }
     if ($EnableAD) {
-        Update-PhaseBar 'Active Directory Enumeration'
+        if (-not $Quiet) { Write-Host "[Phase 6] Active Directory enumeration..." -ForegroundColor Cyan }
         $adInfo = Get-ADEnvironmentInfo
         if ($adInfo.Available -and -not $Quiet) {
             Write-Host "  Domain : $($adInfo.DomainName) ($($adInfo.FunctionalLevel))" -ForegroundColor Green
@@ -1417,7 +1356,7 @@ process {
     #region Phase 7: Security Observations
     $allSecurityFlags = [System.Collections.Generic.List[object]]::new()
     if ($EnableSecurityObs) {
-        Update-PhaseBar 'Security Observations' "$(@($AllResults | Where-Object Status -eq 'Online').Count) devices"
+        if (-not $Quiet) { Write-Host "[Phase 7] Security observations..." -ForegroundColor Cyan }
         $allSecurityFlags = Get-SecurityObservations -Devices @($AllResults | Where-Object { $_.Status -eq 'Online' }) -SSLResults $sslResults
 
         # Group by severity for summary
@@ -1433,12 +1372,6 @@ process {
 }
 
 end {
-    # Dismiss all progress bars before writing summary output
-    if (-not $Quiet) {
-        Write-Progress -Id 1 -Completed -ErrorAction SilentlyContinue
-        Write-Progress -Id 0 -Activity "YW Network Discovery" -Completed -ErrorAction SilentlyContinue
-    }
-
     $onlineCount  = @($AllResults | Where-Object { $_.Status -eq 'Online' }).Count
     $elapsed      = [math]::Round(((Get-Date) - $startTime).TotalSeconds, 1)
 
@@ -1462,7 +1395,7 @@ end {
         }
         if ($EnableSSL) {
             $expiring = @($sslResults | Where-Object { $_.DaysRemaining -ne $null -and $_.DaysRemaining -le 30 }).Count
-            Write-Host "SSL Certs Checked:    $(@($sslResults).Count) | Expiring <=30d: $expiring"
+            Write-Host "SSL Certs Checked:    $(@($sslResults).Count) | Expiring ≤30d: $expiring"
         }
         if ($EnableAD -and $adInfo.Available) {
             Write-Host "AD Domain:            $($adInfo.DomainName) | Users: $($adInfo.UserCount) | Computers: $($adInfo.ComputerCount)"
@@ -1638,7 +1571,7 @@ end {
   <div class="card gray"><div class="num">$printerCount</div><div class="lbl">Printers</div></div>
   <div class="card $(if($dcCount -gt 0){'blue'}else{'gray'})"><div class="num">$dcCount</div><div class="lbl">Domain Controllers</div></div>
   <div class="card $(if($totalIssues -gt 0){'red'}else{'green'})"><div class="num">$totalIssues</div><div class="lbl">Security Findings</div></div>
-  <div class="card $(if($sslExpCount -gt 0){'yellow'}else{'green'})"><div class="num">$sslExpCount</div><div class="lbl">SSL Expiring &lt;=30d</div></div>
+  <div class="card $(if($sslExpCount -gt 0){'yellow'}else{'green'})"><div class="num">$sslExpCount</div><div class="lbl">SSL Expiring ≤30d</div></div>
 </div>
 "@
 
