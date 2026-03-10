@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 
 from graph_auth import GraphAuthError, load_credentials_from_config
 from graph_mailer import GraphMailer, GraphMailerError, load_mailer_from_config
+from hatz_ai import get_hatz_insights
 from report_generator import build_csv_attachment, build_discovery_report, build_error_email
 
 # Paths
@@ -444,10 +445,25 @@ def main():
         if _shutdown_requested:
             logger.warning("Shutdown requested during scan. Sending partial results...")
 
+        # ── Hatz AI insights (optional) ──────────────────────────────────────
+        hatz_key = config.get("hatz_ai", {}).get("api_key", "")
+        ai_insights = None
+        if hatz_key:
+            logger.info("Hatz AI: requesting AI insights...")
+            ai_start = time.time()
+            ai_insights = get_hatz_insights(scan_results, hatz_key)
+            ai_duration = time.time() - ai_start
+            if ai_insights:
+                logger.info(f"Hatz AI: insights generated in {ai_duration:.1f}s.")
+            else:
+                logger.info(f"Hatz AI: no insights returned ({ai_duration:.1f}s).")
+        else:
+            logger.info("Hatz AI: API key not configured — skipping AI insights.")
+
         # Generate report
         logger.info("Generating discovery report...")
         report_start = time.time()
-        subject, html_body = build_discovery_report(scan_results, config)
+        subject, html_body = build_discovery_report(scan_results, config, ai_insights=ai_insights)
         report_duration = time.time() - report_start
 
         html_size_mb = len(html_body.encode("utf-8")) / (1024 * 1024)

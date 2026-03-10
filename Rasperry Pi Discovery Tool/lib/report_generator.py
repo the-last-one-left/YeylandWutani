@@ -8,6 +8,7 @@ branding and Yeyland Wutani tooling attribution.
 """
 
 import csv
+import html
 import io
 import json
 import logging
@@ -2444,7 +2445,102 @@ def _build_topology_diagram_section(topology_diagram: dict, company_color: str) 
 
 # ── Main report builder ────────────────────────────────────────────────────
 
-def build_discovery_report(scan_results: dict, config: dict) -> tuple:
+def _build_ai_insights_section(ai_insights: str, company_color: str) -> str:
+    """
+    Render the Hatz AI insights block as an HTML email section.
+    Converts markdown headings/bullets to styled HTML.
+    """
+    if not ai_insights:
+        return ""
+
+    import re as _re
+
+    # Convert markdown to simple HTML
+    lines = ai_insights.splitlines()
+    html_lines = []
+    in_list = False
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append('<div style="height:6px;"></div>')
+            continue
+
+        # H2 heading
+        if stripped.startswith("## "):
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            heading_text = html.escape(stripped[3:])
+            html_lines.append(
+                f'<div style="font-size:14px; font-weight:bold; color:{company_color}; '
+                f'margin:12px 0 6px 0; border-bottom:1px solid #f0f0f0; padding-bottom:4px;">'
+                f'{heading_text}</div>'
+            )
+            continue
+
+        # Numbered list item
+        m = _re.match(r"^(\d+)\.\s+(.*)", stripped)
+        if m:
+            if in_list:
+                html_lines.append("</ul>")
+                in_list = False
+            html_lines.append(
+                f'<div style="padding:2px 0 2px 16px; color:#333; font-size:13px;">'
+                f'<strong style="color:{company_color};">{html.escape(m.group(1))}.</strong> '
+                f'{html.escape(m.group(2))}</div>'
+            )
+            continue
+
+        # Bullet list item
+        if stripped.startswith(("- ", "* ", "• ")):
+            if not in_list:
+                html_lines.append(
+                    '<ul style="margin:4px 0 4px 0; padding-left:20px; '
+                    'color:#333; font-size:13px;">'
+                )
+                in_list = True
+            html_lines.append(
+                f'<li style="padding:2px 0;">{html.escape(stripped[2:])}</li>'
+            )
+            continue
+
+        # Plain text paragraph
+        if in_list:
+            html_lines.append("</ul>")
+            in_list = False
+        html_lines.append(
+            f'<p style="margin:4px 0; color:#333; font-size:13px;">'
+            f'{html.escape(stripped)}</p>'
+        )
+
+    if in_list:
+        html_lines.append("</ul>")
+
+    body_html = "\n".join(html_lines)
+
+    return f"""
+  <!-- ═══ AI INSIGHTS ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#129302; AI Insights
+        <span style="font-size:11px; font-weight:normal; color:#888; margin-left:8px;">
+          Powered by Hatz AI &bull; {html.escape("claude-opus-4-6")}
+        </span>
+      </h2>
+      <div style="background:#f8f9ff; border:1px solid #dde2ff; border-radius:6px; padding:16px 20px;">
+        {body_html}
+      </div>
+    </td>
+  </tr>
+"""
+
+
+def build_discovery_report(scan_results: dict, config: dict, ai_insights: Optional[str] = None) -> tuple:
     """
     Build subject + full HTML email report from scan_results dict.
     Returns (subject: str, html: str).
@@ -2526,6 +2622,7 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
     category_cards = _build_category_cards(summary, company_color)
     services_table = _build_services_table(summary)
     msp_summary = _build_msp_summary(hosts, summary, recon, company_color)
+    ai_insights_section = _build_ai_insights_section(ai_insights or "", company_color)
     ad_section = _build_ad_section(hosts, company_color)
 
     # Extended discovery sections
@@ -2647,6 +2744,8 @@ def build_discovery_report(scan_results: dict, config: dict) -> tuple:
       </table>
     </td>
   </tr>
+
+  {ai_insights_section}
 
   <!-- ═══ NETWORK OVERVIEW ═══ -->
   <tr>

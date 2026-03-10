@@ -505,6 +505,16 @@ run_config_wizard() {
     COMPANY_TAGLINE="$(read_tty)"
     COMPANY_TAGLINE="${COMPANY_TAGLINE:-Building Better Systems}"
 
+    echo ""
+    echo "  ── Hatz AI Integration (optional) ──────────────────────────────"
+    echo "  Hatz AI enriches your discovery reports with AI-generated security"
+    echo "  insights (key findings, recommended actions, positive observations)."
+    echo "  Get a free API key at: https://ai.hatz.ai  (Admin Dashboard > Settings)"
+    echo "  Leave blank to skip — AI insights can be enabled later via update-config.sh"
+    echo ""
+    prompt "Hatz AI API key (press Enter to skip):"
+    HATZ_AI_KEY="$(read_tty)"
+
     # Escape JSON special characters in user input (backslash and double-quote)
     # to prevent invalid config.json from secrets containing these characters.
     json_escape() { printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g'; }
@@ -517,6 +527,7 @@ run_config_wizard() {
     COMPANY_NAME="$(json_escape "${COMPANY_NAME}")"
     COMPANY_COLOR="$(json_escape "${COMPANY_COLOR}")"
     COMPANY_TAGLINE="$(json_escape "${COMPANY_TAGLINE}")"
+    HATZ_AI_KEY="$(json_escape "${HATZ_AI_KEY:-}")"
 
     # Write config.json from template + user input
     cat > "${CONFIG_FILE}" << EOF
@@ -587,6 +598,9 @@ run_config_wizard() {
     "enable_nse_vulners": true,
     "enable_testssl": true,
     "testssl_ports": [443, 8443, 636, 993, 995],
+    "testssl_timeout": 30,
+    "testssl_connect_timeout": 5,
+    "testssl_scan_budget": 300,
     "enable_nikto": true,
     "nikto_max_time": 300,
     "nikto_scan_budget": 1800,
@@ -608,6 +622,9 @@ run_config_wizard() {
     "company_color": "${COMPANY_COLOR}",
     "tagline": "${COMPANY_TAGLINE}",
     "include_raw_data": false
+  },
+  "hatz_ai": {
+    "api_key": "${HATZ_AI_KEY}"
   },
   "system": {
     "device_name": "${DEVICE_NAME}",
