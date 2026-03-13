@@ -928,7 +928,7 @@ $timestamp = Get-Date -Format 'yyyy-MM-dd HH:mm:ss'
 $fileStamp = Get-Date -Format 'yyyyMMdd_HHmmss'
 
 # Logo: embed file if provided, otherwise render text wordmark
-$logoHtml = '<span style="font-size:26px;font-weight:900;letter-spacing:2px;color:#FF6600;">YEYLAND WUTANI</span><span style="color:#8899AA;font-size:12px;margin-left:6px;letter-spacing:1px;">LLC</span>'
+$logoHtml = '<span style="font-size:26px;font-weight:900;letter-spacing:2px;color:white;">YEYLAND WUTANI</span><span style="color:rgba(255,255,255,0.7);font-size:12px;margin-left:6px;letter-spacing:1px;">LLC</span>'
 if ($LogoPath -and (Test-Path $LogoPath)) {
     $logoBytes  = [System.IO.File]::ReadAllBytes($LogoPath)
     $logoBase64 = [Convert]::ToBase64String($logoBytes)
@@ -942,18 +942,24 @@ $flowDetailSections = [System.Text.StringBuilder]::new()
 
 foreach ($fd in $flowData) {
     $stateClass = switch ($fd.State) {
-        'Started'   { 'state-started' }
-        'Stopped'   { 'state-stopped' }
-        'Suspended' { 'state-suspended' }
+        'Started'   { 'badge-success' }
+        'Stopped'   { 'badge-danger' }
+        'Suspended' { 'badge-warning' }
+        default     { 'badge-neutral' }
+    }
+    $cardClass = switch ($fd.State) {
+        'Started'   { 'card-started' }
+        'Stopped'   { 'card-stopped' }
+        'Suspended' { 'card-suspended' }
         default     { '' }
     }
     $enabledIcon  = if ($fd.Enabled) { 'Enabled' }  else { 'Disabled' }
-    $enabledClass = if ($fd.Enabled) { 'enabled-yes' } else { 'enabled-no' }
+    $enabledClass = if ($fd.Enabled) { 'badge-success' } else { 'badge-danger' }
     $shortId      = $fd.FlowId.Substring(0, [Math]::Min(10, $fd.FlowId.Length)) + '...'
     $parseWarning = if (-not $fd.DefinitionParsed) { '<span class="badge badge-warn">No Definition</span> ' } else { '' }
 
     [void]$flowDetailSections.Append(@"
-    <div class="flow-card" data-state="$($fd.State)" data-enabled="$($fd.Enabled)">
+    <div class="flow-card $cardClass" data-state="$($fd.State)" data-enabled="$($fd.Enabled)">
         <div class="flow-header" onclick="toggleDetail('$($fd.FlowId)')">
             <div class="flow-header-left">
                 <span class="flow-toggle" id="toggle-$($fd.FlowId)">&#9654;</span>
@@ -979,7 +985,7 @@ foreach ($fd in $flowData) {
                     <table class="detail-table">
                         <tr><td class="dt-label">Flow ID</td><td>$($fd.FlowId)</td></tr>
                         <tr><td class="dt-label">Environment</td><td>$($fd.EnvironmentName)</td></tr>
-                        <tr><td class="dt-label">State</td><td><span class="$stateClass">$($fd.State)</span></td></tr>
+                        <tr><td class="dt-label">State</td><td><span class="badge $stateClass">$($fd.State)</span></td></tr>
                         <tr><td class="dt-label">Enabled</td><td>$($fd.Enabled)</td></tr>
                         <tr><td class="dt-label">Created</td><td>$($fd.CreatedTime)</td></tr>
                         <tr><td class="dt-label">Modified</td><td>$($fd.LastModifiedTime)</td></tr>
@@ -988,7 +994,7 @@ foreach ($fd in $flowData) {
                         <tr><td class="dt-label">Solution-Aware</td><td>$($fd.IsSolutionAware)</td></tr>
                         <tr><td class="dt-label">Template</td><td>$($fd.TemplateId)</td></tr>
                         <tr><td class="dt-label">Suspension</td><td>$($fd.SuspensionReason)$(if($fd.SuspensionTime){" ($($fd.SuspensionTime))"})</td></tr>
-                        <tr><td class="dt-label">Definition</td><td>$(if($fd.DefinitionParsed){'Parsed'}else{'<span style="color:#FBBF24;">Unavailable (summary only)</span>'})</td></tr>
+                        <tr><td class="dt-label">Definition</td><td>$(if($fd.DefinitionParsed){'<span class="badge badge-success">Parsed</span>'}else{'<span class="badge badge-warning">Summary Only</span>'})</td></tr>
                     </table>
                 </div>
 "@)
@@ -1064,7 +1070,7 @@ foreach ($fd in $flowData) {
         }
         [void]$flowDetailSections.Append('</table>')
     } else {
-        [void]$flowDetailSections.Append('<p style="color:#FBBF24;padding:10px;">Action tree unavailable - flow definition could not be parsed. This may occur for flows in restricted environments or with non-standard definitions.</p>')
+        [void]$flowDetailSections.Append('<p class="info-note">Action tree unavailable - flow definition could not be parsed via the admin API. Trigger and action counts are sourced from definitionSummary where available.</p>')
     }
     [void]$flowDetailSections.Append('</div>')
 
@@ -1110,12 +1116,12 @@ $envRows = ($envBreakdown | ForEach-Object {
 $stateBreakdown = $flowData | Group-Object -Property State | Sort-Object Count -Descending
 $stateRows = ($stateBreakdown | ForEach-Object {
     $sc = switch ($_.Name) {
-        'Started'   { 'state-started' }
-        'Stopped'   { 'state-stopped' }
-        'Suspended' { 'state-suspended' }
-        default     { '' }
+        'Started'   { 'badge-success' }
+        'Stopped'   { 'badge-danger' }
+        'Suspended' { 'badge-warning' }
+        default     { 'badge-neutral' }
     }
-    "<tr><td><span class='$sc'>$($_.Name)</span></td><td class='num-cell'>$($_.Count)</td></tr>"
+    "<tr><td><span class='badge $sc'>$($_.Name)</span></td><td class='num-cell'>$($_.Count)</td></tr>"
 }) -join "`n"
 
 
@@ -1128,98 +1134,115 @@ $html = @"
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>Power Automate Flow Report - Yeyland Wutani</title>
 <style>
+    :root { --yw-orange: #FF6600; --yw-dark-orange: #CC5200; --yw-light-orange: #FFF3E6; --yw-grey: #6B7280; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #0A0E1A; color: #C8D0DC; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; }
-    a { color: #FF6600; }
+    body { background: #F5F5F5; color: #333; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; font-size: 13px; line-height: 1.5; }
+    a { color: var(--yw-orange); }
 
     /* Header */
-    .header { display: flex; justify-content: space-between; align-items: center; padding: 18px 30px; background: linear-gradient(135deg, #0D1224 0%, #131A2E 100%); border-bottom: 2px solid #FF6600; }
+    .header { display: flex; justify-content: space-between; align-items: center; padding: 20px 30px; background: linear-gradient(135deg, var(--yw-orange), var(--yw-dark-orange)); color: white; }
     .header-left { display: flex; align-items: center; gap: 14px; }
     .header-right { text-align: right; }
-    .report-title { font-size: 18px; font-weight: 700; color: #FF6600; }
-    .report-sub { font-size: 11px; color: #667788; margin-top: 3px; }
+    .report-title { font-size: 18px; font-weight: 700; color: white; }
+    .report-sub { font-size: 11px; color: rgba(255,255,255,0.75); margin-top: 3px; }
 
-    .container { max-width: 1800px; margin: 0 auto; padding: 20px 30px; }
+    .container { max-width: 1800px; margin: 0 auto; padding: 24px 30px; }
 
-    .section-title { color: #FF6600; font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; margin-top: 24px; padding-bottom: 4px; border-bottom: 1px solid #1E2740; }
+    .section-title { color: var(--yw-dark-orange); font-size: 14px; font-weight: 700; text-transform: uppercase; letter-spacing: 1.5px; margin-bottom: 12px; margin-top: 24px; padding-bottom: 6px; border-bottom: 2px solid var(--yw-orange); }
 
     /* Summary cards */
     .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 12px; margin-bottom: 20px; }
-    .summary-card { background: #111827; border: 1px solid #1E2740; border-radius: 6px; padding: 14px; text-align: center; }
-    .summary-card .num { font-size: 28px; font-weight: 800; color: #FF6600; }
-    .summary-card .label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #667788; margin-top: 4px; }
+    .summary-card { background: white; border-radius: 8px; padding: 14px; text-align: center; box-shadow: 0 2px 6px rgba(0,0,0,0.08); border-left: 4px solid var(--yw-orange); }
+    .summary-card.warning { border-left-color: #f0ad4e; }
+    .summary-card.danger  { border-left-color: #dc3545; }
+    .summary-card .num { font-size: 28px; font-weight: 800; color: var(--yw-orange); }
+    .summary-card .label { font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #666; margin-top: 4px; }
 
     /* Breakdown tables */
     .breakdown-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 20px; }
-    .breakdown-box { background: #111827; border: 1px solid #1E2740; border-radius: 6px; overflow: hidden; }
-    .breakdown-box .bb-title { background: #1A2236; color: #FF6600; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 8px 14px; }
+    .breakdown-box { background: white; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.08); }
+    .breakdown-box .bb-title { background: var(--yw-light-orange); color: var(--yw-dark-orange); font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 1px; padding: 10px 16px; border-bottom: 2px solid var(--yw-orange); }
     .breakdown-box table { width: 100%; border-collapse: collapse; }
-    .breakdown-box td { padding: 6px 14px; border-top: 1px solid #1A2236; }
-    .num-cell { text-align: right; font-weight: 700; color: #FF6600; }
+    .breakdown-box td { padding: 7px 16px; border-top: 1px solid #eee; }
+    .num-cell { text-align: right; font-weight: 700; color: var(--yw-orange); }
 
     /* Filter bar */
     .filter-bar { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
-    .filter-bar input, .filter-bar select { background: #111827; color: #C8D0DC; border: 1px solid #1E2740; border-radius: 4px; padding: 6px 10px; font-size: 12px; }
+    .filter-bar input, .filter-bar select { background: white; color: #333; border: 1px solid #ddd; border-radius: 4px; padding: 6px 10px; font-size: 12px; }
+    .filter-bar input:focus, .filter-bar select:focus { outline: none; border-color: var(--yw-orange); }
     .filter-bar input { width: 280px; }
-    .flow-count { margin-left: auto; color: #667788; font-size: 12px; }
+    .flow-count { margin-left: auto; color: #888; font-size: 12px; }
+    .btn { border-radius: 4px; padding: 5px 14px; cursor: pointer; font-size: 12px; font-weight: 600; border: none; }
+    .btn-primary { background: var(--yw-orange); color: white; }
+    .btn-secondary { background: white; color: #555; border: 1px solid #ddd; }
+    .btn:hover { opacity: 0.85; }
 
     /* Flow cards */
-    .flow-card { background: #111827; border: 1px solid #1E2740; border-radius: 6px; margin-bottom: 6px; overflow: hidden; }
+    .flow-card { background: white; border-radius: 8px; margin-bottom: 8px; overflow: hidden; box-shadow: 0 2px 6px rgba(0,0,0,0.06); border-left: 4px solid #ddd; }
+    .flow-card.card-started   { border-left-color: #28a745; }
+    .flow-card.card-stopped   { border-left-color: #dc3545; }
+    .flow-card.card-suspended { border-left-color: #f0ad4e; }
     .flow-header { display: flex; justify-content: space-between; align-items: center; padding: 10px 16px; cursor: pointer; transition: background 0.15s; }
-    .flow-header:hover { background: #1A2236; }
+    .flow-header:hover { background: #FFF7F2; }
     .flow-header-left { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
     .flow-header-right { display: flex; align-items: center; gap: 16px; flex-shrink: 0; }
-    .flow-toggle { color: #FF6600; font-size: 11px; transition: transform 0.2s; display: inline-block; }
+    .flow-toggle { color: var(--yw-orange); font-size: 11px; transition: transform 0.2s; display: inline-block; }
     .flow-toggle.open { transform: rotate(90deg); }
-    .flow-title { font-weight: 600; color: #E0E6EE; font-size: 13px; }
-    .flow-meta { color: #556677; font-size: 11px; }
+    .flow-title { font-weight: 600; color: #222; font-size: 13px; }
+    .flow-meta { color: #888; font-size: 11px; }
 
     /* Badges */
-    .badge { font-size: 10px; padding: 2px 8px; border-radius: 3px; font-weight: 600; }
-    .state-started   { background: #0D3320; color: #34D399; }
-    .state-stopped   { background: #3B1111; color: #F87171; }
-    .state-suspended { background: #3B2E11; color: #FBBF24; }
-    .enabled-yes     { color: #34D399; }
-    .enabled-no      { color: #F87171; }
-    .badge-actions   { background: #1A2236; color: #8899AA; }
-    .badge-warn      { background: #3B2E11; color: #FBBF24; }
+    .badge { display: inline-block; font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 600; white-space: nowrap; }
+    .badge-success { background: #d4edda; color: #155724; }
+    .badge-danger  { background: #f8d7da; color: #721c24; }
+    .badge-warning { background: #fff3cd; color: #856404; }
+    .badge-neutral { background: #e2e3e5; color: #383d41; }
+    .badge-actions { background: #e8eaf0; color: #555; }
+    .badge-warn    { background: #fff3cd; color: #856404; }
+
+    /* Info note */
+    .info-note { background: var(--yw-light-orange); border-left: 3px solid var(--yw-orange); padding: 10px 14px; font-size: 12px; color: var(--yw-dark-orange); border-radius: 0 4px 4px 0; margin: 4px 0; }
 
     /* Detail panel */
-    .flow-detail { padding: 16px; border-top: 1px solid #1E2740; background: #0D1224; }
+    .flow-detail { padding: 16px; border-top: 1px solid #eee; background: #FAFAFA; }
     .detail-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
-    .detail-section { background: #111827; border: 1px solid #1E2740; border-radius: 6px; padding: 14px; margin-bottom: 12px; }
+    .detail-section { background: white; border: 1px solid #eee; border-radius: 6px; padding: 14px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
     .detail-section.full-width { grid-column: 1 / -1; }
-    .detail-section h4 { color: #FF6600; font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 1px solid #1E2740; }
+    .detail-section h4 { color: var(--yw-dark-orange); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 10px; padding-bottom: 4px; border-bottom: 2px solid var(--yw-light-orange); }
 
     .detail-table { width: 100%; border-collapse: collapse; }
-    .detail-table td { padding: 4px 0; vertical-align: top; }
-    .dt-label { color: #667788; font-weight: 600; width: 130px; padding-right: 12px; }
+    .detail-table td { padding: 5px 0; vertical-align: top; }
+    .dt-label { color: #666; font-weight: 600; width: 130px; padding-right: 12px; }
 
     /* Action table */
     .action-table { width: 100%; border-collapse: collapse; font-size: 12px; }
-    .action-table th { background: #1A2236; color: #FF6600; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 7px 10px; text-align: left; position: sticky; top: 0; }
-    .action-table td { padding: 5px 10px; border-top: 1px solid #1A2236; vertical-align: top; word-break: break-word; }
-    .action-table tr:hover { background: #151D30; }
+    .action-table th { background: var(--yw-light-orange); color: var(--yw-dark-orange); font-size: 10px; text-transform: uppercase; letter-spacing: 1px; padding: 7px 10px; text-align: left; position: sticky; top: 0; border-bottom: 2px solid var(--yw-orange); }
+    .action-table td { padding: 5px 10px; border-top: 1px solid #f0f0f0; vertical-align: top; word-break: break-word; }
+    .action-table tr:hover { background: #FFF7F2; }
 
-    .row-branch td    { background: #0F1A2A; color: #6B8DB5; font-style: italic; }
-    .row-condition td { border-left: 3px solid #FBBF24; }
-    .row-scope td     { border-left: 3px solid #60A5FA; }
-    .row-loop td      { border-left: 3px solid #A78BFA; }
-    .row-terminate td { border-left: 3px solid #F87171; }
-    .ra-cell, .expr-cell { font-size: 11px; color: #8899AA; max-width: 200px; }
+    .row-branch td    { background: #F8F8F8; color: #888; font-style: italic; }
+    .row-condition td { border-left: 3px solid #f0ad4e; }
+    .row-scope td     { border-left: 3px solid #4a90d9; }
+    .row-loop td      { border-left: 3px solid #9B59B6; }
+    .row-terminate td { border-left: 3px solid #dc3545; }
+    .ra-cell, .expr-cell { font-size: 11px; color: #888; max-width: 200px; }
 
-    .run-success   { color: #34D399; font-weight: 600; }
-    .run-failed    { color: #F87171; font-weight: 600; }
-    .run-cancelled { color: #FBBF24; font-weight: 600; }
-    .run-running   { color: #60A5FA; font-weight: 600; }
-    .tier-premium  { color: #FBBF24; font-weight: 700; }
+    .run-success   { color: #28a745; font-weight: 600; }
+    .run-failed    { color: #dc3545; font-weight: 600; }
+    .run-cancelled { color: #f0ad4e; font-weight: 600; }
+    .run-running   { color: #4a90d9; font-weight: 600; }
+    .tier-premium  { color: #f0ad4e; font-weight: 700; }
 
     .var-list { list-style: none; padding: 0; }
-    .var-list li { padding: 3px 0; color: #A0AABB; }
-    .var-list li::before { content: '> '; color: #FF6600; }
+    .var-list li { padding: 3px 0; color: #555; }
+    .var-list li::before { content: '> '; color: var(--yw-orange); }
+
+    /* Footer */
+    .footer { text-align: center; padding: 24px; color: #888; font-size: 11px; margin-top: 20px; border-top: 1px solid #ddd; }
+    .footer .tagline { color: var(--yw-orange); font-weight: 600; font-size: 13px; margin-bottom: 4px; }
 
     @media print {
-        body { background: #FFF; color: #222; }
+        body { background: #FFF; }
         .flow-detail { display: block !important; }
         .filter-bar { display: none; }
     }
@@ -1231,7 +1254,7 @@ $html = @"
     <div class="header-left">$logoHtml</div>
     <div class="header-right">
         <div class="report-title">Power Automate Flow Report</div>
-        <div class="report-sub">Generated $timestamp | Building Better Systems</div>
+        <div class="report-sub">Generated $timestamp</div>
     </div>
 </div>
 
@@ -1240,14 +1263,14 @@ $html = @"
     <div class="summary-grid">
         <div class="summary-card"><div class="num">$totalFlows</div><div class="label">Total Flows</div></div>
         <div class="summary-card"><div class="num">$enabledCount</div><div class="label">Enabled</div></div>
-        <div class="summary-card"><div class="num">$disabledCount</div><div class="label">Disabled</div></div>
+        <div class="summary-card danger"><div class="num">$disabledCount</div><div class="label">Disabled</div></div>
         <div class="summary-card"><div class="num">$startedCount</div><div class="label">Running</div></div>
-        <div class="summary-card"><div class="num">$suspendedCount</div><div class="label">Suspended</div></div>
+        <div class="summary-card warning"><div class="num">$suspendedCount</div><div class="label">Suspended</div></div>
         <div class="summary-card"><div class="num">$totalActions</div><div class="label">Total Actions</div></div>
         <div class="summary-card"><div class="num">$envCount</div><div class="label">Environments</div></div>
         <div class="summary-card"><div class="num">$creatorCount</div><div class="label">Unique Creators</div></div>
         <div class="summary-card"><div class="num">$solutionCount</div><div class="label">Solution-Aware</div></div>
-        <div class="summary-card"><div class="num">$premiumCount</div><div class="label">Premium Connector</div></div>
+        <div class="summary-card warning"><div class="num">$premiumCount</div><div class="label">Premium Connector</div></div>
         <div class="summary-card"><div class="num">$parsedCount</div><div class="label">Definitions Parsed</div></div>
     </div>
 
@@ -1270,12 +1293,17 @@ $html = @"
             <option value="True">Enabled</option>
             <option value="False">Disabled</option>
         </select>
-        <button onclick="expandAll()" style="background:#1A2236;color:#FF6600;border:1px solid #FF6600;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px;">Expand All</button>
-        <button onclick="collapseAll()" style="background:#1A2236;color:#8899AA;border:1px solid #1E2740;border-radius:4px;padding:5px 12px;cursor:pointer;font-size:11px;">Collapse All</button>
+        <button class="btn btn-primary" onclick="expandAll()">Expand All</button>
+        <button class="btn btn-secondary" onclick="collapseAll()">Collapse All</button>
         <span class="flow-count" id="flowCount">$totalFlows flow(s)</span>
     </div>
 
     $($flowDetailSections.ToString())
+</div>
+
+<div class="footer">
+    <div class="tagline">Building Better Systems</div>
+    Yeyland Wutani LLC &mdash; Power Automate Flow Report &mdash; Generated $timestamp
 </div>
 
 <script>
