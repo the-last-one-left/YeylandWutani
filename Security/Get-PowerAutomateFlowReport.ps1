@@ -42,8 +42,19 @@
     Author  : Escalations Team - Pacific Office Automation
     Client  : Yeyland Wutani LLC
     Date    : 2026-03-13
-    Version : 2.1
+    Version : 2.2
     Module  : Microsoft.PowerApps.Administration.PowerShell
+
+    CHANGELOG v2.2:
+      - Fixed: Trigger type, connector, and action count now populated for all flows
+      - Fixed: Root cause 1 - admin API does not return properties.definition at all
+               (hard API limitation; full definition only available to flow owners)
+      - Fixed: Root cause 2 - bulk Get-AdminFlow omits definitionSummary and
+               connectionReferences; individual flow GET is now fetched as fallback
+      - Fixed: definitionSummary trigger parsing now extracts connector name from
+               id path (/providers/.../shared_xyz → xyz) and handles Recurrence/Request
+      - Fixed: Simplified Get-FlowDefinitionViaRest; removed non-functional token
+               extraction approach from v2.2-beta
 
     CHANGELOG v2.1:
       - Fixed: Individual per-flow re-fetch to populate definition (triggers/actions)
@@ -139,14 +150,13 @@ function Resolve-FlowDefinition {
 function Get-FlowDefinitionViaRest {
     <#
     .SYNOPSIS
-        Fetches a flow's full definition via InvokeApi called in the admin
-        module's scope. InvokeApi is defined in Microsoft.PowerApps.AuthModule,
-        which is a nested dependency of the admin module. Calling it via
-        & $adminModule { } runs it with access to the module's internal session.
+        Attempts to fetch a flow's full definition (triggers + actions) via the
+        admin REST endpoint with $expand=properties.definition.
 
-        We do NOT import the maker module (Microsoft.PowerApps.PowerShell)
-        because it causes a Microsoft.Identity.Client version conflict when
-        both modules are loaded in the same session.
+        NOTE: The admin endpoint does not reliably return properties.definition
+        for flows not owned by the authenticated account. This is an API limitation.
+        When this returns $null the caller should fall back to definitionSummary,
+        which is populated by a separate individual-flow fetch in the main loop.
     .PARAMETER EnvironmentName
         The environment GUID (e.g. Default-xxxx-xxxx).
     .PARAMETER FlowName
@@ -157,35 +167,23 @@ function Get-FlowDefinitionViaRest {
         [string]$FlowName
     )
 
-    # Use the /scopes/admin/ path - the non-scoped endpoint only returns
-    # the full definition for flows owned by the calling user. Other users'
-    # flows return metadata only, which is why flows owned by a different
-    # account silently return without a definition node.
     $uri = "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$EnvironmentName/flows/$FlowName`?api-version=2016-11-01&`$expand=properties.definition"
 
     try {
-        # Call InvokeApi inside the admin module's scope so it can access
-        # the module-internal session and token. Arguments passed via param().
         $response = & $script:adminModule {
             param($u)
             InvokeApi -Method GET -Route $u
         } $uri
 
-        if (-not $response) {
-            Write-Warning "  REST: null response for $FlowName."
-            return $null
-        }
+        if (-not $response) { return $null }
 
         $rawDef = $response.properties.definition
-        if (-not $rawDef) {
-            Write-Warning "  REST: definition node absent for $FlowName."
-            return $null
-        }
+        if (-not $rawDef) { return $null }
 
         return Resolve-FlowDefinition -Definition $rawDef
     }
     catch {
-        Write-Warning "  REST fetch failed for $FlowName : $_"
+        Write-Verbose "  REST fetch failed for $FlowName : $_"
         return $null
     }
 }
@@ -735,6 +733,23 @@ foreach ($flow in $flows) {
     if (-not $def) {
         Write-Warning "  No parseable definition for $($flow.DisplayName). Falling back to definitionSummary."
         $defFallback = $true
+
+        # The bulk Get-AdminFlow list omits definitionSummary and connectionReferences.
+        # Fetch the individual flow via the admin endpoint (no expand needed) - this
+        # single-flow GET reliably returns both fields, enabling the fallback to work.
+        $singleUri = "https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/$($flow.EnvironmentName)/flows/$($flow.FlowName)`?api-version=2016-11-01"
+        try {
+            $singleResponse = & $script:adminModule {
+                param($u)
+                InvokeApi -Method GET -Route $u
+            } $singleUri
+            if ($singleResponse -and $singleResponse.properties) {
+                $props = $singleResponse.properties
+            }
+        }
+        catch {
+            Write-Verbose "  Could not fetch individual flow properties: $_"
+        }
     } else {
         Write-Host "       Definition parsed OK." -ForegroundColor DarkGray
     }
@@ -749,20 +764,43 @@ foreach ($flow in $flows) {
     }
     $triggerDetail = Get-TriggerDetail -Triggers $triggerSrc
 
-    # Partial fallback from definitionSummary when REST fetch failed
+    # Partial fallback from definitionSummary when REST fetch failed.
+    # The individual flow fetch (above) populates $props.definitionSummary with
+    # trigger type, connector ID, and operation from the admin endpoint.
     if ($defFallback -and $props.definitionSummary -and $props.definitionSummary.triggers) {
         $summaryTrigger = $props.definitionSummary.triggers | Select-Object -First 1
         if ($summaryTrigger) {
-            $triggerConnector = if ($summaryTrigger.swaggerOperationId) {
-                $summaryTrigger.swaggerOperationId
-            } else { '-' }
+            $sumType = if ($summaryTrigger.type) { $summaryTrigger.type } else { 'Unknown' }
+
+            # id is a full API path (/providers/Microsoft.PowerApps/apis/shared_xyz)
+            # or a short name (manual). Extract the meaningful last segment.
+            $sumConnector = '-'
+            if ($summaryTrigger.id) {
+                $idParts = ($summaryTrigger.id -split '/')
+                $rawId = $idParts[-1]                     # e.g. shared_office365users or manual
+                $sumConnector = $rawId -replace '^shared_', ''  # strip shared_ prefix
+            }
+
+            # For built-in trigger types, override with friendlier names
+            switch ($sumType) {
+                'Recurrence' { $sumConnector = 'Schedule' }
+                'Request'    { $sumConnector = 'Request' }
+                'OpenApiConnection' {
+                    if ($summaryTrigger.swaggerOperationId) {
+                        $sumConnector = if ($sumConnector -and $sumConnector -ne '-') { $sumConnector } else { '-' }
+                    }
+                }
+            }
+
+            $sumOperation = if ($summaryTrigger.swaggerOperationId) { $summaryTrigger.swaggerOperationId } else { $sumType }
+
             $triggerDetail = [PSCustomObject]@{
-                Name        = if ($summaryTrigger.id)   { $summaryTrigger.id }   else { 'Unknown' }
-                Type        = if ($summaryTrigger.type) { $summaryTrigger.type } else { 'Unknown' }
-                Connector   = $triggerConnector
-                Operation   = '-'
+                Name        = $sumType
+                Type        = $sumType
+                Connector   = $sumConnector
+                Operation   = $sumOperation
                 Recurrence  = '-'
-                Description = '(definitionSummary only - REST fetch failed or token expired)'
+                Description = '(definitionSummary - full definition unavailable via admin API)'
                 Inputs      = '-'
             }
         }
