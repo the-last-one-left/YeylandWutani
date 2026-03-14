@@ -74,7 +74,7 @@ def _build_scan_summary_text(scan_results: dict) -> str:
         parts = [
             host.get("ip", "?"),
             host.get("hostname", ""),
-            host.get("device_category", "Unknown"),
+            host.get("category", "Unknown"),
             host.get("os_guess", ""),
         ]
         ports = host.get("open_ports", [])
@@ -147,7 +147,22 @@ def get_hatz_insights(scan_results: dict, api_key: str) -> Optional[str]:
         "Brief note on what the network is doing well (1-3 items).\n\n"
         "Keep the total response under 600 words. Be specific — reference actual IPs, "
         "device types, or service names from the data. Avoid generic advice that doesn't "
-        "apply to the specific findings."
+        "apply to the specific findings.\n\n"
+        "IMPORTANT — OS fingerprint limitations to be aware of:\n"
+        "- nmap cannot reliably distinguish Windows 10 from Windows 11 via passive TCP/IP "
+        "fingerprinting; both produce identical network stack signatures. OS guesses shown "
+        "as 'Windows 10/11' are ambiguous — do NOT conclude the environment is running "
+        "unsupported Windows 10 builds unless other evidence (SMB dialect, service banners, "
+        "hostname patterns) confirms it. Phrase these as 'Windows 10/11 endpoints'.\n"
+        "- Windows Server classification is based on open port patterns (DC ports, RDP on "
+        "servers, etc.) and is generally reliable, but individual hosts may be "
+        "misclassified — treat categories as indicative, not definitive.\n"
+        "- Vendor/OUI data identifies the NIC manufacturer, not necessarily the device "
+        "type (e.g. an HP NIC does not mean a Windows PC — it could be a printer, "
+        "iLO management card, or thin client).\n"
+        "- If an OS guess contains multiple unrelated OS families (e.g. 'Windows 11 / "
+        "FreeBSD'), this is a low-confidence nmap fingerprint; treat the device category "
+        "as authoritative and do not flag the OS ambiguity as a security issue."
     )
 
     body = {

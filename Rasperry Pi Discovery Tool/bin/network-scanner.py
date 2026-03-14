@@ -988,6 +988,75 @@ def _rustscan_open_ports(ip: str, timeout: int = 60) -> list:
     return ports
 
 
+def _normalize_os_guess(raw: str) -> str:
+    """Normalize nmap OS guess strings to avoid common misidentifications.
+
+    nmap cannot distinguish Windows 10 from Windows 11 via TCP/IP fingerprinting
+    because they share the same network stack.  It produces combined entries like
+    "Microsoft Windows 10 1703 or Windows 11 21H2 (99%)" — which makes Win11
+    machines appear as old Win10 builds in reports and EOL matching.
+
+    This function collapses those ambiguous combined fingerprints into a clearer
+    "Windows 10/11" label and applies similar normalizations for other known
+    nmap ambiguities.
+
+    Other patterns handled:
+    - "Windows 10 XXXX or Windows 11 YYYY" → "Windows 10/11 (YYYY)"
+    - Single clean "Windows 11 XXXX" → "Windows 11 (XXXX)"
+    - "Windows Server 20XX" left as-is (nmap is reliable here)
+    - FreeBSD false-positive alternatives stripped from Windows results
+    """
+    if not raw:
+        return raw
+
+    # Split the comma-separated list of candidates (each may have a % score)
+    # e.g. "Microsoft Windows 10 1703 or Windows 11 21H2 (99%), Windows 11 21H2 (98%)"
+    candidates = [c.strip() for c in raw.split(",") if c.strip()]
+
+    # Collect unique OS families present in the top candidates (up to first 3)
+    has_win11 = False
+    has_win10 = False
+    has_win_server = False
+    latest_win11_build = ""
+
+    for cand in candidates[:4]:
+        clow = cand.lower()
+        if "windows server" in clow:
+            has_win_server = True
+        if "windows 11" in clow:
+            has_win11 = True
+            # Capture the build tag, e.g. "21H2", "22H2", "23H2"
+            m = re.search(r"windows 11\s+(\S+)", cand, re.IGNORECASE)
+            if m and not latest_win11_build:
+                latest_win11_build = m.group(1).rstrip(")")
+        # "Windows 10 XXXX or Windows 11" counts as both
+        if re.search(r"windows 10", clow) and "or windows 11" not in clow:
+            has_win10 = True
+        elif re.search(r"windows 10.*or.*windows 11", clow, re.IGNORECASE):
+            has_win10 = True
+            has_win11 = True
+            m = re.search(r"windows 11\s+(\S+)", cand, re.IGNORECASE)
+            if m and not latest_win11_build:
+                latest_win11_build = m.group(1).rstrip(")")
+
+    # Normalise Win10/Win11 ambiguity (the most common nmap confusion)
+    if has_win10 and has_win11 and not has_win_server:
+        build_tag = f" ({latest_win11_build})" if latest_win11_build else ""
+        return f"Windows 10/11{build_tag}"
+
+    # Clean Win11-only result
+    if has_win11 and not has_win10 and not has_win_server:
+        build_tag = f" ({latest_win11_build})" if latest_win11_build else ""
+        return f"Windows 11{build_tag}"
+
+    # For everything else, return the best (first) candidate only, stripped of the
+    # confidence percentage and "Microsoft" prefix to keep it concise.
+    best = candidates[0] if candidates else raw
+    best = re.sub(r"\s*\(\d+%\)\s*$", "", best).strip()
+    best = re.sub(r"^Microsoft\s+", "", best)
+    return best
+
+
 def _nmap_port_scan(
     ip: str,
     top_ports: int = 1000,
@@ -1039,7 +1108,11 @@ def _nmap_port_scan(
             if not result["os_guess"]:
                 og = re.search(r"OS guess(?:es)?: (.+)", line, re.IGNORECASE)
                 if og:
-                    result["os_guess"] = og.group(1).strip()[:100]
+                    # Capture generously (300 chars) to get all candidates, then
+                    # normalize to handle nmap's Win10/Win11 ambiguity and other
+                    # common combined fingerprints before storing.
+                    raw_guess = og.group(1).strip()[:300]
+                    result["os_guess"] = _normalize_os_guess(raw_guess)
 
     def _run(cmd: list) -> tuple:
         """Returns (stdout, stderr, timed_out)."""

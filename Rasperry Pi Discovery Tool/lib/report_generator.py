@@ -437,7 +437,7 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
         os_guess = host.get("os_guess", "")
         os_info = ""
         if os_guess:
-            os_info = f'<br><span style="color:#888; font-size:10px; font-style:italic;">OS: {os_guess[:50]}</span>'
+            os_info = f'<br><span style="color:#888; font-size:10px; font-style:italic;">OS: {os_guess[:80]}</span>'
 
         # SSL cert expiry
         ssl_cert = services.get("ssl_cert", {}) or {}
