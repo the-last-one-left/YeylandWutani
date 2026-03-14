@@ -15,6 +15,7 @@ Security assessment, threat detection, compliance tools, certificate management,
 | `Get-M365SecurityAnalysis.ps1` | Microsoft 365 security analysis: compromised account detection, sign-in analysis, MFA audit, inbox rules |
 | `Get-SPOSecurityReport.ps1` | SharePoint Online security assessment: permissions, external sharing, anonymous links |
 | `Get-FileShareSecurityReport.ps1` | Windows file share security audit: NTFS permissions, broken inheritance, orphaned SIDs |
+| `Get-PowerAutomateFlowReport.ps1` | Comprehensive Power Automate flow inventory report: full action trees, trigger details, connection references, run history, error handling configuration, and DLP classification hints. Generates YW-branded HTML with collapsible per-flow panels and companion CSV. |
 | `New-SQLTempAdmin.ps1` | SQL Server access recovery: create temporary sysadmin account when locked out of an instance |
 
 ---
@@ -651,6 +652,63 @@ After collecting data, click the **AI Analysis** button to send all CSV exports 
 
 ---
 
+## Get-PowerAutomateFlowReport.ps1
+
+Comprehensive Power Automate flow inventory and audit report for Microsoft 365 tenants. Retrieves every available detail about flows across the tenant using the Power Platform Admin module, generating a full picture of automation assets for governance, DLP review, and documentation.
+
+### What's Captured Per Flow
+
+| Category | Details |
+|----------|---------|
+| **Metadata** | State (enabled/suspended/deleted), sharing type, solution-awareness |
+| **Trigger** | Type, connector, recurrence schedule, input configuration |
+| **Action Tree** | Full nested structure including scopes, conditions, loops, and expressions |
+| **Connections** | Connection references and their current status |
+| **Run History** | Last N runs per flow with status |
+| **Error Handling** | `runAfter` / Configure Run After settings |
+| **DLP Hints** | Premium vs. standard connector classification |
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-EnvironmentName` | All environments | Scope to a specific environment GUID |
+| `-LogoPath` | None | Path to PNG/JPG logo to embed in report header |
+| `-OutputPath` | Desktop | Directory for output files |
+| `-IncludeDeleted` | False | Include soft-deleted flows in the report |
+| `-MaxRunHistory` | 10 | Number of recent runs to retrieve per flow |
+
+### Usage Examples
+
+```powershell
+# Full tenant report (all environments)
+.\Get-PowerAutomateFlowReport.ps1
+
+# Scope to a specific environment
+.\Get-PowerAutomateFlowReport.ps1 -EnvironmentName "12345678-abcd-efgh-ijkl-123456789012"
+
+# Custom output location with run history depth
+.\Get-PowerAutomateFlowReport.ps1 -OutputPath "C:\Reports" -MaxRunHistory 25
+
+# Include soft-deleted flows
+.\Get-PowerAutomateFlowReport.ps1 -IncludeDeleted -OutputPath "C:\Reports"
+```
+
+### Report Features
+
+- YW-branded HTML with collapsible per-flow detail panels
+- Summary statistics: total flows, enabled/disabled/suspended counts
+- Full action trees rendered in a readable nested format
+- Companion CSV export for further analysis
+
+### Requirements
+
+- PowerShell 5.1+
+- Microsoft.PowerApps.Administration.PowerShell module
+- Power Platform Administrator or Global Administrator role
+
+---
+
 ## Security Notice
 
 These tools are for authorized security testing and recovery only. Users must obtain proper authorization before running on production systems. SQL Server recovery tools should only be used on systems you are authorized to administer.
@@ -665,8 +723,9 @@ These tools are for authorized security testing and recovery only. Users must ob
 - SharePoint Online Management Shell (for SPO tool)
 - Active Directory PowerShell module (for certificate discovery)
 - SQLCMD utility (for SQL Server recovery)
+- Microsoft.PowerApps.Administration.PowerShell module (for Power Automate report)
 - Admin rights for file system, certificate, and SQL Server operations
-- Appropriate admin roles for cloud tools (Security Reader, SharePoint Admin, etc.)
+- Appropriate admin roles for cloud tools (Security Reader, SharePoint Admin, Power Platform Admin, etc.)
 
 ---
 

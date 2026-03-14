@@ -61,6 +61,18 @@ PowerShell scripts for system provisioning, cleanup operations, migration prepar
 | `Convert-LegacyExcel.ps1` | Batch converts .xls files to .xlsx format |
 | `Convert-LegacyWord.ps1` | Batch converts .doc files to .docx format |
 
+### Microsoft 365 Administration
+
+| Script | Description |
+|--------|-------------|
+| `Audit-365Archives.ps1` | Audits Online Archive mailboxes in a source tenant post-migration. Dynamically identifies an available license with Exchange Online archiving, temporarily assigns it, retrieves primary and archive mailbox statistics, then removes the license. Exports incremental CSV and YW-branded HTML report. |
+
+### Utilities
+
+| Script | Description |
+|--------|-------------|
+| `Get-SalesTaxRate.ps1` | Queries Avalara's public tax rate endpoint for U.S. sales tax rates. Supports address-based and coordinate-based lookup. Returns combined rate with full jurisdiction breakdown (State, County, City, Special). No API key required. Pipeline-friendly for batch processing. |
+
 ### AI Chat Client
 
 | Script | Description |
@@ -1058,6 +1070,99 @@ Built-in context window sizes for token budget tracking:
 
 ---
 
+## Audit-365Archives.ps1
+
+Post-migration tool for auditing Online Archive mailboxes in Microsoft 365 tenants. Designed for decommissioning scenarios where archive mailboxes did not migrate and need assessment before shutting down the source tenant.
+
+### How It Works
+
+1. Dynamically identifies any available license SKU containing Exchange Online (Plan 2) archiving
+2. Temporarily assigns the license to each user
+3. Waits for archive mailbox provisioning (configurable delay)
+4. Retrieves primary and archive mailbox statistics (size, item count, dates, last logon)
+5. Removes the temporary license
+6. Writes incremental CSV results and generates a YW-branded HTML report
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `-InputCsv` | All tenant members | Path to CSV with `UserPrincipalName` column. Omit to process all accounts (including disabled — intentional for decommissioning). |
+| `-OutputPath` | Current directory | Base path for output files (script appends `.csv` and `.html`) |
+| `-WaitTimeSeconds` | 180 | Seconds to wait for archive provisioning after license assignment |
+| `-MaxRetries` | 3 | Retry attempts when checking for archive mailbox (60-second intervals) |
+
+### Usage Examples
+
+```powershell
+# Audit all mailboxes in tenant
+.\Audit-365Archives.ps1 -OutputPath "C:\Reports\ArchiveAudit"
+
+# Process specific users from CSV with extended provisioning wait
+.\Audit-365Archives.ps1 -InputCsv "C:\Users.csv" -WaitTimeSeconds 240
+
+# Default run (all users, results in current directory)
+.\Audit-365Archives.ps1
+```
+
+### Requirements
+
+- Microsoft.Graph.Users module
+- ExchangeOnlineManagement module
+- Exchange Administrator or Global Administrator role
+- Available licenses that include Exchange Online Plan 2 (Archiving)
+
+---
+
+## Get-SalesTaxRate.ps1
+
+U.S. sales tax rate lookup using Avalara's public calculator endpoint. No API key or account required. Supports address-based and coordinate-based lookups with a full jurisdiction breakdown. Pipeline-friendly for batch processing.
+
+### Lookup Modes
+
+| Mode | Parameters | Example |
+|------|-----------|---------|
+| **Address** | `-LineAddress1`, `-City`, `-Region` | `.\Get-SalesTaxRate.ps1 -LineAddress1 "350 5th Ave" -City "New York" -Region "NY"` |
+| **Coordinates** | `-Latitude`, `-Longitude` | `.\Get-SalesTaxRate.ps1 -Latitude 47.6062 -Longitude -122.3321` |
+
+### Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `-LineAddress1` | Street address |
+| `-City` | City name |
+| `-Region` | Two-letter state code (e.g., `WA`, `NY`) |
+| `-Latitude` | Decimal latitude (coordinate mode) |
+| `-Longitude` | Decimal longitude (coordinate mode) |
+| `-Amount` | Optional dollar amount to calculate tax on |
+| `-Raw` | Return raw API response object for scripting |
+
+### Usage Examples
+
+```powershell
+# Basic address lookup
+.\Get-SalesTaxRate.ps1 -LineAddress1 "1 Microsoft Way" -City "Redmond" -Region "WA"
+
+# Calculate tax on a purchase amount
+.\Get-SalesTaxRate.ps1 -LineAddress1 "350 5th Ave" -City "New York" -Region "NY" -Amount 1500.00
+
+# Coordinate-based lookup
+.\Get-SalesTaxRate.ps1 -Latitude 47.6062 -Longitude -122.3321
+
+# Batch lookup from CSV
+Import-Csv .\addresses.csv | ForEach-Object {
+    .\Get-SalesTaxRate.ps1 -LineAddress1 $_.Street -City $_.City -Region $_.State
+} | Export-Csv .\tax_rates.csv -NoTypeInformation
+```
+
+### Notes
+
+- Uses Avalara's public unauthenticated endpoint (same as the free web calculator)
+- For high-volume or production use, consider Avalara's official AvaTax API with credentials
+- Returns rates as percentages (e.g., `10.2` = 10.2%)
+
+---
+
 ## Requirements
 
 | Script | Requirements |
@@ -1070,6 +1175,8 @@ Built-in context window sizes for token budget tracking:
 | `Get-SPOMigrationReadiness.ps1` | PowerShell 5.1+, Read access to source paths |
 | `Convert-Legacy*.ps1` | PowerShell 5.1+, Microsoft Office installed |
 | `Find-DuplicateFiles.ps1` | PowerShell 5.1+, NTFS (for hardlinks) |
+| `Audit-365Archives.ps1` | PowerShell 5.1+, Microsoft.Graph.Users module, ExchangeOnlineManagement module, Exchange Administrator or Global Administrator role |
+| `Get-SalesTaxRate.ps1` | PowerShell 5.1+, Internet access (no API key required) |
 | All scripts | Windows Server 2016+ or Windows 10/11, PowerShell 5.1+ |
 
 ---

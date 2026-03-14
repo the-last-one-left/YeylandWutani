@@ -21,6 +21,12 @@ PowerShell tools for Active Directory security auditing, health monitoring, trou
 | `Get-AADConnectSyncStatus.ps1` | Azure AD Connect sync health for hybrid environments |
 | `Get-DNSZoneHealth.ps1` | AD-integrated DNS zone health discovery with aging/scavenging analysis, stale record detection, and interactive remediation |
 
+### Hybrid Identity / Federation
+
+| Script | Description |
+|--------|-------------|
+| `Set-M365DomainFederation.ps1` | Interactive wizard to federate Microsoft 365 custom domains to a SAML 2.0 identity provider (WatchGuard AuthPoint, Okta, ADFS, or any standards-compliant IdP). Includes multi-domain selection, admin lockout prevention, pre-flight review, post-federation verification, and domain revert capability. |
+
 ### User & Group Management
 
 | Script | Description |
@@ -124,9 +130,55 @@ The script generates the following files (prefixed with `AD_Audit_{domain}_{time
 
 ---
 
+## Set-M365DomainFederation.ps1
+
+Interactive wizard to federate Microsoft 365 custom domains to a SAML 2.0 identity provider. Replaces the deprecated MSOnline/MSOL approach using the Microsoft Graph API.
+
+### Supported Identity Providers
+
+| Provider | Template |
+|----------|---------|
+| WatchGuard AuthPoint | Built-in template |
+| Okta | Built-in template |
+| ADFS | Built-in template |
+| Any SAML 2.0 IdP | Generic template |
+
+### Wizard Capabilities
+
+- **Multi-domain selection** — Choose one or more verified tenant domains to federate
+- **Admin lockout prevention** — Detects if admin UPN uses the domain being federated and prompts for UPN change to `*.onmicrosoft.com` fallback before proceeding
+- **Pre-flight review** — Full configuration summary with confirmation before any changes are applied
+- **Post-federation verification** — Validates the federation trust after configuration
+- **Federation status report** — Lists authentication type for all tenant domains
+- **Revert** — Converts federated domains back to managed authentication
+
+### Usage
+
+```powershell
+# Launch the interactive wizard
+.\Set-M365DomainFederation.ps1
+```
+
+The wizard guides through all steps interactively — no parameters required.
+
+### Requirements
+
+- PowerShell 5.1+
+- Microsoft.Graph PowerShell SDK (wizard will offer to install if missing)
+- Global Administrator or Privileged Role Administrator role
+
+### Safety Notes
+
+> **Critical:** If your admin account UPN uses the domain being federated (e.g., `admin@contoso.com` and federating `contoso.com`), you **will be locked out** unless you first change the UPN to the `*.onmicrosoft.com` fallback domain. The wizard detects this condition and helps resolve it safely.
+
+---
+
 ## Other Usage Examples
 
 ```powershell
+# Federate M365 domain to SAML IdP (interactive wizard)
+.\Set-M365DomainFederation.ps1
+
 # Daily health check
 .\Get-ADHealthCheck.ps1 -ExportPath "C:\Reports\ADHealth.csv"
 
@@ -162,8 +214,9 @@ The script generates the following files (prefixed with `AD_Audit_{domain}_{time
 - PowerShell 5.1+
 - Active Directory PowerShell module (RSAT)
 - DNS Server module (RSAT) - for `Get-DNSZoneHealth.ps1`
+- Microsoft.Graph PowerShell SDK - for `Set-M365DomainFederation.ps1`
 - Domain Admin credentials (or delegated permissions)
-- For hybrid: Azure AD PowerShell modules
+- For hybrid: Azure AD PowerShell modules or Global Admin role
 
 ---
 
