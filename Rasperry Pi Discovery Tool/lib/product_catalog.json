@@ -1,0 +1,515 @@
+{
+  "_metadata": {
+    "version": "1.1",
+    "updated": "2025-01",
+    "currency": "USD",
+    "note": "MSRP hardware estimates only. WatchGuard Firebox requires a Basic Security Suite (BSS) or Total Security Suite (TSS) subscription in addition to hardware. Contact Yeyland Wutani LLC for current partner pricing.",
+    "vendors": {
+      "firewall":      "WatchGuard",
+      "switching":     "Aruba (HPE)",
+      "wireless":      "Aruba (HPE)",
+      "servers":       "Dell Technologies"
+    }
+  },
+
+  "firewalls": [
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox T-Series",
+      "model": "T45",
+      "sku": "WGT45033",
+      "tier": "small",
+      "min_devices": 1,
+      "max_devices": 30,
+      "stateful_throughput_gbps": 4.4,
+      "utm_throughput_mbps": 940,
+      "vpn_throughput_mbps": 880,
+      "interfaces": "5x 1GbE",
+      "form_factor": "Tabletop",
+      "msrp_usd": 595,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "WatchGuard Cloud management",
+        "Integrated IPS, App Control, WebBlocker",
+        "SD-WAN and multi-WAN failover",
+        "Built-in PoE port for connected devices"
+      ],
+      "best_for": "Small offices and branch locations up to 30 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox T-Series",
+      "model": "T45-W",
+      "sku": "WGT45W33",
+      "tier": "small",
+      "min_devices": 1,
+      "max_devices": 30,
+      "stateful_throughput_gbps": 4.4,
+      "utm_throughput_mbps": 940,
+      "vpn_throughput_mbps": 880,
+      "interfaces": "5x 1GbE + WiFi 6 radio",
+      "form_factor": "Tabletop",
+      "msrp_usd": 795,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "Integrated WiFi 6 (802.11ax) radio",
+        "WatchGuard Cloud management",
+        "Integrated IPS, App Control, WebBlocker",
+        "SD-WAN and multi-WAN failover"
+      ],
+      "best_for": "Small offices needing combined firewall and WiFi up to 30 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox T-Series",
+      "model": "T85",
+      "sku": "WGT85033",
+      "tier": "medium_small",
+      "min_devices": 31,
+      "max_devices": 75,
+      "stateful_throughput_gbps": 18.0,
+      "utm_throughput_mbps": 2400,
+      "vpn_throughput_mbps": 2100,
+      "interfaces": "8x 1GbE + 2x SFP",
+      "form_factor": "Tabletop",
+      "msrp_usd": 1495,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "WatchGuard Cloud management",
+        "Dual SFP uplinks for fiber or redundancy",
+        "Integrated IPS, App Control, WebBlocker",
+        "SD-WAN, BGP routing, VLAN segmentation",
+        "WatchGuard TDR endpoint threat correlation"
+      ],
+      "best_for": "Growing SMBs and multi-VLAN environments up to 75 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox T-Series",
+      "model": "T85-W",
+      "sku": "WGT85W33",
+      "tier": "medium_small",
+      "min_devices": 31,
+      "max_devices": 75,
+      "stateful_throughput_gbps": 18.0,
+      "utm_throughput_mbps": 2400,
+      "vpn_throughput_mbps": 2100,
+      "interfaces": "8x 1GbE + 2x SFP + WiFi 6 radio",
+      "form_factor": "Tabletop",
+      "msrp_usd": 1695,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "Integrated WiFi 6 (802.11ax) radio",
+        "WatchGuard Cloud management",
+        "Dual SFP uplinks for fiber or redundancy",
+        "SD-WAN, BGP routing, VLAN segmentation"
+      ],
+      "best_for": "SMBs needing combined firewall and WiFi up to 75 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox M-Series",
+      "model": "M290",
+      "sku": "WGM29000603",
+      "tier": "medium",
+      "min_devices": 76,
+      "max_devices": 150,
+      "stateful_throughput_gbps": 5.8,
+      "utm_throughput_mbps": 2300,
+      "vpn_throughput_mbps": 1400,
+      "interfaces": "8x 1GbE",
+      "form_factor": "Desktop / 1U Rack",
+      "msrp_usd": 1095,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "1U rack-mountable desktop form factor",
+        "WatchGuard Cloud management",
+        "Full UTM suite: IPS, AV, App Control, WebBlocker",
+        "SD-WAN, BGP/OSPF routing",
+        "Supports up to 5 VLANs with proper segmentation"
+      ],
+      "best_for": "Medium offices and multi-site deployments up to 150 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox M-Series",
+      "model": "M390",
+      "sku": "WGM39000603",
+      "tier": "medium_large",
+      "min_devices": 151,
+      "max_devices": 250,
+      "stateful_throughput_gbps": 20.0,
+      "utm_throughput_mbps": 5200,
+      "vpn_throughput_mbps": 4600,
+      "interfaces": "8x 1GbE + 2x SFP+",
+      "form_factor": "Desktop / 1U Rack",
+      "msrp_usd": 1895,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "Dual 10G SFP+ uplinks",
+        "WatchGuard Cloud management",
+        "Full UTM suite with AI-powered threat detection",
+        "SD-WAN, BGP/OSPF, policy-based routing",
+        "WatchGuard TDR and DNSWatch integration"
+      ],
+      "best_for": "Larger offices and headquarters up to 250 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox M-Series",
+      "model": "M490",
+      "sku": "WGM49000603",
+      "tier": "large",
+      "min_devices": 251,
+      "max_devices": 500,
+      "stateful_throughput_gbps": 40.0,
+      "utm_throughput_mbps": 10000,
+      "vpn_throughput_mbps": 7800,
+      "interfaces": "8x 1GbE + 4x SFP+ + 2x 10G SFP+",
+      "form_factor": "1U Rack",
+      "msrp_usd": 2895,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "10G SFP+ and 1G copper interfaces",
+        "WatchGuard Cloud management",
+        "Full UTM suite with advanced threat protection",
+        "High availability (active/passive clustering)",
+        "SD-WAN with intelligent path management"
+      ],
+      "best_for": "Large organizations and data center edge up to 500 devices"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Firebox M-Series",
+      "model": "M590",
+      "sku": "WGM59000603",
+      "tier": "enterprise",
+      "min_devices": 501,
+      "max_devices": 1000,
+      "stateful_throughput_gbps": 60.0,
+      "utm_throughput_mbps": 18000,
+      "vpn_throughput_mbps": 14000,
+      "interfaces": "8x 1GbE + 4x SFP+ + 4x 10G SFP+",
+      "form_factor": "1U Rack",
+      "msrp_usd": 4995,
+      "subscription_required": "Basic or Total Security Suite",
+      "key_features": [
+        "High-density 10G interfaces",
+        "WatchGuard Cloud management",
+        "Enterprise-grade HA and failover",
+        "Advanced threat intelligence and correlation",
+        "Full SD-WAN with SLA-based path selection"
+      ],
+      "best_for": "Enterprise environments and multi-site hubs up to 1000 devices"
+    }
+  ],
+
+  "switches": [
+    {
+      "vendor": "Aruba",
+      "line": "Instant On 1930",
+      "model": "1930 8G PoE",
+      "sku": "JL682A",
+      "ports": 8,
+      "poe_ports": 8,
+      "poe_budget_w": 65,
+      "uplinks": "2x SFP",
+      "management": "Aruba Instant On Cloud App",
+      "layer": "L2",
+      "stackable": false,
+      "min_devices": 1,
+      "max_devices": 10,
+      "msrp_usd": 349,
+      "key_features": [
+        "Aruba Instant On cloud management",
+        "Full PoE on all 8 ports (802.3af/at)",
+        "2x SFP uplinks for fiber connectivity",
+        "Auto-configuration and zero-touch deployment"
+      ],
+      "best_for": "Micro-offices, conference rooms, or satellite closets up to 10 devices"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "Instant On 1930",
+      "model": "1930 24G PoE",
+      "sku": "JL684A",
+      "ports": 24,
+      "poe_ports": 12,
+      "poe_budget_w": 195,
+      "uplinks": "4x SFP",
+      "management": "Aruba Instant On Cloud App",
+      "layer": "L2",
+      "stackable": false,
+      "min_devices": 11,
+      "max_devices": 30,
+      "msrp_usd": 699,
+      "key_features": [
+        "Aruba Instant On cloud management",
+        "12x PoE ports for APs, phones, cameras",
+        "4x SFP uplinks",
+        "Auto-configuration and VLAN support",
+        "Smart rate PoE allocation"
+      ],
+      "best_for": "Small offices up to 30 wired devices"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "Instant On 1930",
+      "model": "1930 48G PoE",
+      "sku": "JL686A",
+      "ports": 48,
+      "poe_ports": 24,
+      "poe_budget_w": 370,
+      "uplinks": "4x SFP",
+      "management": "Aruba Instant On Cloud App",
+      "layer": "L2",
+      "stackable": false,
+      "min_devices": 31,
+      "max_devices": 60,
+      "msrp_usd": 999,
+      "key_features": [
+        "Aruba Instant On cloud management",
+        "24x PoE+ ports (802.3af/at)",
+        "4x SFP uplinks",
+        "VLAN segmentation and access control",
+        "Auto-configuration with zero-touch provisioning"
+      ],
+      "best_for": "Medium offices up to 60 wired devices"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "6100",
+      "model": "6100 24G PoE",
+      "sku": "JL714A",
+      "ports": 24,
+      "poe_ports": 24,
+      "poe_budget_w": 370,
+      "uplinks": "4x SFP+",
+      "management": "Aruba Central Cloud / CLI",
+      "layer": "L2/L3",
+      "stackable": true,
+      "min_devices": 20,
+      "max_devices": 50,
+      "msrp_usd": 1099,
+      "key_features": [
+        "Full PoE+ on all 24 ports",
+        "4x 10G SFP+ uplinks",
+        "L3 routing: static, OSPF, RIP",
+        "Aruba Central cloud management",
+        "802.1X port authentication and dynamic segmentation"
+      ],
+      "best_for": "Offices needing full PoE coverage, L3 routing, or advanced VLANs"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "6100",
+      "model": "6100 48G PoE",
+      "sku": "JL713A",
+      "ports": 48,
+      "poe_ports": 48,
+      "poe_budget_w": 740,
+      "uplinks": "4x SFP+",
+      "management": "Aruba Central Cloud / CLI",
+      "layer": "L2/L3",
+      "stackable": true,
+      "min_devices": 51,
+      "max_devices": 100,
+      "msrp_usd": 1699,
+      "key_features": [
+        "Full PoE+ on all 48 ports (740W budget)",
+        "4x 10G SFP+ uplinks",
+        "L3 routing and dynamic segmentation",
+        "Aruba Central cloud management",
+        "802.1X and MAC-based authentication"
+      ],
+      "best_for": "Large offices with high PoE demand across 50-100 wired devices"
+    }
+  ],
+
+  "access_points": [
+    {
+      "vendor": "Aruba",
+      "line": "Instant On",
+      "model": "AP22",
+      "sku": "R4W02A",
+      "wifi_standard": "Wi-Fi 6 (802.11ax)",
+      "max_throughput_mbps": 1774,
+      "bands": "Dual-band (2.4 GHz + 5 GHz)",
+      "max_clients": 30,
+      "poe_required": "802.3af (15.4W)",
+      "indoor_outdoor": "Indoor",
+      "management": "Aruba Instant On Cloud App",
+      "msrp_usd": 199,
+      "key_features": [
+        "Wi-Fi 6 (802.11ax) — faster, more efficient than Wi-Fi 5",
+        "Target Wake Time (TWT) for improved IoT battery life",
+        "Aruba Instant On cloud management",
+        "WPA3 encryption for enhanced wireless security",
+        "Band steering and load balancing"
+      ],
+      "best_for": "General-purpose indoor wireless coverage up to 30 concurrent clients"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "Instant On",
+      "model": "AP25",
+      "sku": "R9B28A",
+      "wifi_standard": "Wi-Fi 6 (802.11ax)",
+      "max_throughput_mbps": 3900,
+      "bands": "Tri-radio (2.4 GHz + 5 GHz + 5 GHz)",
+      "max_clients": 60,
+      "poe_required": "802.3at PoE+ (30W)",
+      "indoor_outdoor": "Indoor",
+      "management": "Aruba Instant On Cloud App",
+      "msrp_usd": 349,
+      "key_features": [
+        "Tri-radio Wi-Fi 6 for high-density environments",
+        "Dedicated backhaul radio for mesh deployment",
+        "Aruba Instant On cloud management",
+        "WPA3 and OWE (Opportunistic Wireless Encryption)",
+        "Up to 60 concurrent clients per AP"
+      ],
+      "best_for": "High-density environments, conference rooms, and 50+ wireless clients"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "Instant On",
+      "model": "AP17",
+      "sku": "R2X11A",
+      "wifi_standard": "Wi-Fi 5 (802.11ac Wave 2)",
+      "max_throughput_mbps": 1267,
+      "bands": "Dual-band (2.4 GHz + 5 GHz)",
+      "max_clients": 25,
+      "poe_required": "802.3af (15.4W)",
+      "indoor_outdoor": "Outdoor",
+      "management": "Aruba Instant On Cloud App",
+      "msrp_usd": 249,
+      "key_features": [
+        "IP67 weatherproof rating for outdoor use",
+        "Aruba Instant On cloud management",
+        "WPA3 encryption",
+        "Wide-coverage antenna for open outdoor spaces",
+        "Suitable for warehouses, parking lots, outdoor seating"
+      ],
+      "best_for": "Outdoor wireless coverage for yards, parking areas, or warehouses"
+    }
+  ],
+
+  "servers": [
+    {
+      "vendor": "Dell",
+      "line": "PowerEdge",
+      "model": "T150",
+      "sku": "SNST150",
+      "form_factor": "Tower",
+      "processor": "Intel Xeon E-2300 series (4-6 cores)",
+      "max_ram_gb": 32,
+      "max_storage": "2x 3.5\" HDD/SSD (up to 16 TB)",
+      "raid_support": "RAID 0/1/5 (optional PERC controller)",
+      "network": "2x 1GbE onboard",
+      "min_servers": 1,
+      "max_servers": 1,
+      "msrp_usd_base": 699,
+      "key_features": [
+        "Compact tower form factor for office environments",
+        "iDRAC9 remote management",
+        "Energy-efficient Xeon E-2300 processor",
+        "Easy tool-free drive access",
+        "OpenManage systems management"
+      ],
+      "best_for": "Single-server small office environments, file/print, or lightweight VM host"
+    },
+    {
+      "vendor": "Dell",
+      "line": "PowerEdge",
+      "model": "T350",
+      "sku": "SNST350",
+      "form_factor": "Tower",
+      "processor": "Intel Xeon E-2300 series (4-8 cores)",
+      "max_ram_gb": 64,
+      "max_storage": "8x 3.5\" HDD/SSD (up to 64 TB)",
+      "raid_support": "RAID 0/1/5/6/10/50/60 (PERC H355/H755)",
+      "network": "2x 1GbE onboard + optional 10GbE",
+      "min_servers": 1,
+      "max_servers": 1,
+      "msrp_usd_base": 1099,
+      "key_features": [
+        "Tower form factor — no rack required",
+        "iDRAC9 Express remote management",
+        "Up to 8 hot-plug drives",
+        "Optional internal tape/optical backup",
+        "OpenManage with proactive alerting"
+      ],
+      "best_for": "SMB primary server: domain controller, file services, or Hyper-V host"
+    },
+    {
+      "vendor": "Dell",
+      "line": "PowerEdge",
+      "model": "R350",
+      "sku": "SNSR350",
+      "form_factor": "1U Rack",
+      "processor": "Intel Xeon E-2300 series (4-8 cores, 1 socket)",
+      "max_ram_gb": 128,
+      "max_storage": "4x 3.5\" or 8x 2.5\" HDD/NVMe",
+      "raid_support": "RAID 0/1/5/6/10 (PERC H355/H755)",
+      "network": "2x 1GbE onboard + optional 10/25GbE",
+      "min_servers": 1,
+      "max_servers": 2,
+      "msrp_usd_base": 1599,
+      "key_features": [
+        "1U rack-mountable for space efficiency",
+        "iDRAC9 remote management with KVM",
+        "Hot-plug drives and redundant PSU option",
+        "OpenManage integration with proactive alerting",
+        "PCIe expansion for networking or GPU offload"
+      ],
+      "best_for": "Rack-based SMB primary server: directory, file, or lightweight virtualization"
+    },
+    {
+      "vendor": "Dell",
+      "line": "PowerEdge",
+      "model": "R450",
+      "sku": "SNSR450",
+      "form_factor": "1U Rack",
+      "processor": "Intel Xeon Scalable 3rd Gen (up to 2x 24-core)",
+      "max_ram_gb": 512,
+      "max_storage": "8x 2.5\" NVMe/SSD",
+      "raid_support": "RAID 0/1/5/6/10/50/60 (PERC H755N/H755)",
+      "network": "2x 1GbE + 2x 10/25GbE onboard",
+      "min_servers": 2,
+      "max_servers": 8,
+      "msrp_usd_base": 3499,
+      "key_features": [
+        "Dual-socket Xeon Scalable for demanding workloads",
+        "iDRAC9 Enterprise with OpenManage Enterprise",
+        "Up to 512 GB DDR4 ECC for heavy virtualization",
+        "NVMe-first storage for high IOPS workloads",
+        "Hot-plug drives, redundant PSU, and cooling"
+      ],
+      "best_for": "Mid-size virtualization host, database server, or multi-role workload consolidation"
+    },
+    {
+      "vendor": "Dell",
+      "line": "PowerEdge",
+      "model": "R550",
+      "sku": "SNSR550",
+      "form_factor": "2U Rack",
+      "processor": "Intel Xeon Scalable 3rd Gen (up to 2x 24-core)",
+      "max_ram_gb": 2048,
+      "max_storage": "12x 3.5\" or 16x 2.5\" HDD/SSD/NVMe",
+      "raid_support": "RAID 0/1/5/6/10/50/60 (PERC H755/H355)",
+      "network": "2x 1GbE + 2x 10/25GbE onboard",
+      "min_servers": 4,
+      "max_servers": 20,
+      "msrp_usd_base": 4499,
+      "key_features": [
+        "2U with high-capacity storage (up to 16 drives)",
+        "Up to 2 TB RAM for large-scale virtualization",
+        "iDRAC9 Enterprise with full lifecycle management",
+        "Flexible NVMe + SATA/SAS tiered storage",
+        "Dual redundant PSU and hot-swap everything"
+      ],
+      "best_for": "Primary virtualization platform, storage-heavy workloads, or multi-tenant hosting"
+    }
+  ]
+}

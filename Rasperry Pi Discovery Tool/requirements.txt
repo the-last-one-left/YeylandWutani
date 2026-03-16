@@ -1,0 +1,12 @@
+msal
+requests
+python-nmap
+netifaces
+scapy
+dnspython
+python-dotenv
+jinja2
+speedtest-cli
+impacket
+ldap3
+reportlab

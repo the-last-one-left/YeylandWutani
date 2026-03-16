@@ -12,6 +12,10 @@
 logs/
 output/
 
+# Exceptions — repo-managed data/config files that must be committed
+!**/product_catalog.json
+!**/requirements.txt
+
 # Credentials and sensitive data
 *.credentials
 *.cred
