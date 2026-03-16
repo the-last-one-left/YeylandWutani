@@ -139,7 +139,7 @@ def cleanup_after_send(timestamp_str: str):
     is confirmed sent we can safely delete them.
     """
     removed = 0
-    for suffix in (".csv", ".json"):
+    for suffix in (".csv", ".json", "_Summary_Report.pdf", "_Detail_Report.pdf"):
         path = DATA_DIR / f"scan_{timestamp_str}{suffix}"
         try:
             if path.exists():
@@ -460,7 +460,7 @@ def main():
         else:
             logger.info("Hatz AI: API key not configured — skipping AI insights.")
 
-        # Generate report
+        # Generate HTML report
         logger.info("Generating discovery report...")
         report_start = time.time()
         subject, html_body = build_discovery_report(scan_results, config, ai_insights=ai_insights)
@@ -502,10 +502,60 @@ def main():
             f"archive build took {csv_duration:.1f}s"
         )
 
-        # Send report with compressed CSV + JSON attachments
+        # ── Generate client-facing PDF reports (optional) ─────────────────
+        pdf_paths = []
+        if config.get("reporting", {}).get("enable_pdf_reports", True):
+            logger.info("Generating client-facing PDF reports...")
+            pdf_start = time.time()
+            try:
+                from client_report import (
+                    build_client_summary_pdf,
+                    build_client_detail_pdf,
+                    REPORTLAB_AVAILABLE,
+                )
+                if REPORTLAB_AVAILABLE:
+                    summary_pdf_path = DATA_DIR / f"scan_{timestamp_str}_Summary_Report.pdf"
+                    detail_pdf_path  = DATA_DIR / f"scan_{timestamp_str}_Detail_Report.pdf"
+
+                    summary_bytes = build_client_summary_pdf(scan_results, config)
+                    summary_pdf_path.write_bytes(summary_bytes)
+                    logger.info(
+                        f"Summary Report PDF: {len(summary_bytes) / 1024:.0f} KB "
+                        f"({summary_pdf_path.name})"
+                    )
+                    pdf_paths.append(str(summary_pdf_path))
+
+                    detail_bytes = build_client_detail_pdf(scan_results, config)
+                    detail_pdf_path.write_bytes(detail_bytes)
+                    logger.info(
+                        f"Detail Report PDF:  {len(detail_bytes) / 1024:.0f} KB "
+                        f"({detail_pdf_path.name})"
+                    )
+                    pdf_paths.append(str(detail_pdf_path))
+
+                    pdf_duration = time.time() - pdf_start
+                    logger.info(f"PDF reports generated in {pdf_duration:.1f}s.")
+                else:
+                    logger.warning(
+                        "reportlab not installed — skipping PDF reports. "
+                        "Install with: pip install reportlab"
+                    )
+            except ImportError:
+                logger.warning(
+                    "client_report module not found — skipping PDF reports."
+                )
+            except Exception as e:
+                logger.error(f"PDF report generation failed: {e}", exc_info=True)
+                logger.info("Continuing without PDF reports.")
+        else:
+            logger.info("PDF reports disabled in config (reporting.enable_pdf_reports = false).")
+
+        # Send report with CSV, JSON, and PDF attachments
         total_attach_kb = (gz_size + json_gz_path.stat().st_size) / 1024
+        if pdf_paths:
+            total_attach_kb += sum(Path(p).stat().st_size for p in pdf_paths) / 1024
         logger.info(f"Sending discovery report email ({total_attach_kb:.0f} KB attachments)...")
-        attachment_paths = [str(csv_gz_path), str(json_gz_path)]
+        attachment_paths = [str(csv_gz_path), str(json_gz_path)] + pdf_paths
         email_start = time.time()
         try:
             mailer.send_email(
@@ -539,6 +589,7 @@ def main():
         logger.info(f"  Hosts discovered:      {summary.get('total_hosts', 0)}")
         logger.info(f"  Open ports:            {summary.get('total_open_ports', 0)}")
         logger.info(f"  Security observations: {summary.get('security_observations', 0)}")
+        logger.info(f"  PDF reports:           {len(pdf_paths)} attached")
         logger.info("-" * 50)
 
     except Exception as e:
