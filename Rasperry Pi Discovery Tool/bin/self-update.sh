@@ -77,6 +77,12 @@ fi
 # Git 2.35.2+ rejects repos owned by a different uid (e.g. root-created clone
 # operated on by the service user or a sudo session).  Add it unconditionally
 # so self-update works regardless of which user invokes it.
+#
+# The network-discovery service user has no home directory, so git's default
+# --global config path (~/.gitconfig) does not exist and the write silently
+# fails (hidden by 2>/dev/null), leaving the safe.directory unset.
+# Fix: point GIT_CONFIG_GLOBAL at a path the service user can actually write.
+export GIT_CONFIG_GLOBAL="${INSTALL_DIR}/data/.gitconfig"
 "${GIT_BIN}" config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
 
 # ── Verify the persistent source clone exists ────────────────────────────────

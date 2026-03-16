@@ -188,10 +188,14 @@ clone_repo() {
         die "Sparse clone did not produce expected directory: '${REPO_SUBFOLDER}'"
     fi
 
-    # Mark SRC_DIR as a safe git directory globally so that self-update.sh
-    # can operate on it regardless of which user invokes it.  Git 2.35.2+
-    # rejects repos owned by a different uid without this.
-    git config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
+    # Mark SRC_DIR as a safe git directory at the system level so that
+    # self-update.sh can operate on it regardless of which user invokes it.
+    # Git 2.35.2+ rejects repos owned by a different uid without this.
+    # Using --system (writes /etc/gitconfig) rather than --global because the
+    # network-discovery service user has no home directory and cannot read a
+    # per-user ~/.gitconfig.  install.sh runs as root so --system works here.
+    git config --system --add safe.directory "${SRC_DIR}" 2>/dev/null || \
+        git config --global --add safe.directory "${SRC_DIR}" 2>/dev/null || true
 
     # Rsync from the permanent source clone to the install directory.
     info "Installing files to ${INSTALL_DIR}..."
