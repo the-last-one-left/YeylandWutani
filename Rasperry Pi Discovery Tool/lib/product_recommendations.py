@@ -227,24 +227,23 @@ def _select_switches(env: dict, catalog: dict) -> tuple:
     Return (product_dict, switch_count).
     Switch count is how many of that model are needed to cover estimated wired
     devices with 25% growth headroom.
+    Returns ({}, 1) if the catalog has no switch entries.
     """
+    all_switches = catalog.get("switches", [])
+    if not all_switches:
+        return {}, 1
+
     wired      = env["estimated_wired"]
     ports_need = max(8, int(wired * 1.25))  # 25% growth room
 
-    candidates = [s for s in catalog.get("switches", [])
-                  if s["ports"] >= min(ports_need, s["ports"])]
-
-    if not candidates:
-        candidates = catalog.get("switches", [])
-
-    # Pick the smallest single-switch that covers the need; if none, stack 48-port
-    single = [s for s in candidates if s["ports"] >= ports_need]
+    # All switches are candidates — the filter below just separates "single covers it" vs "need to stack"
+    single = [s for s in all_switches if s["ports"] >= ports_need]
     if single:
         product = min(single, key=lambda s: s["ports"])
         count = 1
     else:
-        # Need multiple switches — use the 48-port model
-        product = max(candidates, key=lambda s: s["ports"])
+        # Need multiple switches — use the largest available model
+        product = max(all_switches, key=lambda s: s["ports"])
         count   = math.ceil(ports_need / product["ports"])
 
     return product, count
@@ -313,7 +312,14 @@ def select_all_products(env: dict, catalog: dict) -> dict:
             "access_points": {"product": {...}, "count": N, "reason_signals": [...]} | None,
             "servers":       {"product": {...}, "count": N, "reason_signals": [...]} | None,
         }
+    Raises ValueError if the catalog is completely empty (no entries in any category).
     """
+    if not any(catalog.get(k) for k in ("firewalls", "switches", "access_points", "servers")):
+        raise ValueError(
+            "Product catalog is empty or could not be loaded. "
+            "Ensure lib/product_catalog.json is present and valid."
+        )
+
     fw = _select_firewall(env, catalog)
     sw_product, sw_count = _select_switches(env, catalog)
     ap_result = _select_aps(env, catalog)
@@ -1211,8 +1217,16 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
 
     # ── Analyse environment + select products ─────────────────────────────
     catalog = load_product_catalog()
-    env     = size_environment(scan_results)
-    recs    = select_all_products(env, catalog)
+    if not catalog or not any(catalog.get(k) for k in
+                               ("firewalls", "switches", "access_points", "servers")):
+        raise FileNotFoundError(
+            "product_catalog.json not found or empty. "
+            "Ensure lib/product_catalog.json is deployed to "
+            "/opt/network-discovery/lib/ (it is included in the repo and "
+            "will be synced automatically on the next self-update)."
+        )
+    env  = size_environment(scan_results)
+    recs = select_all_products(env, catalog)
 
     # ── Narratives (AI or static) ─────────────────────────────────────────
     hatz_key = config.get("hatz_ai", {}).get("api_key", "")
