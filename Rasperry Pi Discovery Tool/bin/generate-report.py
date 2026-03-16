@@ -92,7 +92,7 @@ def load_config(path: Path) -> dict:
     logger.warning(f"Config not found at {path} — using defaults.")
     return {
         "reporting": {
-            "company_name": "Client",
+            "company_name": "Yeyland Wutani LLC",
             "company_color": "#FF6600",
             "tagline": "Building Better Systems",
         }
@@ -171,9 +171,11 @@ def main() -> int:
 
     config = load_config(Path(args.config))
 
-    # Apply CLI overrides to config
+    # Apply CLI overrides to config.
+    # --client-name sets the PROSPECT name (shown on the report cover as "Prepared for").
+    # The assessor brand (company_name in config) is left untouched.
     if args.client_name:
-        config.setdefault("reporting", {})["company_name"] = args.client_name
+        config.setdefault("reporting", {})["client_name"] = args.client_name
         logger.info(f"Client name override: {args.client_name}")
     if args.color:
         config.setdefault("reporting", {})["company_color"] = args.color
@@ -193,6 +195,7 @@ def main() -> int:
             build_client_summary_pdf,
             build_client_detail_pdf,
             compute_risk_score,
+            infer_client_name,
             REPORTLAB_AVAILABLE,
         )
     except ImportError as e:
@@ -207,11 +210,15 @@ def main() -> int:
         return 1
 
     stem      = _stem(json_path)
-    client    = config.get("reporting", {}).get("company_name", "Client")
+    reporting = config.get("reporting", {})
+    # Resolve the prospect name the same way the PDF builder will — explicit
+    # override in config (set via --client-name) takes precedence over inference.
+    client    = reporting.get("client_name") or infer_client_name(scan_results)
     risk      = compute_risk_score(scan_results)
     hosts     = scan_results.get("hosts", [])
 
-    logger.info(f"Client: {client}")
+    logger.info(f"Assessor:  {reporting.get('company_name', 'Yeyland Wutani LLC')}")
+    logger.info(f"Client:    {client}")
     logger.info(f"Devices discovered: {len(hosts)}")
     logger.info(f"Risk score: {risk}/100")
 

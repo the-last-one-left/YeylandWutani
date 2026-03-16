@@ -113,6 +113,87 @@ def compute_risk_score(scan_results: dict) -> int:
     return min(score, 100)
 
 
+# ── Client name inference ─────────────────────────────────────────────────────
+
+def _domain_to_display_name(domain: str) -> str:
+    """
+    Convert a bare domain into a human-readable org name.
+    e.g.  'awesomazing.com'   -> 'Awesomazing'
+          'pacific-office.net' -> 'Pacific Office'
+          'acme.co.uk'         -> 'Acme'
+    """
+    if not domain:
+        return ""
+    # Strip any leading 'www.'
+    d = domain.lower()
+    if d.startswith("www."):
+        d = d[4:]
+    # Take only the registered name (everything before the first dot that's a TLD)
+    # Simple heuristic: drop the last label(s) that look like TLDs
+    parts = d.split(".")
+    # Treat the last part as TLD; if second-to-last is also short (co, com, net…) drop both
+    if len(parts) >= 3 and len(parts[-2]) <= 3:
+        name_part = ".".join(parts[:-2])
+    elif len(parts) >= 2:
+        name_part = parts[0]
+    else:
+        name_part = d
+    # Replace hyphens/underscores with spaces, title-case
+    return " ".join(w.capitalize() for w in name_part.replace("-", " ").replace("_", " ").split())
+
+
+def infer_client_name(scan_results: dict) -> str:
+    """
+    Best-effort inference of the prospect/client organization name from scan data.
+
+    Priority order:
+    1. OSINT primary_domain  (most reliable — scanner actively resolved this)
+    2. DHCP domain pushed by the local DHCP server
+    3. SSL cert subject CNs that contain a dot (pick the first non-generic one)
+    4. Fall back to "Prospect Network"
+
+    Returns a title-cased display name suitable for report headers.
+    """
+    # 1. OSINT primary domain
+    primary = (
+        scan_results
+        .get("osint", {})
+        .get("company_identification", {})
+        .get("primary_domain", "")
+    )
+    if primary:
+        name = _domain_to_display_name(primary)
+        if name:
+            return name
+
+    # 2. DHCP domain
+    dhcp_domain = (
+        scan_results
+        .get("summary", {})
+        .get("dhcp", {})
+        .get("domain", "")
+    )
+    if dhcp_domain:
+        name = _domain_to_display_name(dhcp_domain)
+        if name:
+            return name
+
+    # 3. SSL cert subject CNs — skip generic / infra names
+    _generic = {"pi.hole", "localhost", "router", "gateway", "firewall", "switch"}
+    for cert in scan_results.get("ssl_audit", {}).get("certificates", []):
+        cn = (cert.get("subject_cn") or "").strip().lower()
+        if "." in cn and cn not in _generic:
+            # Extract the domain portion (rightmost two-ish labels)
+            parts = cn.split(".")
+            domain_guess = ".".join(parts[-2:]) if len(parts) >= 2 else cn
+            if domain_guess not in _generic:
+                name = _domain_to_display_name(domain_guess)
+                if name:
+                    return name
+
+    return "Prospect Network"
+
+
 # ── Cover page callout items ──────────────────────────────────────────────────
 
 def _build_callouts(scan_results: dict) -> list:
@@ -1356,11 +1437,14 @@ def build_client_summary_pdf(scan_results: dict, config: dict) -> bytes:
 
     from reportlab.pdfgen import canvas as rl_canvas
 
-    reporting    = config.get("reporting", {})
-    client_name  = reporting.get("company_name", "Client")
-    company_color= reporting.get("company_color", "#FF6600")
-    tagline      = reporting.get("tagline", "Building Better Systems")
-    brand_name   = "Yeyland Wutani LLC"
+    reporting     = config.get("reporting", {})
+    # brand_name / brand_color / tagline describe the ASSESSOR (Yeyland Wutani)
+    brand_name    = reporting.get("company_name", "Yeyland Wutani LLC")
+    company_color = reporting.get("company_color", "#FF6600")
+    tagline       = reporting.get("tagline", "Building Better Systems")
+    # client_name is the PROSPECT being assessed — explicit config override first,
+    # otherwise inferred from the scan data (domain, SSL certs, OSINT).
+    client_name   = reporting.get("client_name") or infer_client_name(scan_results)
 
     # Parse scan date
     scan_start = scan_results.get("scan_start", "")
@@ -1425,10 +1509,10 @@ def build_client_detail_pdf(scan_results: dict, config: dict) -> bytes:
 
     from reportlab.pdfgen import canvas as rl_canvas
 
-    reporting    = config.get("reporting", {})
-    client_name  = reporting.get("company_name", "Client")
-    company_color= reporting.get("company_color", "#FF6600")
-    brand_name   = "Yeyland Wutani LLC"
+    reporting     = config.get("reporting", {})
+    brand_name    = reporting.get("company_name", "Yeyland Wutani LLC")
+    company_color = reporting.get("company_color", "#FF6600")
+    client_name   = reporting.get("client_name") or infer_client_name(scan_results)
 
     scan_start = scan_results.get("scan_start", "")
     try:
