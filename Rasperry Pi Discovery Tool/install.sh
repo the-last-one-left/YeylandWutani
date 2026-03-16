@@ -219,7 +219,8 @@ setup_venv() {
         jinja2 \
         speedtest-cli \
         impacket \
-        ldap3
+        ldap3 \
+        reportlab
 
     success "Python virtual environment ready at ${VENV_DIR}."
 }
