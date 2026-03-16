@@ -17,13 +17,15 @@ Options:
                     (defaults to same directory as the JSON file, or /tmp)
   --client-name STR Override the client name from config (e.g. "Acme Corp")
   --color HEX       Override client brand color (e.g. "#00A0D9")
-  --summary         Generate Summary Report PDF  (default: both)
-  --detail          Generate Detail Report PDF   (default: both)
+  --summary         Generate Summary Report PDF  (default: all three)
+  --detail          Generate Detail Report PDF   (default: all three)
+  --products        Generate Product Recommendations PDF  (default: all three)
   --no-summary      Skip Summary Report
   --no-detail       Skip Detail Report
+  --no-products     Skip Product Recommendations Report
 
 Examples:
-  # Generate from latest scan using configured client info
+  # Generate all three reports from the latest scan
   sudo /opt/network-discovery/venv/bin/python generate-report.py
 
   # Generate from a specific file with a client name override
@@ -32,8 +34,11 @@ Examples:
       --client-name "Acme Corp" \\
       --color "#00A0D9"
 
-  # Summary only, custom output directory
-  python generate-report.py --summary --output /tmp/reports/
+  # Security reports only (no product recommendations)
+  python generate-report.py --summary --detail --output /tmp/reports/
+
+  # Product recommendations only
+  python generate-report.py --products --output /tmp/reports/
 """
 
 import argparse
@@ -127,23 +132,27 @@ def main() -> int:
                         help="Override client name (e.g. 'Acme Corp')")
     parser.add_argument("--color",       metavar="HEX",
                         help="Override brand color (e.g. '#00A0D9')")
-    parser.add_argument("--summary",     action="store_true",
-                        help="Generate Summary Report (default: both)")
-    parser.add_argument("--detail",      action="store_true",
-                        help="Generate Detail Report (default: both)")
-    parser.add_argument("--no-summary",  action="store_true",
+    parser.add_argument("--summary",      action="store_true",
+                        help="Generate Summary Report (default: all three)")
+    parser.add_argument("--detail",       action="store_true",
+                        help="Generate Detail Report (default: all three)")
+    parser.add_argument("--products",     action="store_true",
+                        help="Generate Product Recommendations Report (default: all three)")
+    parser.add_argument("--no-summary",   action="store_true",
                         help="Skip Summary Report")
-    parser.add_argument("--no-detail",   action="store_true",
+    parser.add_argument("--no-detail",    action="store_true",
                         help="Skip Detail Report")
+    parser.add_argument("--no-products",  action="store_true",
+                        help="Skip Product Recommendations Report")
     args = parser.parse_args()
 
-    # Decide which reports to generate
-    want_summary = not args.no_summary
-    want_detail  = not args.no_detail
-    if args.summary and not args.detail:
-        want_detail = False
-    if args.detail and not args.summary:
-        want_summary = False
+    # Decide which reports to generate.
+    # If any explicit --X flag is given, only those reports are generated.
+    # --no-X flags suppress specific reports regardless.
+    any_explicit = args.summary or args.detail or args.products
+    want_summary  = (not args.no_summary)  and (not any_explicit or args.summary)
+    want_detail   = (not args.no_detail)   and (not any_explicit or args.detail)
+    want_products = (not args.no_products) and (not any_explicit or args.products)
 
     # ── Locate scan file ───────────────────────────────────────────────────
     if args.json:
@@ -189,7 +198,7 @@ def main() -> int:
 
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Import PDF generator ───────────────────────────────────────────────
+    # ── Import PDF generators ──────────────────────────────────────────────
     try:
         from client_report import (
             build_client_summary_pdf,
@@ -209,10 +218,14 @@ def main() -> int:
         )
         return 1
 
+    try:
+        from product_recommendations import build_product_recommendations_pdf
+    except ImportError as e:
+        logger.warning(f"product_recommendations not available: {e} — skipping products report.")
+        want_products = False
+
     stem      = _stem(json_path)
     reporting = config.get("reporting", {})
-    # Resolve the prospect name the same way the PDF builder will — explicit
-    # override in config (set via --client-name) takes precedence over inference.
     client    = reporting.get("client_name") or infer_client_name(scan_results)
     risk      = compute_risk_score(scan_results)
     hosts     = scan_results.get("hosts", [])
@@ -231,8 +244,7 @@ def main() -> int:
         try:
             pdf_bytes = build_client_summary_pdf(scan_results, config)
             out_path.write_bytes(pdf_bytes)
-            size_kb = len(pdf_bytes) / 1024
-            logger.info(f"  Summary Report: {size_kb:.0f} KB  ({out_path})")
+            logger.info(f"  Summary Report: {len(pdf_bytes)//1024:.0f} KB  ({out_path})")
             generated.append(str(out_path))
         except Exception as e:
             logger.error(f"Summary Report generation failed: {e}", exc_info=True)
@@ -244,11 +256,22 @@ def main() -> int:
         try:
             pdf_bytes = build_client_detail_pdf(scan_results, config)
             out_path.write_bytes(pdf_bytes)
-            size_kb = len(pdf_bytes) / 1024
-            logger.info(f"  Detail Report: {size_kb:.0f} KB  ({out_path})")
+            logger.info(f"  Detail Report: {len(pdf_bytes)//1024:.0f} KB  ({out_path})")
             generated.append(str(out_path))
         except Exception as e:
             logger.error(f"Detail Report generation failed: {e}", exc_info=True)
+
+    # ── Product Recommendations Report ─────────────────────────────────────
+    if want_products:
+        out_path = out_dir / f"{stem}_Product_Recommendations.pdf"
+        logger.info(f"Generating Product Recommendations -> {out_path}")
+        try:
+            pdf_bytes = build_product_recommendations_pdf(scan_results, config)
+            out_path.write_bytes(pdf_bytes)
+            logger.info(f"  Product Recommendations: {len(pdf_bytes)//1024:.0f} KB  ({out_path})")
+            generated.append(str(out_path))
+        except Exception as e:
+            logger.error(f"Product Recommendations generation failed: {e}", exc_info=True)
 
     if generated:
         logger.info(f"Done. {len(generated)} PDF(s) generated:")

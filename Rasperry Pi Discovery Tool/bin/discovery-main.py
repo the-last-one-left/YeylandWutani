@@ -139,7 +139,8 @@ def cleanup_after_send(timestamp_str: str):
     is confirmed sent we can safely delete them.
     """
     removed = 0
-    for suffix in (".csv", ".json", "_Summary_Report.pdf", "_Detail_Report.pdf"):
+    for suffix in (".csv", ".json", "_Summary_Report.pdf", "_Detail_Report.pdf",
+                   "_Product_Recommendations.pdf"):
         path = DATA_DIR / f"scan_{timestamp_str}{suffix}"
         try:
             if path.exists():
@@ -504,7 +505,9 @@ def main():
 
         # ── Generate client-facing PDF reports (optional) ─────────────────
         pdf_paths = []
-        if config.get("reporting", {}).get("enable_pdf_reports", True):
+        rep_cfg   = config.get("reporting", {})
+
+        if rep_cfg.get("enable_pdf_reports", True):
             logger.info("Generating client-facing PDF reports...")
             pdf_start = time.time()
             try:
@@ -534,7 +537,7 @@ def main():
                     pdf_paths.append(str(detail_pdf_path))
 
                     pdf_duration = time.time() - pdf_start
-                    logger.info(f"PDF reports generated in {pdf_duration:.1f}s.")
+                    logger.info(f"Security PDFs generated in {pdf_duration:.1f}s.")
                 else:
                     logger.warning(
                         "reportlab not installed — skipping PDF reports. "
@@ -549,6 +552,34 @@ def main():
                 logger.info("Continuing without PDF reports.")
         else:
             logger.info("PDF reports disabled in config (reporting.enable_pdf_reports = false).")
+
+        # ── Generate product recommendations PDF (optional) ────────────────
+        if rep_cfg.get("enable_product_recommendations", True):
+            prod_path = DATA_DIR / f"scan_{timestamp_str}_Product_Recommendations.pdf"
+            logger.info("Generating product recommendations PDF...")
+            prod_start = time.time()
+            try:
+                from product_recommendations import (
+                    build_product_recommendations_pdf,
+                    REPORTLAB_AVAILABLE as _RL,
+                )
+                if _RL:
+                    prod_bytes = build_product_recommendations_pdf(scan_results, config)
+                    prod_path.write_bytes(prod_bytes)
+                    logger.info(
+                        f"Product Recommendations PDF: {len(prod_bytes) / 1024:.0f} KB "
+                        f"({prod_path.name})  [{time.time() - prod_start:.1f}s]"
+                    )
+                    pdf_paths.append(str(prod_path))
+            except ImportError:
+                logger.warning(
+                    "product_recommendations module not found — skipping."
+                )
+            except Exception as e:
+                logger.error(f"Product recommendations PDF failed: {e}", exc_info=True)
+                logger.info("Continuing without product recommendations PDF.")
+        else:
+            logger.info("Product recommendations disabled in config.")
 
         # Send report with CSV, JSON, and PDF attachments
         total_attach_kb = (gz_size + json_gz_path.stat().st_size) / 1024
