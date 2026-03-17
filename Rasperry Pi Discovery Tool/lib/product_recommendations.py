@@ -197,6 +197,114 @@ def size_environment(scan_results: dict) -> dict:
         if ad_server_count > 0:
             server_count = ad_server_count
 
+    # ── Security software signals ─────────────────────────────────────────
+    # AuthPoint (MFA): recommend when VPN, RDS, or WatchGuard detected
+    _vpn_keywords = {"vpn", "remote access", "remote users", "ssl-vpn",
+                     "sslvpn", "anyconnect", "remote desktop users"}
+    authpoint_reasons: list = []
+
+    # RDS/RDP: any Windows Server with port 3389 open warrants MFA on admin access
+    for _h in hosts:
+        _op = {p["port"] for p in _h.get("ports", []) if p.get("state") == "open"}
+        if 3389 in _op:
+            _os = (_h.get("ad_computer", {}).get("os") or _h.get("os") or "").lower()
+            if "server" in _os:
+                authpoint_reasons.append(
+                    "Windows Server with RDP (port 3389) detected -- MFA protects admin access"
+                )
+                break
+
+    # VPN/RDS from AD groups and SPNs
+    if ad_available:
+        for _grp in list((ad.get("privileged_groups") or {}).keys()):
+            if any(kw in _grp.lower() for kw in _vpn_keywords):
+                authpoint_reasons.append(f"AD group suggests VPN/remote access in use: '{_grp}'")
+                break
+        for _c in (ad.get("computers") or []):
+            _spns = _c.get("ServicePrincipalNames") or _c.get("spns") or []
+            if any("termsrv" in str(s).lower() for s in _spns):
+                if not any("RDS" in r for r in authpoint_reasons):
+                    authpoint_reasons.append("RDS (TERMSRV SPN) confirmed in Active Directory")
+                break
+
+    # WatchGuard already on network = VPN almost certainly in use
+    if has_watchguard and not authpoint_reasons:
+        authpoint_reasons.append(
+            "WatchGuard firewall detected -- native AuthPoint integration available for VPN MFA"
+        )
+
+    recommend_authpoint = bool(authpoint_reasons)
+
+    # EPDR (endpoint protection): recommend unless enterprise AV is positively identified
+    _enterprise_av = {
+        "crowdstrike", "sentinelone", "cylance", "carbon black", "cb defense",
+        "sophos endpoint", "eset endpoint", "symantec endpoint", "sep manager",
+        "trellix", "mcafee endpoint", "trend micro", "deep security",
+        "malwarebytes endpoint", "bitdefender gravityzone", "cybereason",
+        "cortex xdr", "defender for endpoint", "microsoft defender for endpoint",
+        "watchguard epdr", "panda endpoint", "f-secure elements",
+    }
+    _consumer_av = {
+        "windows defender", "microsoft defender antivirus",
+        "avast", "avg antivirus", "avira antivirus",
+        "malwarebytes free", "360 total", "comodo antivirus",
+    }
+
+    enterprise_av_detected = False
+    enterprise_av_name     = ""
+    free_av_detected       = False
+    free_av_name           = ""
+
+    def _check_av(text: str) -> tuple:
+        tl = text.lower()
+        for kw in _enterprise_av:
+            if kw in tl:
+                return kw.title(), ""
+        for kw in _consumer_av:
+            if kw in tl:
+                return "", kw.title()
+        return "", ""
+
+    # Scan SSL certs, HTTP titles, and service banners for AV product names
+    for _cert in scan_results.get("ssl_audit", {}).get("certificates", []):
+        _e, _f = _check_av(
+            (_cert.get("subject_cn") or "") + " " + (_cert.get("subject_org") or "")
+        )
+        if _e:
+            enterprise_av_detected = True; enterprise_av_name = _e; break
+        if _f:
+            free_av_detected = True; free_av_name = _f
+
+    if not enterprise_av_detected:
+        for _h in hosts:
+            _e, _f = _check_av((_h.get("http_info") or {}).get("title") or "")
+            if _e:
+                enterprise_av_detected = True; enterprise_av_name = _e; break
+            if _f:
+                free_av_detected = True; free_av_name = _f
+            for _p in (_h.get("ports") or []):
+                _banner = (_p.get("banner") or "") + " " + (_p.get("service_version") or "")
+                _e, _f = _check_av(_banner)
+                if _e:
+                    enterprise_av_detected = True; enterprise_av_name = _e; break
+                if _f:
+                    free_av_detected = True; free_av_name = _f
+            if enterprise_av_detected:
+                break
+
+    epdr_reasons: list = []
+    if free_av_detected:
+        epdr_reasons.append(
+            f"Consumer-grade AV detected ({free_av_name}) -- "
+            "not suitable for business threat protection"
+        )
+    elif not enterprise_av_detected:
+        epdr_reasons.append("No enterprise endpoint protection detected on this network")
+    if device_count > 0:
+        epdr_reasons.append(f"{device_count} endpoint(s) to protect")
+
+    recommend_epdr = not enterprise_av_detected
+
     # ── Server storage total (for Datto sizing) ───────────────────────────
     # Pull actual disk totals from AD WMI data when available;
     # fall back to a conservative 1 TB-per-server estimate.
@@ -268,6 +376,13 @@ def size_environment(scan_results: dict) -> dict:
         "ad":                      ad_context,
         # Datto sizing input
         "total_server_storage_tb": round(total_server_storage_tb, 1),
+        # Security software signals
+        "recommend_authpoint":  recommend_authpoint,
+        "authpoint_reasons":    authpoint_reasons,
+        "recommend_epdr":       recommend_epdr,
+        "epdr_reasons":         epdr_reasons,
+        "enterprise_av_name":   enterprise_av_name,
+        "free_av_name":         free_av_name,
     }
 
 
@@ -365,6 +480,24 @@ def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
     return product, server_count
 
 
+def _select_security_software(env: dict, catalog: dict) -> dict:
+    """
+    Return AuthPoint and/or EPDR recommendations based on detected signals.
+
+    Returns dict with optional keys 'authpoint' and 'epdr', each containing
+    the product dict from the catalog.
+    """
+    software = catalog.get("security_software", [])
+    by_model = {s.get("model", ""): s for s in software}
+
+    result = {}
+    if env.get("recommend_authpoint") and "AuthPoint" in by_model:
+        result["authpoint"] = by_model["AuthPoint"]
+    if env.get("recommend_epdr") and "EPDR" in by_model:
+        result["epdr"] = by_model["EPDR"]
+    return result
+
+
 def _select_datto(env: dict, catalog: dict) -> Optional[dict]:
     """
     Select the appropriate Datto BCDR appliance based on server storage.
@@ -421,6 +554,7 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     ap_result = _select_aps(env, catalog)
     sv_result = _select_servers(env, catalog)
     datto_product = _select_datto(env, catalog)
+    sec_sw = _select_security_software(env, catalog)
 
     # Build reason signals for each recommendation
     fw_signals = [
@@ -510,6 +644,30 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     else:
         result["backup"] = None
 
+    ap_prod = sec_sw.get("authpoint")
+    if ap_prod:
+        result["authpoint"] = {
+            "product":        ap_prod,
+            "count":          1,
+            "reason_signals": env.get("authpoint_reasons", []),
+        }
+    else:
+        result["authpoint"] = None
+
+    epdr_prod = sec_sw.get("epdr")
+    if epdr_prod:
+        free_av = env.get("free_av_name", "")
+        epdr_signals = list(env.get("epdr_reasons", []))
+        if free_av:
+            epdr_signals.insert(0, f"Replace {free_av} with enterprise EDR")
+        result["epdr"] = {
+            "product":        epdr_prod,
+            "count":          1,
+            "reason_signals": epdr_signals,
+        }
+    else:
+        result["epdr"] = None
+
     return result
 
 
@@ -528,7 +686,8 @@ _NARRATIVE_SYSTEM = (
     "Do not invent features not listed in the product specs provided."
 )
 
-_NARRATIVE_SECTION_KEYS = ["FIREWALL", "SWITCHING", "WIRELESS", "SERVERS", "BACKUP"]
+_NARRATIVE_SECTION_KEYS = ["FIREWALL", "SWITCHING", "WIRELESS", "SERVERS", "BACKUP",
+                           "AUTHPOINT", "EPDR"]
 
 
 def get_recommendation_narratives(
@@ -613,22 +772,37 @@ RECOMMENDED PRODUCTS:
 - Servers:    {_spec(sv.get('product', {}), sv.get('count', 1)) if sv else 'None recommended'}
 """
 
-    bk   = recommendations.get("backup") or {}
+    bk   = recommendations.get("backup")   or {}
+    aup  = recommendations.get("authpoint") or {}
+    epdr = recommendations.get("epdr")      or {}
     context += (
-        f"- Backup/BCDR: {_spec(bk.get('product', {})) if bk else 'None recommended'}\n"
+        f"- Backup/BCDR:  {_spec(bk.get('product', {})) if bk else 'None recommended'}\n"
         f"  Protected data: {env.get('total_server_storage_tb', 0):.1f} TB\n"
         f"  Local storage: {bk.get('product', {}).get('local_storage_tb', 'N/A') if bk else 'N/A'} TB\n"
     )
+    if aup:
+        context += (
+            f"- MFA:           WatchGuard AuthPoint\n"
+            f"  Trigger:       {'; '.join(env.get('authpoint_reasons', []))[:120]}\n"
+        )
+    if epdr:
+        free_av = env.get("free_av_name", "")
+        context += (
+            f"- Endpoint AV:   WatchGuard EPDR\n"
+            f"  Current state: {('Replace ' + free_av) if free_av else 'No enterprise AV detected'}\n"
+        )
+
+    sections = "FIREWALL:\nSWITCHING:\nWIRELESS:\nSERVERS:\nBACKUP:\n"
+    if aup:
+        sections += "AUTHPOINT:\n"
+    if epdr:
+        sections += "EPDR:\n"
 
     user_msg = (
         "Based on the environment data and recommended products below, write a "
         "2-3 sentence justification for each product category. Use EXACTLY these "
         "section headers with a colon, then the narrative on the next line:\n\n"
-        "FIREWALL:\n"
-        "SWITCHING:\n"
-        "WIRELESS:\n"
-        "SERVERS:\n"
-        "BACKUP:\n\n"
+        + sections + "\n"
         + context
     )
 
@@ -839,12 +1013,55 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
             "infrastructure is deployed."
         )
 
+    # AuthPoint (MFA) narrative
+    aup = recommendations.get("authpoint") or {}
+    if aup:
+        reasons = env.get("authpoint_reasons", [])
+        trigger = reasons[0] if reasons else "remote access detected on this network"
+        aup_text = (
+            f"WatchGuard AuthPoint MFA is recommended because {trigger.lower()}. "
+            "AuthPoint integrates natively with the WatchGuard Firebox for VPN authentication "
+            "and supports RDP, cloud apps, and on-premises services via RADIUS and SAML -- "
+            "without requiring a separate RADIUS server. "
+            "One-tap push authentication and device DNA fingerprinting stop credential-based attacks "
+            "even when passwords are compromised."
+        )
+    else:
+        aup_text = ""
+
+    # EPDR narrative
+    epdr_rec = recommendations.get("epdr") or {}
+    if epdr_rec:
+        free_av = env.get("free_av_name", "")
+        if free_av:
+            epdr_text = (
+                f"{free_av} was detected on this network -- a consumer-grade product that lacks "
+                "the behavioral detection, EDR capabilities, and centralised management "
+                "required for a business environment. "
+                "WatchGuard EPDR uses a Zero-Trust Application Service to block unknown processes "
+                "by default, combined with AI-powered threat hunting and automatic ransomware rollback. "
+                "Management is unified with the WatchGuard Cloud console alongside the Firebox."
+            )
+        else:
+            epdr_text = (
+                f"No enterprise endpoint protection was detected across the {env['device_count']} "
+                "devices on this network, representing a significant and common attack surface. "
+                "WatchGuard EPDR deploys a lightweight cloud-managed agent that blocks unknown "
+                "processes by default (Zero-Trust), detects ransomware behaviour, and provides "
+                "full EDR capabilities -- all managed from the same WatchGuard Cloud console "
+                "as the Firebox."
+            )
+    else:
+        epdr_text = ""
+
     return {
-        "firewall":  fw_text,
-        "switching": sw_text,
-        "wireless":  ap_text,
-        "servers":   sv_text,
-        "backup":    bk_text,
+        "firewall":   fw_text,
+        "switching":  sw_text,
+        "wireless":   ap_text,
+        "servers":    sv_text,
+        "backup":     bk_text,
+        "authpoint":  aup_text,
+        "epdr":       epdr_text,
     }
 
 
@@ -977,6 +1194,9 @@ def _count_specs(product: dict) -> int:
         "max_devices", "interfaces", "form_factor", "ports", "poe_ports",
         "poe_budget_w", "uplinks", "max_throughput_mbps", "wifi_standard",
         "max_clients", "form_factor", "processor", "max_ram_gb",
+        # Software / security product fields
+        "deployment", "authentication_methods", "detection_engine",
+        "platforms", "integrations", "management",
     ]
     return sum(1 for k in keys if product.get(k) is not None)
 
@@ -1027,6 +1247,20 @@ def _draw_spec_grid(c, product: dict, x: float, y: float, w: float) -> None:
         specs.append(("Bands", product["bands"]))
     if "poe_required" in product:
         specs.append(("PoE Required", product["poe_required"]))
+
+    # Security software specs
+    if "deployment" in product:
+        specs.append(("Deployment", product["deployment"]))
+    if "authentication_methods" in product:
+        specs.append(("Auth Methods", product["authentication_methods"]))
+    if "detection_engine" in product:
+        specs.append(("Detection Engine", product["detection_engine"]))
+    if "platforms" in product:
+        specs.append(("Platforms", product["platforms"]))
+    if "integrations" in product:
+        specs.append(("Integrations", product["integrations"][:45]))
+    if "management" in product:
+        specs.append(("Management", product["management"]))
 
     # Server specs
     if "processor" in product:
@@ -1344,6 +1578,20 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
                           f"{p.get('vendor','')} {p.get('model','')}",
                           p.get("best_for", "")))
 
+        aup_rec = recommendations.get("authpoint") or {}
+        if aup_rec and aup_rec.get("product"):
+            p = aup_rec["product"]
+            rows.append(("MFA",
+                          f"{p.get('vendor','')} {p.get('model','')}",
+                          p.get("best_for", "")))
+
+        epdr_rec = recommendations.get("epdr") or {}
+        if epdr_rec and epdr_rec.get("product"):
+            p = epdr_rec["product"]
+            rows.append(("Endpoint Security",
+                          f"{p.get('vendor','')} {p.get('model','')}",
+                          p.get("best_for", "")))
+
         col_ws = [90, 130, CONTENT_W - 90 - 130]
         hdr_y  = y
         c.setFillColor(_hex("#343a40"))
@@ -1528,6 +1776,38 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
             product   = bk["product"],
             count     = 1,
             narrative = narratives.get("backup", ""),
+            scan_date = scan_date, brand_name = brand_name,
+            company_color = company_color,
+        )
+        c.showPage()
+
+    # Page 7: MFA -- WatchGuard AuthPoint (optional, when VPN/RDS detected)
+    aup_rec = recs.get("authpoint")
+    if aup_rec:
+        _draw_category_page(
+            c,
+            title     = "SECURITY SOFTWARE RECOMMENDATIONS",
+            subtitle  = "Multi-Factor Authentication -- WatchGuard AuthPoint",
+            current_state_lines = aup_rec["reason_signals"],
+            product   = aup_rec["product"],
+            count     = 1,
+            narrative = narratives.get("authpoint", ""),
+            scan_date = scan_date, brand_name = brand_name,
+            company_color = company_color,
+        )
+        c.showPage()
+
+    # Page 8: Endpoint Security -- WatchGuard EPDR (optional, when no enterprise AV detected)
+    epdr_rec = recs.get("epdr")
+    if epdr_rec:
+        _draw_category_page(
+            c,
+            title     = "SECURITY SOFTWARE RECOMMENDATIONS",
+            subtitle  = "Endpoint Protection & Response -- WatchGuard EPDR",
+            current_state_lines = epdr_rec["reason_signals"],
+            product   = epdr_rec["product"],
+            count     = 1,
+            narrative = narratives.get("epdr", ""),
             scan_date = scan_date, brand_name = brand_name,
             company_color = company_color,
         )

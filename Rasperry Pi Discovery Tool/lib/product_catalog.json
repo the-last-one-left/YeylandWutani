@@ -494,6 +494,48 @@
     }
   ],
 
+  "security_software": [
+    {
+      "vendor": "WatchGuard",
+      "line": "AuthPoint",
+      "model": "AuthPoint",
+      "category": "mfa",
+      "deployment": "Cloud (SaaS)",
+      "authentication_methods": "Push, TOTP, QR code, hardware tokens",
+      "integrations": "WatchGuard Firebox, RADIUS, SAML 2.0, Azure AD, ADFS",
+      "platforms": "iOS, Android, Windows, macOS, Chrome",
+      "management": "WatchGuard Cloud portal",
+      "subscription_required": "Per-user annual subscription",
+      "key_features": [
+        "One-tap push MFA for VPN, RDP, and cloud app logins",
+        "Native WatchGuard Firebox integration — no RADIUS server needed",
+        "SAML 2.0 federation for Microsoft 365, Salesforce, and 100+ apps",
+        "Risk-based auth with location and device DNA fingerprinting",
+        "Phishing-resistant hardware token option available"
+      ],
+      "best_for": "Organisations with VPN, RDS/RDP, or cloud apps requiring secure MFA"
+    },
+    {
+      "vendor": "WatchGuard",
+      "line": "Endpoint Security",
+      "model": "EPDR",
+      "category": "endpoint_protection",
+      "deployment": "Cloud-managed lightweight agent",
+      "detection_engine": "AI/ML + Zero-Trust Application Service",
+      "platforms": "Windows, macOS, Linux, Android",
+      "management": "WatchGuard Cloud (unified with Firebox)",
+      "subscription_required": "Per-device annual subscription",
+      "key_features": [
+        "Zero-Trust Application Service — only verified processes run",
+        "AI-powered behavioral analysis and threat hunting",
+        "Ransomware rollback and automatic process remediation",
+        "Full EDR: process tracing, attack timelines, endpoint isolation",
+        "Unified WatchGuard Cloud console alongside Firebox management"
+      ],
+      "best_for": "Replacing consumer or free AV with enterprise EDR across all endpoints"
+    }
+  ],
+
   "servers": [
     {
       "vendor": "Dell",

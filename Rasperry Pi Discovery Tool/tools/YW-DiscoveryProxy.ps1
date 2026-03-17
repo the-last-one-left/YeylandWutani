@@ -1,6 +1,6 @@
-<#
+﻿<#
 .SYNOPSIS
-    Yeyland Wutani LLC — Discovery Proxy for credentialed network scanning.
+    Yeyland Wutani LLC -- Discovery Proxy for credentialed network scanning.
 
 .DESCRIPTION
     Run this script on a Domain Controller as Domain Admin BEFORE starting a
@@ -8,7 +8,7 @@
 
       1. Writes a self-expiring DNS TXT record:
              _yw-discovery.<domain>  TXT  "ywp-v1|token=<TOKEN>|port=<PORT>"
-         The Pi discovers this record automatically — no manual key entry needed.
+         The Pi discovers this record automatically -- no manual key entry needed.
 
       2. Starts a local HTTP API that accepts authenticated queries from the Pi:
              /computers       All AD computer objects
@@ -55,7 +55,7 @@ param(
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-# ── Colour helpers ─────────────────────────────────────────────────────────────
+# â”€â”€ Colour helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Write-Banner {
     $bar = "=" * 62
@@ -78,7 +78,7 @@ function Write-Req([string]$Method, [string]$Path, [string]$Detail) {
         -ForegroundColor DarkCyan
 }
 
-# ── Module checks ──────────────────────────────────────────────────────────────
+# â”€â”€ Module checks â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Test-Mod([string]$Name) {
     return [bool](Get-Module -ListAvailable -Name $Name -ErrorAction SilentlyContinue)
@@ -98,13 +98,13 @@ if ($DNSAvailable) {
     Import-Module DnsServer -ErrorAction SilentlyContinue
 }
 
-# ── Token generation ───────────────────────────────────────────────────────────
+# â”€â”€ Token generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 $TokenBytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)
 $Token      = [Convert]::ToBase64String($TokenBytes) `
               -replace '\+', '-' -replace '/', '_' -replace '=', ''
 
-# ── DNS TXT record management ──────────────────────────────────────────────────
+# â”€â”€ DNS TXT record management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 $TxtLabel   = "_yw-discovery"
 $TxtValue   = "ywp-v1|token=$Token|port=$Port"
@@ -145,7 +145,7 @@ function Remove-ProxyTxt {
     catch { }
 }
 
-# ── Windows Firewall management ───────────────────────────────────────────────
+# â”€â”€ Windows Firewall management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 $FwRuleName    = "YW-DiscoveryProxy-TCP-$Port"
 $FwRuleCreated = $false
@@ -154,7 +154,7 @@ function Add-ProxyFirewallRule {
     # If a rule for this port/name already exists, leave it alone
     $existing = Get-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
     if ($existing) {
-        Write-KV "Firewall" "Rule already present — skipping" "DarkGray"
+        Write-KV "Firewall" "Rule already present -- skipping" "DarkGray"
         return
     }
     try {
@@ -168,7 +168,7 @@ function Add-ProxyFirewallRule {
             -Description    "Temporary YW Discovery Proxy rule. Auto-removed on script exit." `
             -ErrorAction    Stop | Out-Null
         $script:FwRuleCreated = $true
-        Write-KV "Firewall" "Inbound TCP $Port — rule added (auto-removed on exit)" "Green"
+        Write-KV "Firewall" "Inbound TCP $Port -- rule added (auto-removed on exit)" "Green"
     }
     catch {
         Write-KV "Firewall" "Could not add rule: $_" "Yellow"
@@ -186,7 +186,7 @@ function Remove-ProxyFirewallRule {
     catch { }
 }
 
-# ── Hardware inventory via CIM ─────────────────────────────────────────────────
+# â”€â”€ Hardware inventory via CIM â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Get-ServerHardware([string[]]$ComputerNames) {
     $out = [System.Collections.Generic.List[hashtable]]::new()
@@ -228,7 +228,7 @@ function Get-ServerHardware([string[]]$ComputerNames) {
                 }
             }
 
-            # Disks — try Storage module (accurate SSD/HDD), fall back to WMI
+            # Disks -- try Storage module (accurate SSD/HDD), fall back to WMI
             $disks = @()
             try {
                 $sess = New-CimSession -ComputerName $name -OperationTimeoutSec 10
@@ -317,7 +317,7 @@ function Get-ServerHardware([string[]]$ComputerNames) {
     return , @($out)
 }
 
-# ── AD query helpers ───────────────────────────────────────────────────────────
+# â”€â”€ AD query helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 function Get-ComputersData {
     $props = @(
@@ -393,15 +393,18 @@ function Get-DnsData {
             $recs = @(Get-DnsServerResourceRecord -ZoneName $z.ZoneName -ErrorAction SilentlyContinue |
                 Where-Object { $_.RecordType -in @("A","AAAA","CNAME","MX","PTR","SRV","NS") } |
                 ForEach-Object {
+                    $rd   = $_.RecordData
+                    $data = if ($rd.IPv4Address)   { $rd.IPv4Address.ToString() }
+                            elseif ($rd.IPv6Address)  { $rd.IPv6Address.ToString() }
+                            elseif ($rd.HostNameAlias){ $rd.HostNameAlias }
+                            elseif ($rd.MailExchange) { $rd.MailExchange }
+                            elseif ($rd.DomainName)   { $rd.DomainName }
+                            else                      { "" }
                     @{
-                        name   = $_.HostName
-                        type   = $_.RecordType
-                        data   = $_.RecordData.IPv4Address.ToString()    -replace '^$', '' `
-                               + $_.RecordData.IPv6Address?.ToString()   `
-                               + $_.RecordData.HostNameAlias             `
-                               + $_.RecordData.MailExchange              `
-                               + $_.RecordData.DomainName
-                        ttl    = $_.TimeToLive.TotalSeconds
+                        name = $_.HostName
+                        type = $_.RecordType
+                        data = $data
+                        ttl  = $_.TimeToLive.TotalSeconds
                     }
                 })
             @{
@@ -475,7 +478,7 @@ function Get-DomainData {
     }
 }
 
-# ── HTTP listener helpers ──────────────────────────────────────────────────────
+# â”€â”€ HTTP listener helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 $RequestCount = 0
 $LockedToIP   = $null
@@ -499,7 +502,8 @@ function Handle-Request($Context) {
     $script:RequestCount++
 
     # Bearer token auth
-    $auth  = $req.Headers["Authorization"] ?? ""
+    $authRaw = $req.Headers["Authorization"]
+    $auth    = if ($authRaw) { $authRaw } else { "" }
     $given = if ($auth -match '^Bearer\s+(.+)$') { $Matches[1].Trim() } else { "" }
 
     if ($given -ne $Token) {
@@ -596,7 +600,7 @@ function Handle-Request($Context) {
     return $false
 }
 
-# ── Main ───────────────────────────────────────────────────────────────────────
+# â”€â”€ Main â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 Write-Banner
 
@@ -627,7 +631,7 @@ Write-KV "Port"     $Port
 Write-KV "Expires"  ($Deadline.ToString("HH:mm:ss") + "  ($TimeoutMinutes min)") "Yellow"
 Write-KV "Status"   "Waiting for Pi to auto-discover and connect..." "Green"
 Write-Host ""
-Write-Host "  (Pi discovers this proxy automatically via DNS TXT — no manual steps needed.)" `
+Write-Host "  (Pi discovers this proxy automatically via DNS TXT -- no manual steps needed.)" `
     -ForegroundColor DarkGray
 Write-Host ""
 
@@ -681,3 +685,4 @@ finally {
     Write-Host ("  Firewall cleaned : {0}" -f $script:FwRuleCreated)  -ForegroundColor DarkGray
     Write-Host "  Proxy stopped cleanly.`n" -ForegroundColor DarkGray
 }
+
