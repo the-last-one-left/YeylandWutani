@@ -1186,6 +1186,12 @@ main() {
 
     if [[ "${_INSTALL_MODE}" == "update" ]]; then
         # ── Update mode: refresh code/packages, keep all config ──────────────
+        # Load schedule vars from existing config so install_services() can
+        # substitute __SCAN_TIME__ / __REPORT_DAY__ / __REPORT_TIME__ in timers.
+        load_existing_config
+        SCAN_TIME="${_EXISTING_SCAN_TIME:-02:00}"
+        REPORT_DAY="${_EXISTING_REPORT_DAY:-Monday}"
+        REPORT_TIME="${_EXISTING_REPORT_TIME:-06:00}"
         install_packages       # Step 1 — update packages
         clone_repo             # Step 3 — pull latest code
         setup_venv             # Step 4 — rebuild venv / update deps
