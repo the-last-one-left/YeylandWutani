@@ -202,8 +202,10 @@ function Get-ServerHardware([string[]]$ComputerNames) {
             if ($procs.Count -gt 0) {
                 $hw.cpu_name          = ($procs[0].Name -replace '\s+', ' ').Trim()
                 $hw.cpu_socket_count  = $procs.Count
-                $hw.cpu_cores_total   = ($procs | Measure-Object NumberOfCores -Sum).Sum
-                $hw.cpu_logical_total = ($procs | Measure-Object NumberOfLogicalProcessors -Sum).Sum
+                $hw.cpu_cores_total   = ($procs | Where-Object { $null -ne $_.NumberOfCores } |
+                                            Measure-Object NumberOfCores -Sum).Sum
+                $hw.cpu_logical_total = ($procs | Where-Object { $null -ne $_.NumberOfLogicalProcessors } |
+                                            Measure-Object NumberOfLogicalProcessors -Sum).Sum
                 $hw.cpu_speed_mhz     = $procs[0].MaxClockSpeed
             }
 
@@ -229,8 +231,8 @@ function Get-ServerHardware([string[]]$ComputerNames) {
                         model      = $_.FriendlyName
                         size_gb    = [math]::Round($_.Size / 1GB, 0)
                         media_type = $_.MediaType   # SSD / HDD / Unspecified
-                        bus_type   = $_.BusType.ToString()
-                        health     = $_.HealthStatus.ToString()
+                        bus_type   = if ($null -ne $_.BusType) { $_.BusType.ToString() } else { $null }
+                        health     = if ($null -ne $_.HealthStatus) { $_.HealthStatus.ToString() } else { $null }
                     }
                 })
                 Remove-CimSession $sess -ErrorAction SilentlyContinue
@@ -249,7 +251,9 @@ function Get-ServerHardware([string[]]$ComputerNames) {
             }
             $hw.disks          = $disks
             $hw.disk_count     = $disks.Count
-            $hw.disk_total_gb  = ($disks | Measure-Object size_gb -Sum).Sum
+            $diskTotal = 0
+            foreach ($d in $disks) { if ($d.size_gb) { $diskTotal += $d.size_gb } }
+            $hw.disk_total_gb  = $diskTotal
 
             # BIOS / firmware (serial number critical for warranty lookup)
             $bios = Get-CimInstance -ComputerName $name -ClassName Win32_BIOS `
