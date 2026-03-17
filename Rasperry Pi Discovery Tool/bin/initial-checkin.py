@@ -139,6 +139,7 @@ def gather_system_info() -> dict:
     wan_ip = _get_public_ip()
     info["wan_ip"] = wan_ip
     logger.info(f"  WAN IP: {wan_ip or 'unavailable'}")
+
     elapsed = time.time() - t0
     logger.info(f"System info gathered in {elapsed:.1f}s")
     return info
