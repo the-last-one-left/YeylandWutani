@@ -261,17 +261,17 @@ def _select_aps(env: dict, catalog: dict) -> Optional[tuple]:
     if wireless == 0 and not has_cwifi and wifi_count == 0:
         return None
 
-    # Pick model: AP25 for dense environments, AP22 for general
+    # Pick model: AP32 (Wi-Fi 6E) for dense environments, AP25 (Wi-Fi 6) as standard
     aps = catalog.get("access_points", [])
     indoor_aps = [a for a in aps if a.get("indoor_outdoor") == "Indoor"]
     if not indoor_aps:
         return None
 
-    # Use AP25 if more than 30 wireless devices, otherwise AP22
-    if wireless > 30:
-        product = next((a for a in indoor_aps if a["model"] == "AP25"), indoor_aps[-1])
+    # Use AP32 (Wi-Fi 6E) for high-density environments (50+ wireless), AP25 otherwise
+    if wireless > 50:
+        product = next((a for a in indoor_aps if a["model"] == "AP32"), indoor_aps[-1])
     else:
-        product = next((a for a in indoor_aps if a["model"] == "AP22"), indoor_aps[0])
+        product = next((a for a in indoor_aps if a["model"] == "AP25"), indoor_aps[0])
 
     max_clients = product.get("max_clients", 30)
     count = max(1, math.ceil(wireless / max_clients))
