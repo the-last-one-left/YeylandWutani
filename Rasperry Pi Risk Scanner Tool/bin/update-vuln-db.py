@@ -217,12 +217,11 @@ Examples:
 
         # NVD full seed
         print("  [1/3] Seeding NVD CVE database (full)...")
-        logger.info("Seeding NVD CVE database (full=True)...")
+        logger.info("Seeding NVD CVE database (force_full=True)...")
         nvd_start = time.time()
         try:
-            nvd_result = update_nvd_cache(api_key=nvd_api_key, full=True)
-            nvd_result["duration_s"] = time.time() - nvd_start
-            _print_update_summary("NVD CVE Database", nvd_result)
+            nvd_count = update_nvd_cache(api_key=nvd_api_key, force_full=True)
+            _print_update_summary("NVD CVE Database", {"total": nvd_count, "duration_s": time.time() - nvd_start})
         except Exception as e:
             logger.error("NVD seed failed: %s", e, exc_info=True)
             print(f"  NVD seed FAILED: {e}")
@@ -234,9 +233,8 @@ Examples:
         logger.info("Updating CISA KEV catalog...")
         kev_start = time.time()
         try:
-            kev_result = update_kev_catalog()
-            kev_result["duration_s"] = time.time() - kev_start
-            _print_update_summary("CISA KEV Catalog", kev_result)
+            kev_count = update_kev_catalog()
+            _print_update_summary("CISA KEV Catalog", {"total": kev_count, "duration_s": time.time() - kev_start})
         except Exception as e:
             logger.error("KEV update failed: %s", e, exc_info=True)
             print(f"  KEV update FAILED: {e}")
@@ -248,9 +246,8 @@ Examples:
         logger.info("Seeding OSV database...")
         osv_start = time.time()
         try:
-            osv_result = update_osv_cache()
-            osv_result["duration_s"] = time.time() - osv_start
-            _print_update_summary("OSV Database", osv_result)
+            osv_count = update_osv_cache()
+            _print_update_summary("OSV Database", {"total": osv_count, "duration_s": time.time() - osv_start})
         except Exception as e:
             logger.error("OSV seed failed: %s", e, exc_info=True)
             print(f"  OSV seed FAILED: {e}")
@@ -286,9 +283,8 @@ Examples:
         logger.info("Updating NVD CVE database (incremental)...")
         nvd_start = time.time()
         try:
-            nvd_result = update_nvd_cache(api_key=nvd_api_key, full=False)
-            nvd_result["duration_s"] = time.time() - nvd_start
-            _print_update_summary("NVD CVE Database", nvd_result)
+            nvd_count = update_nvd_cache(api_key=nvd_api_key)
+            _print_update_summary("NVD CVE Database", {"total": nvd_count, "duration_s": time.time() - nvd_start})
         except Exception as e:
             logger.error("NVD update failed: %s", e, exc_info=True)
             print(f"  NVD update FAILED: {e}")
@@ -299,9 +295,8 @@ Examples:
         logger.info("Updating CISA KEV catalog...")
         kev_start = time.time()
         try:
-            kev_result = update_kev_catalog()
-            kev_result["duration_s"] = time.time() - kev_start
-            _print_update_summary("CISA KEV Catalog", kev_result)
+            kev_count = update_kev_catalog()
+            _print_update_summary("CISA KEV Catalog", {"total": kev_count, "duration_s": time.time() - kev_start})
         except Exception as e:
             logger.error("KEV update failed: %s", e, exc_info=True)
             print(f"  KEV update FAILED: {e}")
@@ -312,9 +307,8 @@ Examples:
         logger.info("Updating OSV database (incremental)...")
         osv_start = time.time()
         try:
-            osv_result = update_osv_cache()
-            osv_result["duration_s"] = time.time() - osv_start
-            _print_update_summary("OSV Database", osv_result)
+            osv_count = update_osv_cache()
+            _print_update_summary("OSV Database", {"total": osv_count, "duration_s": time.time() - osv_start})
         except Exception as e:
             logger.error("OSV update failed: %s", e, exc_info=True)
             print(f"  OSV update FAILED: {e}")

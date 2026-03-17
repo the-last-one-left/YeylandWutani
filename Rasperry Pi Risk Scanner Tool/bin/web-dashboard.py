@@ -1562,13 +1562,13 @@ def _setup_logging(log_file: Path):
 
 
 def main():
+    global CONFIG_PATH
     parser = argparse.ArgumentParser(description="Yeyland Wutani Risk Scanner Web Dashboard")
     parser.add_argument("--config", default=str(CONFIG_PATH), help="Path to config.json")
     parser.add_argument("--port", type=int, default=8080, help="Listening port (default 8080)")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address (default 0.0.0.0)")
     args = parser.parse_args()
 
-    global CONFIG_PATH
     CONFIG_PATH = Path(args.config)
 
     _setup_logging(LOG_FILE)
