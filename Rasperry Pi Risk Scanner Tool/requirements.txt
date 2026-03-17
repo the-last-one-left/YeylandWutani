@@ -28,3 +28,6 @@ requests>=2.31.0
 
 # Date parsing utilities
 python-dateutil>=2.9.0
+
+# Web dashboard password hashing (optional — falls back to HMAC-SHA256 if unavailable)
+bcrypt>=4.1.0

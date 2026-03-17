@@ -3,6 +3,7 @@
 # Never commit secrets or encrypted credentials
 config/config.json
 config/credentials.enc
+config/dashboard.json
 config/.env
 
 # Scan data and history (large, device-specific) — keep directory skeleton

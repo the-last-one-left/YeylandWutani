@@ -1,0 +1,25 @@
+[Unit]
+Description=Risk Scanner Web Dashboard
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=risk-scanner
+Group=risk-scanner
+ExecStart=/opt/risk-scanner/venv/bin/python3 /opt/risk-scanner/bin/web-dashboard.py
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+WorkingDirectory=/opt/risk-scanner
+
+# Security hardening
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/risk-scanner/logs /opt/risk-scanner/data
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

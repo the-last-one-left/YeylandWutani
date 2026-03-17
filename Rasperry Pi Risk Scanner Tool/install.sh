@@ -809,19 +809,79 @@ install_services() {
         print_warn "risk-scanner-daily.timer not found — check systemd/ directory."
     systemctl enable risk-scanner-report.timer 2>/dev/null || \
         print_warn "risk-scanner-report.timer not found — check systemd/ directory."
+    systemctl enable risk-scanner-web.service 2>/dev/null || \
+        print_warn "risk-scanner-web.service not found — check systemd/ directory."
 
     systemctl start risk-scanner-daily.timer  2>/dev/null || \
         print_warn "Could not start risk-scanner-daily.timer — may need a reboot."
     systemctl start risk-scanner-report.timer 2>/dev/null || \
         print_warn "Could not start risk-scanner-report.timer — may need a reboot."
+    systemctl start risk-scanner-web.service  2>/dev/null || \
+        print_warn "Could not start risk-scanner-web.service — may need a reboot."
 
     print_ok "Systemd units installed and enabled."
 }
 
-# ── Step 10: Initialize vulnerability database ────────────────────────────────
+# ── Step 10: Set web dashboard password ──────────────────────────────────────
+
+set_dashboard_password() {
+    print_step "Step 10: Set web dashboard password"
+    echo ""
+    echo "  The web dashboard runs on port 8080 and requires a password."
+    echo "  Set it now, or press Enter to skip (use set-dashboard-password.sh later)."
+    echo ""
+
+    local DASHBOARD_JSON="${INSTALL_DIR}/config/dashboard.json"
+
+    while true; do
+        printf "  Dashboard password (min 8 chars, Enter to skip): "
+        read -r -s DASH_PASS </dev/tty
+        echo ""
+        if [[ -z "${DASH_PASS}" ]]; then
+            print_warn "Dashboard password not set. Run: sudo ${INSTALL_DIR}/bin/set-dashboard-password.sh"
+            return
+        fi
+        if [[ ${#DASH_PASS} -lt 8 ]]; then
+            print_error "Password must be at least 8 characters."
+            continue
+        fi
+        printf "  Confirm password: "
+        read -r -s DASH_PASS2 </dev/tty
+        echo ""
+        if [[ "${DASH_PASS}" != "${DASH_PASS2}" ]]; then
+            print_error "Passwords do not match. Try again."
+            continue
+        fi
+        break
+    done
+
+    sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" - <<PYEOF
+import json, os, sys
+password = """${DASH_PASS}"""
+try:
+    import bcrypt
+    h = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
+    method = "bcrypt"
+except ImportError:
+    import hmac, hashlib, secrets
+    salt = secrets.token_hex(16)
+    digest = hmac.new(salt.encode(), password.encode(), hashlib.sha256).hexdigest()
+    h = "hmac:{}:{}".format(salt, digest)
+    method = "hmac-sha256"
+data = {"password_hash": h, "auth_method": method}
+with open("${DASHBOARD_JSON}", "w") as f:
+    json.dump(data, f)
+os.chmod("${DASHBOARD_JSON}", 0o600)
+print("  Password hashed with " + method)
+PYEOF
+
+    print_ok "Dashboard password set. Access at http://$(hostname -s):8080"
+}
+
+# ── Step 11: Initialize vulnerability database ────────────────────────────────
 
 init_vuln_db() {
-    print_step "Step 10: Initializing vulnerability database"
+    print_step "Step 11: Initializing vulnerability database"
     echo "  This may take several minutes on first run..."
 
     local VULN_SCRIPT="${INSTALL_DIR}/bin/update-vuln-db.py"
@@ -841,7 +901,7 @@ init_vuln_db() {
 # ── Step 11: Send test check-in email ────────────────────────────────────────
 
 send_checkin_email() {
-    print_step "Step 11: Sending test check-in email"
+    print_step "Step 12: Sending test check-in email"
 
     local CHECKIN_SCRIPT="${INSTALL_DIR}/bin/initial-checkin.py"
     if [[ ! -f "${CHECKIN_SCRIPT}" ]]; then
@@ -863,7 +923,7 @@ run_first_scan() {
         return
     fi
 
-    print_step "Step 12: Running first scan"
+    print_step "Step 13: Running first scan"
     info "Starting immediate scan in the background..."
 
     local MAIN_SCRIPT="${INSTALL_DIR}/bin/risk-scanner-main.py"
@@ -893,6 +953,7 @@ print_success_banner() {
     echo -e "${RESET}"
     echo ""
     echo -e "  ${BOLD}Install path:${RESET}    ${INSTALL_DIR}"
+    echo -e "  ${BOLD}Web dashboard:${RESET}   http://$(hostname -s):8080"
     echo -e "  ${BOLD}Next scan:${RESET}       ${NEXT_SCAN_DATE}"
     echo -e "  ${BOLD}Next report:${RESET}     ${REPORT_DAY}s at ${REPORT_TIME}"
     echo -e "  ${BOLD}Log location:${RESET}    ${LOG_DIR}/risk-scanner.log"
@@ -908,6 +969,12 @@ print_success_banner() {
     echo "  Monitor logs:"
     echo "     tail -f ${LOG_DIR}/risk-scanner.log"
     echo "     sudo journalctl -u risk-scanner-daily -f"
+    echo ""
+    echo "  Web dashboard (open in any browser):"
+    echo "     http://$(hostname -s):8080"
+    echo ""
+    echo "  Reset dashboard password:"
+    echo "     sudo ${INSTALL_DIR}/bin/set-dashboard-password.sh"
     echo ""
     echo "  Reconfigure credentials / settings:"
     echo "     sudo ${INSTALL_DIR}/bin/update-config.sh"
@@ -944,9 +1011,10 @@ main() {
     run_config_wizard      # Steps 6 & 7
     encrypt_credentials    # Step 8
     install_services       # Step 9
-    init_vuln_db           # Step 10
-    send_checkin_email     # Step 11
-    run_first_scan         # Step 12 (conditional)
+    set_dashboard_password # Step 10
+    init_vuln_db           # Step 11
+    send_checkin_email     # Step 12
+    run_first_scan         # Step 13 (conditional)
 
     print_success_banner
 }
