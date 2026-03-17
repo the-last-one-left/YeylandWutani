@@ -491,15 +491,51 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
 
 # ── Security observations section ─────────────────────────────────────────
 
-def _build_ad_section(hosts: list, company_color: str = "#FF6600") -> str:
+def _build_ad_section(hosts: list, company_color: str = "#FF6600",
+                      ad_enrichment: dict = None) -> str:
     """
     Build an Active Directory Environment section for the report.
-    Only rendered when at least one host has ad_info.enumerated == True.
-    Returns empty string if no DCs were enumerated.
+    Only rendered when at least one host has ad_info.enumerated == True,
+    OR when ad_enrichment (Phase 24 credentialed scan) data is available.
+    Returns empty string if no AD data is present at all.
+
+    ad_enrichment fills in counts and domain admin names that the
+    unauthenticated LDAP scan couldn't retrieve (anonymous bind restricted).
     """
+    ad_enr = ad_enrichment or {}
     dc_hosts = [h for h in hosts if (h.get("ad_info") or {}).get("enumerated")]
+
+    # If unauthenticated LDAP found no DCs but Phase 24 did, synthesise a
+    # minimal dc_hosts entry so the section still renders.
     if not dc_hosts:
-        return ""
+        if ad_enr.get("available"):
+            _dc_ip = ad_enr.get("dc_ip") or ""
+            # Find the matching host record if possible
+            _match = next(
+                (h for h in hosts if h.get("ip") == _dc_ip or
+                 h.get("is_domain_controller")),
+                None
+            )
+            synthetic_ad_info = {
+                "enumerated":    True,
+                "domain_name":   ad_enr.get("domain_name", ""),
+                "base_dn":       "",
+                "domain_functional_level": "Active Directory",
+                "dc_count":      1,
+                "user_count":    None,
+                "computer_count": None,
+                "domain_admins": [],
+                "os_versions":   {},
+                "anonymous_bind_allowed": False,
+            }
+            if _match:
+                _match = dict(_match)  # don't mutate original
+                _match["ad_info"] = synthetic_ad_info
+                dc_hosts = [_match]
+            else:
+                dc_hosts = [{"ip": _dc_ip, "ad_info": synthetic_ad_info}]
+        else:
+            return ""
 
     cards_html = ""
     for host in dc_hosts:
@@ -508,11 +544,28 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600") -> str:
         base_dn = ad.get("base_dn", "")
         func_level = ad.get("domain_functional_level", "Unknown")
         dc_count = ad.get("dc_count", 1)
-        user_count = ad.get("user_count")
+
+        # Supplement LDAP-unauthenticated fields with Phase 24 credentialed data
+        # when anonymous bind was restricted and the LDAP scan returned nulls.
+        user_count     = ad.get("user_count")
         computer_count = ad.get("computer_count")
-        domain_admins = ad.get("domain_admins", [])
-        os_versions = ad.get("os_versions", {})
-        anon_bind = ad.get("anonymous_bind_allowed", False)
+        domain_admins  = ad.get("domain_admins") or []
+        os_versions    = ad.get("os_versions") or {}
+        anon_bind      = ad.get("anonymous_bind_allowed", False)
+
+        if ad_enr.get("available"):
+            if user_count is None:
+                user_count = ad_enr.get("user_count")
+            if computer_count is None:
+                computer_count = ad_enr.get("computer_count")
+            if not domain_admins:
+                domain_admins = ad_enr.get("domain_admins") or []
+            # Build OS breakdown from AD computer list when LDAP didn't supply it
+            if not os_versions and ad_enr.get("computers"):
+                for _c in ad_enr["computers"]:
+                    _os = (_c.get("OperatingSystem") or "").strip()
+                    if _os:
+                        os_versions[_os] = os_versions.get(_os, 0) + 1
 
         # Counts row
         count_cells = ""
@@ -545,10 +598,13 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600") -> str:
             </tr>"""
 
         # Domain admins pills
+        _admins_from_cred = ad_enr.get("available") and not (ad.get("domain_admins") or [])
         admin_pills = ""
         if domain_admins:
             for name in domain_admins:
                 admin_pills += f'<span style="display:inline-block; background:#fff3cd; color:#856404; border:1px solid #ffc107; border-radius:3px; padding:2px 8px; margin:2px; font-size:11px;">{name}</span>'
+            if _admins_from_cred:
+                admin_pills += '<span style="font-size:10px; color:#888; margin-left:6px; font-style:italic;">(via credentialed scan)</span>'
         else:
             admin_pills = '<span style="color:#888; font-size:11px; font-style:italic;">Not enumerable (anonymous bind restricted)</span>'
 
@@ -2623,7 +2679,8 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
     services_table = _build_services_table(summary)
     msp_summary = _build_msp_summary(hosts, summary, recon, company_color)
     ai_insights_section = _build_ai_insights_section(ai_insights or "", company_color)
-    ad_section = _build_ad_section(hosts, company_color)
+    ad_section = _build_ad_section(hosts, company_color,
+                                   ad_enrichment=scan_results.get("ad_enrichment", {}))
 
     # Extended discovery sections
     wifi_results = scan_results.get("wifi", {})
