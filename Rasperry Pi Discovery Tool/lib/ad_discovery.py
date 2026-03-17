@@ -100,7 +100,8 @@ def _find_dc_ips(hosts: list) -> list[str]:
             if p.get("state") == "open"
         }
         if (88 in open_ports and 389 in open_ports) or \
-           (389 in open_ports and 53 in open_ports and 636 in open_ports):
+           (389 in open_ports and 53 in open_ports and 636 in open_ports) or \
+           (389 in open_ports and 445 in open_ports and 135 in open_ports):
             ip = host.get("ip")
             if ip:
                 dcs.append(ip)
@@ -247,8 +248,24 @@ def find_ad_proxy(
     Returns (dc_ip, port, token) or None.
     """
     dc_ips = _find_dc_ips(hosts)
+
+    # Also pull DCs that Phase 4 already identified (may have used its own
+    # detection logic with a different port requirement).
+    for key in ("dc_ip", "domain_controller", "ldap_dc_ip"):
+        recon_dc = (recon or {}).get(key, "")
+        if recon_dc and recon_dc not in dc_ips:
+            logger.debug(f"[Phase 24] Adding recon-discovered DC {recon_dc} (from recon['{key}'])")
+            dc_ips.append(recon_dc)
+
+    # Phase 4 may store a list of DCs
+    for dc_entry in (recon or {}).get("domain_controllers", []):
+        ip = dc_entry if isinstance(dc_entry, str) else dc_entry.get("ip", "")
+        if ip and ip not in dc_ips:
+            logger.debug(f"[Phase 24] Adding recon-discovered DC {ip} (from recon['domain_controllers'])")
+            dc_ips.append(ip)
+
     if not dc_ips:
-        logger.debug("[Phase 24] No DC candidates found in hosts (need ports 88+389).")
+        logger.debug("[Phase 24] No DC candidates found in hosts or recon data.")
         return None
 
     domains = _domain_candidates(recon, dhcp_results)
