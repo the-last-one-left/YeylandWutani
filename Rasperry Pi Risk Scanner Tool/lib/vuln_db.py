@@ -151,8 +151,6 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
         logger.info(f"NVD: Incremental update from {start_date.date()}...")
 
     end_date = now_utc
-    start_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.000")
-    end_str   = end_date.strftime("%Y-%m-%dT%H:%M:%S.000")
 
     # Load existing cache
     if NVD_CACHE_PATH.exists():
@@ -168,116 +166,128 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
         headers["apiKey"] = api_key
 
     new_count = 0
-    start_index = 0
+    # NVD API enforces a maximum date range of 120 days per request.
+    # Split the full range into 119-day windows and paginate each.
+    NVD_WINDOW_DAYS = 119
+    window_start = start_date
 
-    while True:
-        # NVD API requires colons to be literal in date strings (not %3A)
-        params = (
-            f"?pubStartDate={urllib.parse.quote(start_str, safe=':.-')}"
-            f"&pubEndDate={urllib.parse.quote(end_str, safe=':.-')}"
-            f"&startIndex={start_index}"
-            f"&resultsPerPage={NVD_PAGE_SIZE}"
-        )
-        url = NVD_API_BASE + params
+    while window_start < end_date:
+        window_end = min(window_start + timedelta(days=NVD_WINDOW_DAYS), end_date)
+        win_start_str = window_start.strftime("%Y-%m-%dT%H:%M:%S.000")
+        win_end_str   = window_end.strftime("%Y-%m-%dT%H:%M:%S.000")
+        logger.info(f"NVD: window {win_start_str[:10]} → {win_end_str[:10]}")
 
-        for attempt in range(3):
-            try:
-                req = urllib.request.Request(url, headers=headers)
-                with urllib.request.urlopen(req, timeout=60) as resp:
-                    data = json.loads(resp.read().decode("utf-8"))
-                break
-            except urllib.error.HTTPError as e:
-                if e.code == 403:
-                    logger.warning("NVD API: 403 — check API key or rate limit")
-                    time.sleep(30)
-                elif e.code == 503:
-                    logger.warning(f"NVD API: 503 — retry {attempt+1}/3")
-                    time.sleep(10 * (attempt + 1))
-                else:
-                    raise
-            except Exception as e:
-                if attempt < 2:
-                    logger.warning(f"NVD API error (attempt {attempt+1}): {e}, retrying...")
-                    time.sleep(5)
-                else:
-                    raise
+        start_index = 0
+        while True:
+            # NVD API requires colons to be literal in date strings (not %3A)
+            params = (
+                f"?pubStartDate={urllib.parse.quote(win_start_str, safe=':.-')}"
+                f"&pubEndDate={urllib.parse.quote(win_end_str, safe=':.-')}"
+                f"&startIndex={start_index}"
+                f"&resultsPerPage={NVD_PAGE_SIZE}"
+            )
+            url = NVD_API_BASE + params
 
-        vulnerabilities = data.get("vulnerabilities", [])
-        total_results = data.get("totalResults", 0)
-
-        for vuln_wrapper in vulnerabilities:
-            cve = vuln_wrapper.get("cve", {})
-            cve_id = cve.get("id", "")
-            if not cve_id:
-                continue
-
-            # Extract CVSS scores
-            metrics = cve.get("metrics", {})
-            cvss_v3_score = None
-            cvss_v3_vector = None
-            cvss_v3_severity = None
-            cvss_v2_score = None
-
-            # CVSSv3.1 preferred, then v3.0
-            for key in ("cvssMetricV31", "cvssMetricV30"):
-                if key in metrics and metrics[key]:
-                    m = metrics[key][0].get("cvssData", {})
-                    cvss_v3_score = m.get("baseScore")
-                    cvss_v3_vector = m.get("vectorString")
-                    cvss_v3_severity = m.get("baseSeverity")
+            data = {}
+            for attempt in range(3):
+                try:
+                    req = urllib.request.Request(url, headers=headers)
+                    with urllib.request.urlopen(req, timeout=60) as resp:
+                        data = json.loads(resp.read().decode("utf-8"))
                     break
-            if "cvssMetricV2" in metrics and metrics["cvssMetricV2"]:
-                m = metrics["cvssMetricV2"][0].get("cvssData", {})
-                cvss_v2_score = m.get("baseScore")
+                except urllib.error.HTTPError as e:
+                    if e.code == 403:
+                        logger.warning("NVD API: 403 — check API key or rate limit")
+                        time.sleep(30)
+                    elif e.code == 503:
+                        logger.warning(f"NVD API: 503 — retry {attempt+1}/3")
+                        time.sleep(10 * (attempt + 1))
+                    else:
+                        raise
+                except Exception as e:
+                    if attempt < 2:
+                        logger.warning(f"NVD API error (attempt {attempt+1}): {e}, retrying...")
+                        time.sleep(5)
+                    else:
+                        raise
 
-            # Description (English preferred)
-            descriptions = cve.get("descriptions", [])
-            description = next(
-                (d["value"] for d in descriptions if d.get("lang") == "en"),
-                descriptions[0]["value"] if descriptions else "",
+            vulnerabilities = data.get("vulnerabilities", [])
+            total_results = data.get("totalResults", 0)
+
+            for vuln_wrapper in vulnerabilities:
+                cve = vuln_wrapper.get("cve", {})
+                cve_id = cve.get("id", "")
+                if not cve_id:
+                    continue
+
+                # Extract CVSS scores
+                metrics = cve.get("metrics", {})
+                cvss_v3_score = None
+                cvss_v3_vector = None
+                cvss_v3_severity = None
+                cvss_v2_score = None
+
+                # CVSSv3.1 preferred, then v3.0
+                for key in ("cvssMetricV31", "cvssMetricV30"):
+                    if key in metrics and metrics[key]:
+                        m = metrics[key][0].get("cvssData", {})
+                        cvss_v3_score = m.get("baseScore")
+                        cvss_v3_vector = m.get("vectorString")
+                        cvss_v3_severity = m.get("baseSeverity")
+                        break
+                if "cvssMetricV2" in metrics and metrics["cvssMetricV2"]:
+                    m = metrics["cvssMetricV2"][0].get("cvssData", {})
+                    cvss_v2_score = m.get("baseScore")
+
+                # Description (English preferred)
+                descriptions = cve.get("descriptions", [])
+                description = next(
+                    (d["value"] for d in descriptions if d.get("lang") == "en"),
+                    descriptions[0]["value"] if descriptions else "",
+                )
+
+                # CPE matches for affected products
+                affected_cpe = []
+                for config in cve.get("configurations", []):
+                    for node in config.get("nodes", []):
+                        for cpe_match in node.get("cpeMatch", []):
+                            if cpe_match.get("vulnerable"):
+                                cpe = cpe_match.get("criteria", "")
+                                if cpe:
+                                    affected_cpe.append(cpe)
+
+                # References
+                references = [r.get("url", "") for r in cve.get("references", [])[:5]]
+
+                entry = {
+                    "cve_id": cve_id,
+                    "description": description[:500],
+                    "cvss_v3_score": cvss_v3_score,
+                    "cvss_v3_vector": cvss_v3_vector,
+                    "cvss_v3_severity": cvss_v3_severity,
+                    "cvss_v2_score": cvss_v2_score,
+                    "affected_cpe": affected_cpe[:20],
+                    "published": cve.get("published", ""),
+                    "last_modified": cve.get("lastModified", ""),
+                    "references": references,
+                }
+                _nvd_cache[cve_id] = entry
+                new_count += 1
+
+            logger.info(
+                f"NVD: fetched {len(vulnerabilities)} CVEs "
+                f"(index {start_index}/{total_results}, window {win_start_str[:10]})"
             )
 
-            # CPE matches for affected products
-            affected_cpe = []
-            for config in cve.get("configurations", []):
-                for node in config.get("nodes", []):
-                    for cpe_match in node.get("cpeMatch", []):
-                        if cpe_match.get("vulnerable"):
-                            cpe = cpe_match.get("criteria", "")
-                            if cpe:
-                                affected_cpe.append(cpe)
+            start_index += len(vulnerabilities)
+            if start_index >= total_results or not vulnerabilities:
+                break
 
-            # References
-            references = [r.get("url", "") for r in cve.get("references", [])[:5]]
+            time.sleep(delay)
 
-            entry = {
-                "cve_id": cve_id,
-                "description": description[:500],
-                "cvss_v3_score": cvss_v3_score,
-                "cvss_v3_vector": cvss_v3_vector,
-                "cvss_v3_severity": cvss_v3_severity,
-                "cvss_v2_score": cvss_v2_score,
-                "affected_cpe": affected_cpe[:20],
-                "published": cve.get("published", ""),
-                "last_modified": cve.get("lastModified", ""),
-                "references": references,
-            }
-            _nvd_cache[cve_id] = entry
-            new_count += 1
-
-        logger.info(
-            f"NVD: fetched {len(vulnerabilities)} CVEs "
-            f"(index {start_index}/{total_results})"
-        )
-
-        start_index += len(vulnerabilities)
-        if start_index >= total_results or not vulnerabilities:
-            break
-
-        time.sleep(delay)
-
-    # Save updated cache
-    NVD_CACHE_PATH.write_text(json.dumps(_nvd_cache))
+        # Checkpoint: save after each window so progress survives interruption
+        NVD_CACHE_PATH.write_text(json.dumps(_nvd_cache))
+        window_start = window_end + timedelta(seconds=1)
 
     # Also do incremental update for lastModStartDate
     # Run same fetch for lastModStartDate to catch edited CVEs
