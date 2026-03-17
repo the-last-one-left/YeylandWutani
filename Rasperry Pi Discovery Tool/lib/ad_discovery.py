@@ -1,4 +1,4 @@
-"""
+﻿"""
 ad_discovery.py — Credentialed Active Directory enrichment via YW Discovery Proxy.
 
 Phase 24 of the YW network scanner.
@@ -58,7 +58,7 @@ def _domain_candidates(recon: dict, dhcp_results: dict) -> list[str]:
     result = []
 
     def _add(d: str) -> None:
-        d = d.strip().lower()
+        d = d.strip().lower().rstrip(".")
         if d and d not in seen and len(d) > 3:
             seen.add(d)
             result.append(d)
@@ -73,8 +73,16 @@ def _domain_candidates(recon: dict, dhcp_results: dict) -> list[str]:
     for key in ("search_domain", "domain", "dns_domain"):
         _add(recon.get(key, ""))
 
-    # DNS servers listed in recon — if one of them IS a DC its PTR may give us the domain
-    # (we don't resolve here; just keep for DC candidate use below)
+    # /etc/resolv.conf search / domain lines (Pi's own resolver config)
+    try:
+        with open("/etc/resolv.conf", "r") as fh:
+            for line in fh:
+                line = line.strip()
+                if line.startswith(("search ", "domain ")):
+                    for tok in line.split()[1:]:
+                        _add(tok)
+    except Exception:
+        pass
 
     return result
 
@@ -105,35 +113,89 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
     Returns the raw TXT string if found, else None.
     """
     record = f"{_TXT_LABEL}.{domain}"
+    # Fully-qualified with trailing dot so resolvers don't append search domains
+    record_fqdn = f"{record}."
 
-    # dnspython is the reliable path (lets us target the DC's own DNS)
+    # dnspython targeting the DC directly (most reliable)
     try:
         import dns.resolver  # type: ignore
         res = dns.resolver.Resolver(configure=False)
         res.nameservers = [dc_ip]
-        res.timeout     = 3
-        res.lifetime    = 5
-        for rdata in res.resolve(record, "TXT"):
-            for chunk in rdata.strings:
-                txt = chunk.decode("utf-8", errors="ignore")
-                if txt.startswith("ywp-v1|"):
-                    return txt
+        res.timeout     = 5
+        res.lifetime    = 8
+        try:
+            for rdata in res.resolve(record_fqdn, "TXT"):
+                for chunk in rdata.strings:
+                    txt = chunk.decode("utf-8", errors="ignore")
+                    if txt.startswith("ywp-v1|"):
+                        logger.debug(f"[Phase 24]   dnspython targeted: found TXT at {record} via {dc_ip}")
+                        return txt
+        except Exception as e:
+            logger.debug(f"[Phase 24]   dnspython targeted {dc_ip} for {record}: {e}")
+
+        # Also try without trailing dot in case zone delegation differs
+        try:
+            for rdata in res.resolve(record, "TXT"):
+                for chunk in rdata.strings:
+                    txt = chunk.decode("utf-8", errors="ignore")
+                    if txt.startswith("ywp-v1|"):
+                        logger.debug(f"[Phase 24]   dnspython targeted (no dot): found TXT at {record} via {dc_ip}")
+                        return txt
+        except Exception:
+            pass
+    except ImportError:
+        logger.debug("[Phase 24]   dnspython not available")
+
+    # dnspython using system resolver (Pi may already use DC as its DNS)
+    try:
+        import dns.resolver  # type: ignore
+        sys_res = dns.resolver.Resolver(configure=True)
+        sys_res.timeout  = 5
+        sys_res.lifetime = 8
+        try:
+            for rdata in sys_res.resolve(record_fqdn, "TXT"):
+                for chunk in rdata.strings:
+                    txt = chunk.decode("utf-8", errors="ignore")
+                    if txt.startswith("ywp-v1|"):
+                        logger.debug(f"[Phase 24]   dnspython system resolver: found TXT at {record}")
+                        return txt
+        except Exception as e:
+            logger.debug(f"[Phase 24]   dnspython system resolver for {record}: {e}")
     except Exception:
         pass
+
+    # Fallback: dig (more reliable output format than nslookup on Linux)
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["dig", f"@{dc_ip}", record, "TXT", "+short", "+timeout=5", "+tries=2"],
+            capture_output=True, text=True, timeout=12,
+        )
+        for line in r.stdout.splitlines():
+            m = re.search(r'ywp-v1\|[^\s"]+', line)
+            if m:
+                logger.debug(f"[Phase 24]   dig: found TXT at {record} via {dc_ip}")
+                return m.group(0)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        logger.debug(f"[Phase 24]   dig fallback failed: {e}")
 
     # Fallback: nslookup
     try:
         import subprocess
         r = subprocess.run(
             ["nslookup", "-type=TXT", record, dc_ip],
-            capture_output=True, text=True, timeout=6,
+            capture_output=True, text=True, timeout=8,
         )
-        for line in r.stdout.splitlines():
+        combined = r.stdout + "\n" + r.stderr
+        for line in combined.splitlines():
             m = re.search(r'ywp-v1\|[^\s"]+', line)
             if m:
+                logger.debug(f"[Phase 24]   nslookup: found TXT at {record} via {dc_ip}")
                 return m.group(0)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"[Phase 24]   nslookup fallback failed: {e}")
 
     return None
 
@@ -196,13 +258,21 @@ def find_ad_proxy(
     )
 
     for dc_ip in dc_ips:
-        # Build domain list for this DC: known domains + rootDSE fallback
+        # Build domain list for this DC: known domains PLUS rootDSE
+        # Always try rootDSE — DHCP/recon domains may not match the zone
+        # where the TXT record was actually created.
         dc_domains = list(domains)
+        rdse_domain = _get_domain_via_ldap_rootdse(dc_ip)
+        if rdse_domain:
+            logger.debug(f"[Phase 24]   rootDSE on {dc_ip} → {rdse_domain}")
+            if rdse_domain not in dc_domains:
+                dc_domains.insert(0, rdse_domain)   # highest confidence → first
+
         if not dc_domains:
-            rdse_domain = _get_domain_via_ldap_rootdse(dc_ip)
-            if rdse_domain:
-                logger.debug(f"[Phase 24]   rootDSE on {dc_ip} → {rdse_domain}")
-                dc_domains.append(rdse_domain)
+            logger.debug(f"[Phase 24]   {dc_ip}: no domain candidates at all, skipping")
+            continue
+
+        logger.debug(f"[Phase 24]   {dc_ip}: trying domains {dc_domains}")
 
         for domain in dc_domains:
             txt = _query_txt(dc_ip, domain)
@@ -233,9 +303,17 @@ def find_ad_proxy(
                         f"DCs={info.get('domain_controller_count','?')}"
                     )
                     return dc_ip, port, token
+                else:
+                    logger.debug(
+                        f"[Phase 24]   {dc_ip}:{port} ping returned HTTP {resp.status_code}"
+                    )
             except Exception as e:
                 logger.debug(f"[Phase 24]   {dc_ip}:{port} ping failed: {e}")
 
+    logger.info(
+        f"[Phase 24] Exhausted all {len(dc_ips)} DC(s) × domain combinations — "
+        f"no proxy found.  DC IPs tried: {dc_ips}"
+    )
     return None
 
 
