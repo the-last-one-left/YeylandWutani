@@ -877,7 +877,7 @@ def _parse_narratives(text: str) -> dict:
 
 # ── Static fallback narratives ────────────────────────────────────────────────
 
-def _static_narratives(env: dict, recommendations: dict) -> dict:
+def _static_narratives(env: dict, recommendations: dict, brand_name: str = "") -> dict:
     """Generate deterministic fallback narrative text when Hatz AI is unavailable."""
     fw   = recommendations.get("firewall",      {}).get("product", {})
     sw   = recommendations.get("switches",      {})
@@ -944,7 +944,7 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
     else:
         ap_text = (
             "No wireless assessment data was captured in this scan. "
-            "Contact Yeyland Wutani to schedule a dedicated wireless survey and "
+            f"Contact {brand_name} to schedule a dedicated wireless survey and "
             "receive a tailored access point recommendation."
         )
 
@@ -984,7 +984,7 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
     else:
         sv_text = (
             "No servers were identified in this scan. If dedicated server "
-            "infrastructure is required in the future, contact Yeyland Wutani "
+            f"infrastructure is required in the future, contact {brand_name} "
             "for a current Dell PowerEdge recommendation."
         )
 
@@ -1009,7 +1009,7 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
     else:
         bk_text = (
             "No servers requiring backup protection were identified in this scan. "
-            "Contact Yeyland Wutani for a Datto BCDR recommendation when server "
+            f"Contact {brand_name} for a Datto BCDR recommendation when server "
             "infrastructure is deployed."
         )
 
@@ -1506,7 +1506,7 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
 
     steps = [
         ("1. Schedule a Discovery Call",
-         "Review this report with your Yeyland Wutani sales engineer. We'll walk "
+         f"Review this report with your {brand_name} sales engineer. We'll walk "
          "through each recommendation, confirm sizing, and answer any questions "
          "about the products or implementation approach."),
         ("2. Confirm Scope and Priorities",
@@ -1518,11 +1518,11 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
          "quote including hardware, licensing, and professional services for "
          "design, deployment, and configuration."),
         ("4. Plan the Deployment",
-         "Yeyland Wutani handles the full deployment: preconfiguration, "
+         f"{brand_name} handles the full deployment: preconfiguration, "
          "on-site installation, user training, and handover documentation. "
          "Most SMB deployments are completed with minimal business disruption."),
         ("5. Ongoing Managed Services",
-         "Consider pairing your new infrastructure with Yeyland Wutani managed "
+         f"Consider pairing your new infrastructure with {brand_name} managed "
          "services: 24/7 monitoring, firmware management, threat response, and "
          "quarterly security reassessment to keep your environment current."),
     ]
@@ -1623,7 +1623,7 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
         c.setFont("Helvetica", 7.5)
         c.setFillColor(_hex("#888888"))
         c.drawString(MARGIN, y,
-                     "Contact Yeyland Wutani LLC for current partner pricing and "
+                     f"Contact {brand_name} for current partner pricing and "
                      "solution design. Subscriptions and professional services quoted separately.")
 
     _draw_page_footer(c, scan_date, brand_name)
@@ -1679,7 +1679,7 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
     else:
         narratives = {}
     if not narratives:
-        narratives = _static_narratives(env, recs)
+        narratives = _static_narratives(env, recs, brand_name)
 
     logger.info(
         f"Product recommendations: {env['device_count']} devices, "
