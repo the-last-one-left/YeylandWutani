@@ -278,9 +278,22 @@ setup_directories() {
     chown -R root:root "${INSTALL_DIR}"
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}" "${DATA_DIR}"
 
-    # Config: root-owned, readable by service user
+    # Config dir: root-owned, traversable by service user
     chown root:"${SERVICE_USER}" "${CONFIG_DIR}"
     chmod 750 "${CONFIG_DIR}"
+
+    # Config files: readable by service user (the blanket root:root above would
+    # have reset these — re-apply group ownership so the service user can read them)
+    for _cfg_file in \
+        "${CONFIG_DIR}/config.json" \
+        "${CONFIG_DIR}/dashboard.json" \
+        "${CONFIG_DIR}/credentials.enc" \
+        "${CONFIG_DIR}/.cred_key" \
+        "${CONFIG_DIR}/.credentials.enc"; do
+        [[ -f "${_cfg_file}" ]] || continue
+        chown root:"${SERVICE_USER}" "${_cfg_file}"
+        chmod 640 "${_cfg_file}"
+    done
     chmod 750 "${LOG_DIR}"
     chmod 750 "${DATA_DIR}"
 
@@ -1021,13 +1034,21 @@ install_services() {
 
 set_dashboard_password() {
     print_step "Step 10: Set web dashboard password"
+
+    local DASHBOARD_JSON="${INSTALL_DIR}/config/dashboard.json"
+
+    # In update/reconfigure mode, skip silently if a password is already set
+    if [[ "${_INSTALL_MODE}" != "fresh" ]] && [[ -f "${DASHBOARD_JSON}" ]]; then
+        print_ok "Dashboard password already set — preserved."
+        return
+    fi
+
     echo ""
     echo "  The web dashboard runs on port 8080 and requires a password."
     echo "  Set it now, or press Enter to skip (use set-dashboard-password.sh later)."
     echo ""
 
-    local DASHBOARD_JSON="${INSTALL_DIR}/config/dashboard.json"
-
+    local DASH_PASS="" DASH_PASS2=""
     while true; do
         printf "  Dashboard password (min 8 chars, Enter to skip): "
         read -r -s DASH_PASS </dev/tty
@@ -1050,7 +1071,9 @@ set_dashboard_password() {
         break
     done
 
-    sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" - <<PYEOF
+    # Run as root (config dir is root:risk-scanner 750 — group can't create files)
+    # then fix ownership so the web service can read it
+    "${VENV_DIR}/bin/python" - <<PYEOF
 import json, os, sys
 password = """${DASH_PASS}"""
 try:
@@ -1058,18 +1081,20 @@ try:
     h = bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=12)).decode()
     method = "bcrypt"
 except ImportError:
-    import hmac, hashlib, secrets
+    import hmac as _hmac, hashlib, secrets
     salt = secrets.token_hex(16)
-    digest = hmac.new(salt.encode(), password.encode(), hashlib.sha256).hexdigest()
+    digest = _hmac.new(salt.encode(), password.encode(), hashlib.sha256).hexdigest()
     h = "hmac:{}:{}".format(salt, digest)
     method = "hmac-sha256"
 data = {"password_hash": h, "auth_method": method}
 with open("${DASHBOARD_JSON}", "w") as f:
     json.dump(data, f)
-os.chmod("${DASHBOARD_JSON}", 0o600)
+os.chmod("${DASHBOARD_JSON}", 0o640)
 print("  Password hashed with " + method)
 PYEOF
 
+    # Give the service user read access
+    chown root:"${SERVICE_USER}" "${DASHBOARD_JSON}"
     print_ok "Dashboard password set. Access at http://$(hostname -s):8080"
 }
 
@@ -1208,22 +1233,25 @@ main() {
         SCAN_TIME="${_EXISTING_SCAN_TIME:-02:00}"
         REPORT_DAY="${_EXISTING_REPORT_DAY:-Monday}"
         REPORT_TIME="${_EXISTING_REPORT_TIME:-06:00}"
-        install_packages       # Step 1 — update packages
-        clone_repo             # Step 3 — pull latest code
-        setup_venv             # Step 4 — rebuild venv / update deps
-        setup_directories      # Step 5 — repair any permission drift
-        install_services       # Step 9 — reload systemd units
-        init_vuln_db           # Step 11 — update vuln DB
+        install_packages         # Step 1 — update packages
+        clone_repo               # Step 3 — pull latest code
+        setup_venv               # Step 4 — rebuild venv / update deps
+        setup_directories        # Step 5 — repair any permission drift
+        install_services         # Step 9 — reload systemd units
+        set_dashboard_password   # Step 10 — set password if not already set
+        init_vuln_db             # Step 11 — update vuln DB
         print_success_banner
         return
     fi
 
     if [[ "${_INSTALL_MODE}" == "reconfigure" ]]; then
         # ── Reconfigure mode: re-run wizard, reload services ─────────────────
-        run_config_wizard      # Steps 6 & 7 — wizard with pre-filled defaults
-        encrypt_credentials    # Step 8 — skip if keeping existing creds
-        setup_directories      # Step 5 — repair any permission drift
-        install_services       # Step 9 — reload timers with new schedule
+        run_config_wizard        # Steps 6 & 7 — wizard with pre-filled defaults
+        encrypt_credentials      # Step 8 — skip if keeping existing creds
+        setup_directories        # Step 5 — repair any permission drift
+        install_services         # Step 9 — reload timers with new schedule
+        set_dashboard_password   # Step 10 — set password if not already set
+        init_vuln_db             # Step 11 — update vuln DB
         print_success_banner
         return
     fi
