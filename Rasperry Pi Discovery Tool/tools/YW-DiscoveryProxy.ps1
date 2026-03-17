@@ -614,7 +614,10 @@ if (-not $DcIP) {
 Register-ProxyTxt
 Add-ProxyFirewallRule
 
-$Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
+$Deadline          = (Get-Date).AddMinutes($TimeoutMinutes)
+$InactivityMinutes = 10      # Auto-exit if Pi goes silent for this long after first contact
+$ShouldExit        = $false
+$LastRequestTime   = Get-Date
 
 Write-KV "Domain"     $Domain
 Write-KV "DC"         "$DcHostname  ($DcIP)"
@@ -640,10 +643,6 @@ catch {
     Write-Host "          netsh http add urlacl url=http://+:${Port}/ user=Everyone" -ForegroundColor DarkGray
     exit 1
 }
-
-$ShouldExit        = $false
-$InactivityMinutes = 10      # Auto-exit if Pi goes silent for this long after first contact
-$LastRequestTime   = Get-Date
 
 try {
     while (-not $ShouldExit -and (Get-Date) -lt $Deadline) {
