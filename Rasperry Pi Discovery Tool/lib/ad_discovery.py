@@ -96,20 +96,26 @@ def _find_dc_ips(hosts: list) -> list[str]:
     """
     dcs = []
     for host in hosts:
-        open_ports = {
-            p["port"] for p in host.get("ports", [])
-            if p.get("state") == "open"
-        }
+        ip = host.get("ip")
+        if not ip:
+            continue
+
+        # Strong signal: Phase 4 already confirmed this is a DC via LDAP probe
+        if host.get("is_domain_controller"):
+            if ip not in dcs:
+                dcs.append(ip)
+            continue
+
+        # open_ports is a flat list[int] in the scanner (not a list of dicts)
+        open_ports = set(host.get("open_ports", []))
         if (88 in open_ports and 389 in open_ports) or \
            (389 in open_ports and 53 in open_ports and 636 in open_ports) or \
            (389 in open_ports and 445 in open_ports and 135 in open_ports):
-            ip = host.get("ip")
-            if ip:
-                dcs.append(ip)
+            dcs.append(ip)
 
     # Fallback: Phase 4 may have probed LDAP outside the nmap port list,
-    # so 389 never appears in the ports array.  Quick TCP probe on all
-    # remaining hosts to catch DCs the port list missed.
+    # so 389 never appears in open_ports.  Quick TCP probe on all remaining
+    # hosts to catch DCs the port list missed.
     if not dcs:
         checked = set()
         for host in hosts:
