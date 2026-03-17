@@ -516,11 +516,16 @@ function Handle-Request($Context) {
     switch -Regex ($path) {
 
         "^/ping$" {
-            Write-Req $method "/ping" "domain info"
-            $info = Get-DomainData
-            $info.proxy_version = "ywp-v1"
-            $info.expires       = $Deadline.ToString("o")
-            Send-Json $Context $info
+            Write-Req $method "/ping" "health check"
+            # Lightweight response — no AD queries here so the Pi's timeout is never hit.
+            # Domain info comes from startup variables, not Get-ADDomain.
+            Send-Json $Context @{
+                proxy_version = "ywp-v1"
+                domain_name   = $Domain
+                dc_hostname   = $DcHostname
+                dc_ip         = $DcIP
+                expires       = $Deadline.ToString("o")
+            }
         }
 
         "^/computers$" {
