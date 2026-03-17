@@ -355,7 +355,7 @@ def find_ad_proxy(
                 resp = _req.get(
                     f"http://{dc_ip}:{port}/ping",
                     headers={"Authorization": f"Bearer {token}"},
-                    timeout=6,
+                    timeout=30,
                 )
                 if resp.status_code == 200:
                     info = resp.json()
