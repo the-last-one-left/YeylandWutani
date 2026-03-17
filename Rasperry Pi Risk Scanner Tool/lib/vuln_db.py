@@ -1,22 +1,31 @@
 #!/usr/bin/env python3
 """
 Yeyland Wutani - Risk Scanner Tool
-vuln_db.py - Local Vulnerability Database Cache
+vuln_db.py - SQLite-backed Vulnerability Database
 
-Manages local NVD/KEV/OSV caches for offline CVE correlation.
-Supports incremental NVD updates, CISA KEV catalog, and OSV lookup.
+Replaces JSON flat-file caches with an indexed SQLite database.
+Supports incremental NVD updates, CISA KEV catalog, and OSV lookups.
+All lookups are query-based — nothing is loaded wholesale into memory.
+
+Schema
+------
+  nvd_cves    - one row per CVE (CVSS scores, description, refs)
+  nvd_cpe     - CPE match rows with extracted vendor/product/version fields
+  kev_catalog - CISA Known Exploited Vulnerabilities
+  osv_entries - OSV package:version → vulnerability ID mapping
+  db_stats    - key/value metadata (timestamps, counts, resume markers)
 """
 
-import gzip
 import io
 import json
 import logging
-import os
+import sqlite3
 import time
 import urllib.parse
 import urllib.request
 import urllib.error
 import zipfile
+from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -25,130 +34,301 @@ logger = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
 VULN_DB_DIR = Path("/opt/risk-scanner/data/vuln-db")
-NVD_CACHE_PATH = VULN_DB_DIR / "nvd-cache.json"
-KEV_CACHE_PATH = VULN_DB_DIR / "kev-catalog.json"
-OSV_CACHE_PATH = VULN_DB_DIR / "osv-cache.json"
-DB_STATS_PATH  = VULN_DB_DIR / "db-stats.json"
+DB_PATH     = VULN_DB_DIR / "vuln-db.sqlite"
 
-# Fallback ships with the tool for offline use (first 200 most common CVEs)
+# Legacy JSON paths — only used for one-time auto-migration
+_LEGACY_NVD   = VULN_DB_DIR / "nvd-cache.json"
+_LEGACY_KEV   = VULN_DB_DIR / "kev-catalog.json"
+_LEGACY_OSV   = VULN_DB_DIR / "osv-cache.json"
+_LEGACY_STATS = VULN_DB_DIR / "db-stats.json"
+
 FALLBACK_DB_PATH = Path(__file__).parent.parent / "data" / "vuln-db" / "vuln-db-fallback.json"
 
 # ── NVD API ────────────────────────────────────────────────────────────────
-NVD_API_BASE = "https://services.nvd.nist.gov/rest/json/cves/2.0"
-# Without API key: 5 req / 30s rolling window.  With key: 50 req / 30s.
-NVD_RATE_LIMIT_ANON_DELAY = 6.5  # seconds between requests without key
-NVD_RATE_LIMIT_KEY_DELAY  = 0.6  # seconds between requests with key
-NVD_PAGE_SIZE = 2000              # max results per API call
+NVD_API_BASE             = "https://services.nvd.nist.gov/rest/json/cves/2.0"
+NVD_RATE_LIMIT_ANON_DELAY = 6.5   # seconds between requests without key
+NVD_RATE_LIMIT_KEY_DELAY  = 0.6   # seconds between requests with key
+NVD_PAGE_SIZE             = 2000  # max results per API call
+NVD_WINDOW_DAYS           = 119   # NVD enforces ≤120 day range per request
 
-# ── KEV API ────────────────────────────────────────────────────────────────
-KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
-
-# ── OSV API ────────────────────────────────────────────────────────────────
-OSV_QUERY_URL = "https://api.osv.dev/v1/query"
-OSV_GCS_BASE  = "https://osv-vulnerabilities.storage.googleapis.com"
+# ── KEV / OSV ──────────────────────────────────────────────────────────────
+KEV_URL      = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
+OSV_GCS_BASE = "https://osv-vulnerabilities.storage.googleapis.com"
 
 # ── Severity thresholds ────────────────────────────────────────────────────
 CVSS_CRITICAL = 9.0
 CVSS_HIGH     = 7.0
 CVSS_MEDIUM   = 4.0
 
-
-# ── In-memory caches (loaded lazily) ──────────────────────────────────────
-_nvd_cache: dict = {}
-_kev_cache: dict = {}
-_osv_cache: dict = {}
+# ── Small in-memory caches ─────────────────────────────────────────────────
+# KEV is ~1 500 rows — cheap to keep in RAM for fast is_kev() calls.
+_kev_cache:   dict = {}
 _fallback_db: dict = {}
-_caches_loaded = False
+_db_ready          = False
 
+
+# ══════════════════════════════════════════════════════════════════════════
+# Database init & connection
+# ══════════════════════════════════════════════════════════════════════════
 
 def _ensure_db_dir():
     VULN_DB_DIR.mkdir(parents=True, exist_ok=True)
 
 
-def _load_caches():
-    global _nvd_cache, _kev_cache, _osv_cache, _fallback_db, _caches_loaded
-    if _caches_loaded:
+@contextmanager
+def _conn():
+    """Short-lived SQLite connection with WAL mode and generous page cache."""
+    conn = sqlite3.connect(str(DB_PATH), timeout=30)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA cache_size=-32000")   # 32 MB page cache
+    conn.execute("PRAGMA temp_store=MEMORY")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS nvd_cves (
+    cve_id           TEXT PRIMARY KEY,
+    description      TEXT,
+    cvss_v3_score    REAL,
+    cvss_v3_vector   TEXT,
+    cvss_v3_severity TEXT,
+    cvss_v2_score    REAL,
+    published        TEXT,
+    last_modified    TEXT,
+    references_json  TEXT
+);
+
+CREATE TABLE IF NOT EXISTS nvd_cpe (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    cve_id      TEXT NOT NULL REFERENCES nvd_cves(cve_id) ON DELETE CASCADE,
+    cpe         TEXT NOT NULL,
+    cpe_vendor  TEXT,
+    cpe_product TEXT,
+    cpe_version TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_cpe_product ON nvd_cpe(cpe_product);
+CREATE INDEX IF NOT EXISTS idx_cpe_vendor  ON nvd_cpe(cpe_vendor);
+
+CREATE TABLE IF NOT EXISTS kev_catalog (
+    cve_id            TEXT PRIMARY KEY,
+    product           TEXT,
+    vendor            TEXT,
+    short_description TEXT,
+    required_action   TEXT,
+    due_date          TEXT,
+    date_added        TEXT
+);
+
+CREATE TABLE IF NOT EXISTS osv_entries (
+    pkg_key TEXT NOT NULL,
+    osv_id  TEXT NOT NULL,
+    PRIMARY KEY (pkg_key, osv_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_osv_pkg ON osv_entries(pkg_key);
+
+CREATE TABLE IF NOT EXISTS db_stats (
+    key   TEXT PRIMARY KEY,
+    value TEXT
+);
+"""
+
+
+def _init_db():
+    global _db_ready
+    if _db_ready:
         return
-    _caches_loaded = True
+    _ensure_db_dir()
+    with _conn() as c:
+        c.executescript(_SCHEMA)
+    _db_ready = True
+    _migrate_legacy_json()
 
-    # NVD cache
-    if NVD_CACHE_PATH.exists():
-        try:
-            _nvd_cache = json.loads(NVD_CACHE_PATH.read_text())
-            logger.debug(f"NVD cache loaded: {len(_nvd_cache)} entries")
-        except Exception as e:
-            logger.warning(f"Could not load NVD cache: {e}")
 
-    # KEV catalog
-    if KEV_CACHE_PATH.exists():
-        try:
-            _kev_cache = json.loads(KEV_CACHE_PATH.read_text())
-            logger.debug(f"KEV catalog loaded: {len(_kev_cache)} entries")
-        except Exception as e:
-            logger.warning(f"Could not load KEV catalog: {e}")
+def _migrate_legacy_json():
+    """
+    One-time import of legacy JSON caches into SQLite.
+    Runs silently if SQLite already has data or the JSON files are absent.
+    This lets a seed that completed against the old JSON code survive the
+    upgrade without re-fetching everything from NVD.
+    """
+    with _conn() as c:
+        nvd_count = c.execute("SELECT COUNT(*) FROM nvd_cves").fetchone()[0]
+        kev_count = c.execute("SELECT COUNT(*) FROM kev_catalog").fetchone()[0]
 
-    # OSV cache
-    if OSV_CACHE_PATH.exists():
-        try:
-            _osv_cache = json.loads(OSV_CACHE_PATH.read_text())
-            logger.debug(f"OSV cache loaded: {len(_osv_cache)} entries")
-        except Exception as e:
-            logger.warning(f"Could not load OSV cache: {e}")
+    if nvd_count > 0 and kev_count > 0:
+        return  # already migrated
 
-    # Fallback DB
-    if FALLBACK_DB_PATH.exists():
+    logger.info("vuln_db: migrating legacy JSON caches to SQLite (one-time)...")
+
+    if _LEGACY_NVD.exists() and nvd_count == 0:
         try:
-            _fallback_db = json.loads(FALLBACK_DB_PATH.read_text())
-            logger.debug(f"Fallback vuln DB loaded: {len(_fallback_db)} entries")
+            data = json.loads(_LEGACY_NVD.read_text())
+            _bulk_insert_nvd_dicts(data.values())
+            logger.info(f"vuln_db: migrated {len(data):,} NVD entries from JSON")
         except Exception as e:
-            logger.warning(f"Could not load fallback vuln DB: {e}")
+            logger.warning(f"vuln_db: NVD migration failed: {e}")
+
+    if _LEGACY_KEV.exists() and kev_count == 0:
+        try:
+            data = json.loads(_LEGACY_KEV.read_text())
+            _bulk_insert_kev_dicts(data.values())
+            logger.info(f"vuln_db: migrated {len(data):,} KEV entries from JSON")
+        except Exception as e:
+            logger.warning(f"vuln_db: KEV migration failed: {e}")
+
+    if _LEGACY_STATS.exists():
+        try:
+            stats = json.loads(_LEGACY_STATS.read_text())
+            with _conn() as c:
+                c.executemany(
+                    "INSERT OR IGNORE INTO db_stats (key, value) VALUES (?, ?)",
+                    [(k, str(v)) for k, v in stats.items()],
+                )
+        except Exception as e:
+            logger.warning(f"vuln_db: stats migration failed: {e}")
+
+    with _conn() as c:
+        osv_count = c.execute("SELECT COUNT(*) FROM osv_entries").fetchone()[0]
+
+    if _LEGACY_OSV.exists() and osv_count == 0:
+        try:
+            data = json.loads(_LEGACY_OSV.read_text())
+            rows = []
+            for pkg_key, ids in data.items():
+                for osv_id in (ids if isinstance(ids, list) else [ids]):
+                    rows.append((pkg_key, osv_id))
+            with _conn() as c:
+                c.executemany(
+                    "INSERT OR IGNORE INTO osv_entries (pkg_key, osv_id) VALUES (?, ?)",
+                    rows,
+                )
+            logger.info(f"vuln_db: migrated {len(rows):,} OSV entries from JSON")
+        except Exception as e:
+            logger.warning(f"vuln_db: OSV migration failed: {e}")
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Stats helpers
+# ══════════════════════════════════════════════════════════════════════════
+
+def _load_stats() -> dict:
+    _init_db()
+    with _conn() as c:
+        return {r["key"]: r["value"] for r in c.execute("SELECT key, value FROM db_stats")}
 
 
 def _save_stats(stats: dict):
-    _ensure_db_dir()
-    try:
-        DB_STATS_PATH.write_text(json.dumps(stats, indent=2))
-    except Exception as e:
-        logger.warning(f"Could not save DB stats: {e}")
+    _init_db()
+    with _conn() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO db_stats (key, value) VALUES (?, ?)",
+            [(k, str(v) if v is not None else "") for k, v in stats.items()],
+        )
 
 
-def _load_stats() -> dict:
-    if DB_STATS_PATH.exists():
-        try:
-            return json.loads(DB_STATS_PATH.read_text())
-        except Exception:
-            pass
-    return {}
+# ══════════════════════════════════════════════════════════════════════════
+# CPE field parser
+# ══════════════════════════════════════════════════════════════════════════
+
+def _parse_cpe_fields(cpe: str) -> tuple:
+    """Return (vendor, product, version) from a CPE 2.3 or 2.2 string."""
+    parts = cpe.lower().split(":")
+    if cpe.lower().startswith("cpe:2.3:") and len(parts) >= 6:
+        return parts[3], parts[4], parts[5]
+    if len(parts) >= 5:
+        return parts[2], parts[3], parts[4]
+    return "", "", ""
 
 
-# ── NVD Update ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# NVD batch insert helpers (shared by update and migration)
+# ══════════════════════════════════════════════════════════════════════════
+
+def _bulk_insert_nvd_dicts(entries):
+    """
+    Insert/replace a sequence of CVE dicts (old JSON format or new API format).
+    Accepts both the legacy JSON cache dict format and the freshly-parsed format.
+    """
+    cve_rows = []
+    cpe_rows = []
+    for entry in entries:
+        cve_id = entry.get("cve_id", "")
+        if not cve_id:
+            continue
+        cve_rows.append((
+            cve_id,
+            (entry.get("description") or "")[:500],
+            entry.get("cvss_v3_score"),
+            entry.get("cvss_v3_vector"),
+            entry.get("cvss_v3_severity"),
+            entry.get("cvss_v2_score"),
+            entry.get("published", ""),
+            entry.get("last_modified", ""),
+            json.dumps(entry.get("references", [])),
+        ))
+        for cpe in entry.get("affected_cpe", []):
+            v, p, ver = _parse_cpe_fields(cpe)
+            cpe_rows.append((cve_id, cpe, v, p, ver))
+
+    if not cve_rows:
+        return
+
+    with _conn() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO nvd_cves "
+            "(cve_id, description, cvss_v3_score, cvss_v3_vector, cvss_v3_severity, "
+            " cvss_v2_score, published, last_modified, references_json) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            cve_rows,
+        )
+        # DELETE + re-INSERT CPE rows to handle updates cleanly
+        c.executemany("DELETE FROM nvd_cpe WHERE cve_id = ?", [(r[0],) for r in cve_rows])
+        if cpe_rows:
+            c.executemany(
+                "INSERT INTO nvd_cpe (cve_id, cpe, cpe_vendor, cpe_product, cpe_version) "
+                "VALUES (?, ?, ?, ?, ?)",
+                cpe_rows,
+            )
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# NVD Update
+# ══════════════════════════════════════════════════════════════════════════
 
 def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bool = False) -> int:
     """
-    Fetch CVEs from NVD 2.0 REST API and update local cache.
+    Fetch CVEs from NVD 2.0 API and store in SQLite.
 
-    - Without api_key: 5 req/30s limit — incremental updates use 1-2 requests.
-    - With api_key: 50 req/30s — faster initial seed.
-    - filter: only CVEs published/modified within last max_age_years years.
-    - Returns number of new/updated CVEs written.
+    - Without api_key: 5 req/30 s limit.  With key: 50 req/30 s.
+    - Date range is chunked into 119-day windows (NVD API limit).
+    - Interrupted seeds resume from the last completed window.
+    - Returns number of CVEs processed in this run.
     """
-    _ensure_db_dir()
-    global _nvd_cache
-
+    _init_db()
     stats = _load_stats()
     now_utc = datetime.now(timezone.utc)
     delay = NVD_RATE_LIMIT_KEY_DELAY if api_key else NVD_RATE_LIMIT_ANON_DELAY
 
-    # Determine date range for incremental update
+    # ── Determine date range ───────────────────────────────────────────────
     if force_full or not stats.get("nvd_last_updated"):
-        # Full fetch: last max_age_years years
         full_start = now_utc - timedelta(days=365 * max_age_years)
-        # Resume: if a previous --init was interrupted, skip already-done windows
         resume_from = stats.get("nvd_init_window_start")
         if resume_from and not force_full:
             try:
                 start_date = datetime.fromisoformat(resume_from).replace(tzinfo=timezone.utc)
-                logger.info(f"NVD: Resuming full fetch from {start_date.date()} (interrupted earlier)...")
+                logger.info(f"NVD: Resuming full fetch from {start_date.date()}...")
             except Exception:
                 start_date = full_start
                 logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
@@ -156,41 +336,27 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
             start_date = full_start
             logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
     else:
-        # Incremental: 1 day overlap to catch any late edits
         last_updated = datetime.fromisoformat(stats["nvd_last_updated"]).replace(tzinfo=timezone.utc)
         start_date = last_updated - timedelta(days=1)
         logger.info(f"NVD: Incremental update from {start_date.date()}...")
 
     end_date = now_utc
-
-    # Load existing cache
-    if NVD_CACHE_PATH.exists():
-        try:
-            _nvd_cache = json.loads(NVD_CACHE_PATH.read_text())
-        except Exception:
-            _nvd_cache = {}
-    else:
-        _nvd_cache = {}
-
     headers = {"User-Agent": "YeylandWutani-RiskScanner/1.0"}
     if api_key:
         headers["apiKey"] = api_key
 
-    new_count = 0
-    # NVD API enforces a maximum date range of 120 days per request.
-    # Split the full range into 119-day windows and paginate each.
-    NVD_WINDOW_DAYS = 119
+    new_count  = 0
     window_start = start_date
 
     while window_start < end_date:
-        window_end = min(window_start + timedelta(days=NVD_WINDOW_DAYS), end_date)
+        window_end    = min(window_start + timedelta(days=NVD_WINDOW_DAYS), end_date)
         win_start_str = window_start.strftime("%Y-%m-%dT%H:%M:%S.000")
         win_end_str   = window_end.strftime("%Y-%m-%dT%H:%M:%S.000")
         logger.info(f"NVD: window {win_start_str[:10]} → {win_end_str[:10]}")
 
         start_index = 0
         while True:
-            # NVD API requires colons to be literal in date strings (not %3A)
+            # NVD API requires literal colons in date strings (not %3A)
             params = (
                 f"?pubStartDate={urllib.parse.quote(win_start_str, safe=':.-')}"
                 f"&pubEndDate={urllib.parse.quote(win_end_str, safe=':.-')}"
@@ -223,41 +389,35 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
                         raise
 
             vulnerabilities = data.get("vulnerabilities", [])
-            total_results = data.get("totalResults", 0)
+            total_results   = data.get("totalResults", 0)
 
+            # Parse and batch-insert
+            entries = []
             for vuln_wrapper in vulnerabilities:
                 cve = vuln_wrapper.get("cve", {})
                 cve_id = cve.get("id", "")
                 if not cve_id:
                     continue
 
-                # Extract CVSS scores
                 metrics = cve.get("metrics", {})
-                cvss_v3_score = None
-                cvss_v3_vector = None
-                cvss_v3_severity = None
-                cvss_v2_score = None
-
-                # CVSSv3.1 preferred, then v3.0
+                cvss_v3_score = cvss_v3_vector = cvss_v3_severity = cvss_v2_score = None
                 for key in ("cvssMetricV31", "cvssMetricV30"):
                     if key in metrics and metrics[key]:
                         m = metrics[key][0].get("cvssData", {})
-                        cvss_v3_score = m.get("baseScore")
-                        cvss_v3_vector = m.get("vectorString")
+                        cvss_v3_score    = m.get("baseScore")
+                        cvss_v3_vector   = m.get("vectorString")
                         cvss_v3_severity = m.get("baseSeverity")
                         break
                 if "cvssMetricV2" in metrics and metrics["cvssMetricV2"]:
                     m = metrics["cvssMetricV2"][0].get("cvssData", {})
                     cvss_v2_score = m.get("baseScore")
 
-                # Description (English preferred)
                 descriptions = cve.get("descriptions", [])
                 description = next(
                     (d["value"] for d in descriptions if d.get("lang") == "en"),
                     descriptions[0]["value"] if descriptions else "",
                 )
 
-                # CPE matches for affected products
                 affected_cpe = []
                 for config in cve.get("configurations", []):
                     for node in config.get("nodes", []):
@@ -267,23 +427,21 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
                                 if cpe:
                                     affected_cpe.append(cpe)
 
-                # References
-                references = [r.get("url", "") for r in cve.get("references", [])[:5]]
+                entries.append({
+                    "cve_id":          cve_id,
+                    "description":     description,
+                    "cvss_v3_score":   cvss_v3_score,
+                    "cvss_v3_vector":  cvss_v3_vector,
+                    "cvss_v3_severity":cvss_v3_severity,
+                    "cvss_v2_score":   cvss_v2_score,
+                    "affected_cpe":    affected_cpe[:20],
+                    "published":       cve.get("published", ""),
+                    "last_modified":   cve.get("lastModified", ""),
+                    "references":      [r.get("url", "") for r in cve.get("references", [])[:5]],
+                })
 
-                entry = {
-                    "cve_id": cve_id,
-                    "description": description[:500],
-                    "cvss_v3_score": cvss_v3_score,
-                    "cvss_v3_vector": cvss_v3_vector,
-                    "cvss_v3_severity": cvss_v3_severity,
-                    "cvss_v2_score": cvss_v2_score,
-                    "affected_cpe": affected_cpe[:20],
-                    "published": cve.get("published", ""),
-                    "last_modified": cve.get("lastModified", ""),
-                    "references": references,
-                }
-                _nvd_cache[cve_id] = entry
-                new_count += 1
+            _bulk_insert_nvd_dicts(entries)
+            new_count += len(entries)
 
             logger.info(
                 f"NVD: fetched {len(vulnerabilities)} CVEs "
@@ -296,35 +454,37 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
 
             time.sleep(delay)
 
-        # Checkpoint: save cache and record next window start so a re-run can resume
-        NVD_CACHE_PATH.write_text(json.dumps(_nvd_cache))
+        # Checkpoint: save next window start for resume on interruption
         next_window = window_end + timedelta(seconds=1)
-        stats["nvd_init_window_start"] = next_window.isoformat()
-        stats["nvd_cve_count"] = len(_nvd_cache)
-        _save_stats(stats)
+        with _conn() as c:
+            cve_count = c.execute("SELECT COUNT(*) FROM nvd_cves").fetchone()[0]
+        _save_stats({
+            "nvd_init_window_start": next_window.isoformat(),
+            "nvd_cve_count":         str(cve_count),
+        })
         window_start = next_window
 
-    # Also do incremental update for lastModStartDate
-    # Run same fetch for lastModStartDate to catch edited CVEs
+    # Incremental: also fetch by lastModDate to catch edited CVEs
     if not force_full and stats.get("nvd_last_updated"):
         _fetch_modified_nvd(api_key, start_date, end_date, delay)
 
-    stats["nvd_last_updated"] = now_utc.isoformat()
-    stats["nvd_cve_count"] = len(_nvd_cache)
-    stats.pop("nvd_init_window_start", None)  # clear resume marker on success
-    _save_stats(stats)
+    with _conn() as c:
+        final_count = c.execute("SELECT COUNT(*) FROM nvd_cves").fetchone()[0]
+    _save_stats({
+        "nvd_last_updated":      now_utc.isoformat(),
+        "nvd_cve_count":         str(final_count),
+        "nvd_init_window_start": "",   # clear resume marker on success
+    })
 
-    logger.info(f"NVD update complete: {new_count} CVEs processed, {len(_nvd_cache)} total in cache")
+    logger.info(f"NVD update complete: {new_count} CVEs processed, {final_count:,} total in DB")
     return new_count
 
 
 def _fetch_modified_nvd(api_key, start_date, end_date, delay):
-    """Fetch CVEs modified since last update (separate from published date range)."""
-    global _nvd_cache
-
+    """Fetch CVEs modified since last update and refresh their last_modified."""
     start_str = start_date.strftime("%Y-%m-%dT%H:%M:%S.000")
     end_str   = end_date.strftime("%Y-%m-%dT%H:%M:%S.000")
-    headers = {"User-Agent": "YeylandWutani-RiskScanner/1.0"}
+    headers   = {"User-Agent": "YeylandWutani-RiskScanner/1.0"}
     if api_key:
         headers["apiKey"] = api_key
 
@@ -337,28 +497,53 @@ def _fetch_modified_nvd(api_key, start_date, end_date, delay):
         req = urllib.request.Request(NVD_API_BASE + params, headers=headers)
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read().decode("utf-8"))
-        count = 0
-        for vuln_wrapper in data.get("vulnerabilities", []):
-            cve = vuln_wrapper.get("cve", {})
-            cve_id = cve.get("id", "")
-            if cve_id and cve_id in _nvd_cache:
-                # Update last_modified field
-                _nvd_cache[cve_id]["last_modified"] = cve.get("lastModified", "")
-                count += 1
-        if count:
-            logger.debug(f"NVD: updated last_modified for {count} existing CVEs")
+        rows = [
+            (v.get("cve", {}).get("lastModified", ""), v.get("cve", {}).get("id", ""))
+            for v in data.get("vulnerabilities", [])
+            if v.get("cve", {}).get("id")
+        ]
+        if rows:
+            with _conn() as c:
+                c.executemany(
+                    "UPDATE nvd_cves SET last_modified = ? WHERE cve_id = ?", rows
+                )
+            logger.debug(f"NVD: refreshed last_modified for {len(rows)} CVEs")
     except Exception as e:
         logger.debug(f"NVD modified fetch failed (non-critical): {e}")
 
 
-# ── KEV Update ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# KEV Update
+# ══════════════════════════════════════════════════════════════════════════
+
+def _bulk_insert_kev_dicts(entries):
+    rows = []
+    for vuln in entries:
+        cve_id = vuln.get("cve_id") or vuln.get("cveID", "")
+        if not cve_id:
+            continue
+        rows.append((
+            cve_id,
+            vuln.get("product", ""),
+            vuln.get("vendor") or vuln.get("vendorProject", ""),
+            vuln.get("short_description") or vuln.get("shortDescription", ""),
+            vuln.get("required_action") or vuln.get("requiredAction", ""),
+            vuln.get("due_date") or vuln.get("dueDate", ""),
+            vuln.get("date_added") or vuln.get("dateAdded", ""),
+        ))
+    with _conn() as c:
+        c.executemany(
+            "INSERT OR REPLACE INTO kev_catalog "
+            "(cve_id, product, vendor, short_description, required_action, due_date, date_added) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            rows,
+        )
+    return len(rows)
+
 
 def update_kev_catalog() -> int:
-    """
-    Fetch CISA Known Exploited Vulnerabilities catalog.
-    Returns number of KEV entries written.
-    """
-    _ensure_db_dir()
+    """Fetch CISA KEV catalog into SQLite. Returns entry count."""
+    _init_db()
     global _kev_cache
 
     logger.info("KEV: Fetching CISA Known Exploited Vulnerabilities catalog...")
@@ -373,54 +558,33 @@ def update_kev_catalog() -> int:
         logger.error(f"KEV: Failed to fetch catalog: {e}")
         return 0
 
-    _kev_cache = {}
-    for vuln in data.get("vulnerabilities", []):
-        cve_id = vuln.get("cveID", "")
-        if not cve_id:
-            continue
-        _kev_cache[cve_id] = {
-            "cve_id": cve_id,
-            "product": vuln.get("product", ""),
-            "vendor": vuln.get("vendorProject", ""),
-            "short_description": vuln.get("shortDescription", ""),
-            "required_action": vuln.get("requiredAction", ""),
-            "due_date": vuln.get("dueDate", ""),
-            "date_added": vuln.get("dateAdded", ""),
-        }
+    count = _bulk_insert_kev_dicts(data.get("vulnerabilities", []))
+    _kev_cache = {}   # invalidate in-memory cache
 
-    KEV_CACHE_PATH.write_text(json.dumps(_kev_cache, indent=2))
-
-    stats = _load_stats()
-    stats["kev_last_updated"] = datetime.now(timezone.utc).isoformat()
-    stats["kev_cve_count"] = len(_kev_cache)
-    _save_stats(stats)
-
-    logger.info(f"KEV: catalog updated — {len(_kev_cache)} known exploited CVEs")
-    return len(_kev_cache)
+    _save_stats({
+        "kev_last_updated": datetime.now(timezone.utc).isoformat(),
+        "kev_cve_count":    str(count),
+    })
+    logger.info(f"KEV: catalog updated — {count} known exploited CVEs")
+    return count
 
 
-# ── OSV Update ─────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# OSV Update
+# ══════════════════════════════════════════════════════════════════════════
 
 def update_osv_cache(ecosystems: list = None) -> int:
     """
-    Fetch OSV (Open Source Vulnerabilities) via GCS bulk download.
+    Download OSV bulk data from GCS and store in SQLite.
     Uses https://osv-vulnerabilities.storage.googleapis.com/{ecosystem}/all.zip
-    Results keyed by 'package:version'.
-    Returns number of OSV package/version entries written.
+    Returns number of package/version entries written.
     """
     if ecosystems is None:
         ecosystems = ["PyPI", "npm"]
 
-    _ensure_db_dir()
-    global _osv_cache
-
-    if OSV_CACHE_PATH.exists():
-        try:
-            _osv_cache = json.loads(OSV_CACHE_PATH.read_text())
-        except Exception:
-            _osv_cache = {}
-
+    _init_db()
     new_count = 0
+
     for ecosystem in ecosystems:
         url = f"{OSV_GCS_BASE}/{ecosystem}/all.zip"
         logger.info(f"OSV: Downloading {ecosystem} bulk data from GCS...")
@@ -432,6 +596,7 @@ def update_osv_cache(ecosystems: list = None) -> int:
             with urllib.request.urlopen(req, timeout=120) as resp:
                 zip_data = resp.read()
 
+            rows = []
             with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
                 for name in zf.namelist():
                     if not name.endswith(".json"):
@@ -442,121 +607,132 @@ def update_osv_cache(ecosystems: list = None) -> int:
                         continue
                     osv_id = vuln.get("id", "")
                     for affected in vuln.get("affected", []):
-                        pkg = affected.get("package", {})
-                        pkg_name = pkg.get("name", "")
+                        pkg_name = affected.get("package", {}).get("name", "")
                         if not pkg_name:
                             continue
                         for version in affected.get("versions", []):
-                            key = f"{pkg_name}:{version}"
-                            if key not in _osv_cache:
-                                _osv_cache[key] = []
-                            if osv_id not in _osv_cache[key]:
-                                _osv_cache[key].append(osv_id)
-                            new_count += 1
+                            rows.append((f"{pkg_name}:{version}", osv_id))
 
-            logger.info(f"OSV: {ecosystem} — {new_count} entries so far")
+            with _conn() as c:
+                c.executemany(
+                    "INSERT OR IGNORE INTO osv_entries (pkg_key, osv_id) VALUES (?, ?)",
+                    rows,
+                )
+            new_count += len(rows)
+            logger.info(f"OSV: {ecosystem} — {len(rows):,} entries")
         except Exception as e:
             logger.warning(f"OSV: {ecosystem} bulk download failed: {e}")
 
-    OSV_CACHE_PATH.write_text(json.dumps(_osv_cache))
-
-    stats = _load_stats()
-    stats["osv_last_updated"] = datetime.now(timezone.utc).isoformat()
-    stats["osv_entry_count"] = len(_osv_cache)
-    _save_stats(stats)
-
-    logger.info(f"OSV: cache updated — {new_count} package/version entries, {len(_osv_cache)} unique keys")
+    with _conn() as c:
+        total = c.execute("SELECT COUNT(*) FROM osv_entries").fetchone()[0]
+    _save_stats({
+        "osv_last_updated": datetime.now(timezone.utc).isoformat(),
+        "osv_entry_count":  str(total),
+    })
+    logger.info(f"OSV: cache updated — {new_count:,} new entries, {total:,} total")
     return new_count
 
 
-# ── Lookup Functions ───────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════
+# Lookup Functions
+# ══════════════════════════════════════════════════════════════════════════
+
+def _row_to_cve_dict(row) -> dict:
+    """Convert a SQLite Row from nvd_cves into the standard CVE dict."""
+    return {
+        "cve_id":           row["cve_id"],
+        "description":      row["description"] or "",
+        "cvss_v3_score":    row["cvss_v3_score"],
+        "cvss_v3_vector":   row["cvss_v3_vector"],
+        "cvss_v3_severity": row["cvss_v3_severity"],
+        "cvss_v2_score":    row["cvss_v2_score"],
+        "affected_cpe":     [],   # omitted from bulk queries for performance
+        "published":        row["published"] or "",
+        "last_modified":    row["last_modified"] or "",
+        "references":       json.loads(row["references_json"] or "[]"),
+    }
+
 
 def lookup_cves(vendor: str, product: str, version: str = None) -> list:
     """
-    Query local NVD cache for CVEs matching vendor/product/version.
-    Uses CPE string matching with fuzzy version comparison.
+    Query SQLite for CVEs matching vendor/product/version via CPE indexes.
     Returns list of CVE dicts sorted by CVSS score descending.
     """
-    _load_caches()
+    _init_db()
     if not vendor and not product:
         return []
 
-    vendor_l = vendor.lower().strip()
-    product_l = product.lower().strip()
+    vendor_l  = vendor.lower().strip().replace(" ", "_")
+    product_l = product.lower().strip().replace(" ", "_")
     version_l = (version or "").lower().strip()
 
     results = []
-    seen = set()
+    seen    = set()
 
-    # Search NVD cache
-    for cve_id, entry in _nvd_cache.items():
-        if cve_id in seen:
-            continue
-        matched = False
-        for cpe in entry.get("affected_cpe", []):
-            cpe_l = cpe.lower()
+    with _conn() as c:
+        # ── Query 1: our product term appears within the CPE product field ──
+        # Uses idx_cpe_product for the LIKE scan
+        q1 = """
+            SELECT DISTINCT cv.*
+            FROM nvd_cves cv
+            JOIN nvd_cpe cp ON cv.cve_id = cp.cve_id
+            WHERE cp.cpe_product LIKE ?
+              AND (? = '' OR cp.cpe_vendor LIKE ? OR cp.cpe_vendor LIKE ?)
+              AND (? = ''
+                   OR cp.cpe_version IN ('*', '-', '')
+                   OR cp.cpe_version LIKE ?)
+            LIMIT 200
+        """
+        for row in c.execute(q1, (
+            f"%{product_l}%",
+            vendor_l, f"%{vendor_l}%", f"%{vendor.lower().replace(' ', '_')}%",
+            version_l, f"%{version_l}%",
+        )).fetchall():
+            cve_id = row["cve_id"]
+            if cve_id not in seen:
+                seen.add(cve_id)
+                results.append(_row_to_cve_dict(row))
 
-            # Parse individual CPE fields so we match against vendor/product/version
-            # slots rather than doing substring search on the full CPE string.
-            # CPE 2.3: cpe:2.3:<type>:<vendor>:<product>:<version>:...
-            # CPE 2.2: cpe:/<type>:<vendor>:<product>:<version>:...
-            cpe_parts = cpe_l.split(":")
-            if cpe_l.startswith("cpe:2.3:") and len(cpe_parts) >= 6:
-                cpe_vendor_f  = cpe_parts[3]
-                cpe_product_f = cpe_parts[4]
-                cpe_version_f = cpe_parts[5]
-            elif len(cpe_parts) >= 5:
-                cpe_vendor_f  = cpe_parts[2]
-                cpe_product_f = cpe_parts[3]
-                cpe_version_f = cpe_parts[4]
-            else:
-                continue
+        # ── Query 2: CPE product field is a token inside our search term ──
+        # (e.g. we search "internet_information_services", CPE has "iis")
+        # SQLite can't reverse-LIKE with an index, so we fetch candidate rows
+        # filtered by length and do the substring check in Python.
+        if len(product_l) >= 8:
+            q2 = """
+                SELECT DISTINCT cv.*, cp.cpe_product, cp.cpe_vendor, cp.cpe_version
+                FROM nvd_cves cv
+                JOIN nvd_cpe cp ON cv.cve_id = cp.cve_id
+                WHERE length(cp.cpe_product) BETWEEN 5 AND ?
+                LIMIT 5000
+            """
+            for row in c.execute(q2, (len(product_l) - 1,)).fetchall():
+                cve_id = row["cve_id"]
+                if cve_id in seen:
+                    continue
+                cp  = row["cpe_product"] or ""
+                cv  = row["cpe_version"] or ""
+                cvn = row["cpe_vendor"]  or ""
+                if cp not in product_l:
+                    continue
+                if vendor_l and vendor_l not in cvn and vendor.lower().replace(" ", "_") not in cvn:
+                    continue
+                if version_l and cv not in ("*", "-", "") and version_l not in cv and cv not in version_l:
+                    continue
+                seen.add(cve_id)
+                results.append(_row_to_cve_dict(row))
 
-            # Normalize spaces → underscores to match CPE encoding
-            prod_norm = product_l.replace(" ", "_")
-            vend_norm = vendor_l.replace(" ", "_")
-
-            # Product field: bidirectional substring with a minimum-length guard
-            # to prevent very short CPE product tokens matching long query names.
-            prod_match = (
-                prod_norm in cpe_product_f
-                or (len(cpe_product_f) >= 5 and cpe_product_f in prod_norm)
-            )
-            if not prod_match:
-                continue
-
-            # Vendor match when a vendor was supplied (skip check when empty)
-            if vendor_l and vend_norm not in cpe_vendor_f and vendor_l not in cpe_vendor_f:
-                continue
-
-            # Version: inspect the CPE version *field* only.
-            # "*" or "-" in that field means "all versions affected".
-            # Checking "*" in the full CPE string was wrong — it always matched
-            # because CPE strings end with multiple wildcard components.
-            if version_l:
-                if cpe_version_f in ("*", "-"):
-                    matched = True
-                elif version_l in cpe_version_f or cpe_version_f in version_l:
-                    matched = True
-            else:
-                matched = True
-        if matched:
-            results.append(entry)
-            seen.add(cve_id)
-
-    # Search fallback DB if NVD cache is empty
-    if not results and _fallback_db:
+    # Fallback to static DB if SQLite has nothing yet
+    if not results:
+        _load_fallback_db()
         for cve_id, entry in _fallback_db.items():
             if cve_id in seen:
                 continue
             for cpe in entry.get("affected_cpe", []):
-                cpe_l = cpe.lower()
-                if product_l in cpe_l:
+                if product_l in cpe.lower():
                     results.append(entry)
                     seen.add(cve_id)
                     break
 
-    # Sort by CVSS v3 score descending, fallback to v2
     results.sort(
         key=lambda x: (x.get("cvss_v3_score") or x.get("cvss_v2_score") or 0),
         reverse=True,
@@ -565,15 +741,17 @@ def lookup_cves(vendor: str, product: str, version: str = None) -> list:
 
 
 def lookup_cpe(cpe_string: str) -> list:
-    """CPE-based lookup. Returns list of matching CVE dicts."""
-    _load_caches()
+    """Exact or partial CPE string lookup. Returns list of CVE dicts."""
+    _init_db()
     cpe_l = cpe_string.lower()
-    results = []
-    for cve_id, entry in _nvd_cache.items():
-        for cpe in entry.get("affected_cpe", []):
-            if cpe.lower() == cpe_l or cpe_string in cpe:
-                results.append(entry)
-                break
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT DISTINCT cv.* FROM nvd_cves cv "
+            "JOIN nvd_cpe cp ON cv.cve_id = cp.cve_id "
+            "WHERE cp.cpe = ? OR cp.cpe LIKE ?",
+            (cpe_l, f"%{cpe_l}%"),
+        ).fetchall()
+    results = [_row_to_cve_dict(r) for r in rows]
     results.sort(
         key=lambda x: (x.get("cvss_v3_score") or x.get("cvss_v2_score") or 0),
         reverse=True,
@@ -581,25 +759,51 @@ def lookup_cpe(cpe_string: str) -> list:
     return results
 
 
+def _load_kev():
+    global _kev_cache
+    if _kev_cache:
+        return
+    _init_db()
+    with _conn() as c:
+        _kev_cache = {r["cve_id"]: dict(r) for r in c.execute("SELECT * FROM kev_catalog")}
+
+
+def _load_fallback_db():
+    global _fallback_db
+    if _fallback_db:
+        return
+    if FALLBACK_DB_PATH.exists():
+        try:
+            _fallback_db = json.loads(FALLBACK_DB_PATH.read_text())
+        except Exception as e:
+            logger.warning(f"Could not load fallback vuln DB: {e}")
+
+
 def is_kev(cve_id: str) -> bool:
     """Return True if cve_id is in the CISA Known Exploited Vulnerabilities catalog."""
-    _load_caches()
+    _load_kev()
     return cve_id in _kev_cache
 
 
 def get_kev_entry(cve_id: str) -> Optional[dict]:
     """Return KEV entry dict for a CVE ID, or None."""
-    _load_caches()
+    _load_kev()
     return _kev_cache.get(cve_id)
 
 
 def get_cvss_score(cve_id: str) -> Optional[float]:
     """Return CVSS v3 score, falling back to v2. Returns None if not found."""
-    _load_caches()
-    entry = _nvd_cache.get(cve_id) or _fallback_db.get(cve_id)
-    if not entry:
-        return None
-    return entry.get("cvss_v3_score") or entry.get("cvss_v2_score")
+    _init_db()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT cvss_v3_score, cvss_v2_score FROM nvd_cves WHERE cve_id = ?",
+            (cve_id,),
+        ).fetchone()
+    if row:
+        return row["cvss_v3_score"] or row["cvss_v2_score"]
+    _load_fallback_db()
+    entry = _fallback_db.get(cve_id)
+    return (entry.get("cvss_v3_score") or entry.get("cvss_v2_score")) if entry else None
 
 
 def format_cvss_severity(score: Optional[float]) -> str:
@@ -619,40 +823,42 @@ def format_cvss_severity(score: Optional[float]) -> str:
 
 def get_db_stats() -> dict:
     """Return DB stats: CVE count, KEV count, last update timestamps."""
-    _load_caches()
+    _init_db()
+    with _conn() as c:
+        nvd_count = c.execute("SELECT COUNT(*) FROM nvd_cves").fetchone()[0]
+        kev_count = c.execute("SELECT COUNT(*) FROM kev_catalog").fetchone()[0]
+        osv_count = c.execute("SELECT COUNT(*) FROM osv_entries").fetchone()[0]
     stats = _load_stats()
-    nvd_last = stats.get("nvd_last_updated")
+    nvd_last = stats.get("nvd_last_updated", "")
     last_updated_ts = None
     if nvd_last:
         try:
             last_updated_ts = datetime.fromisoformat(nvd_last).timestamp()
         except Exception:
             pass
-    stale = is_db_stale()
     return {
         # Keys used by update-vuln-db.py _print_stats()
-        "cve_count": len(_nvd_cache),
-        "kev_count": len(_kev_cache),
-        "osv_count": len(_osv_cache),
-        "last_updated": last_updated_ts,
-        "stale": stale,
-        "kev_last_modified": stats.get("kev_last_updated", ""),
-        "db_path": str(VULN_DB_DIR),
-        # Full detail keys
-        "nvd_cve_count": len(_nvd_cache),
-        "kev_cve_count": len(_kev_cache),
-        "osv_entry_count": len(_osv_cache),
-        "fallback_entry_count": len(_fallback_db),
+        "cve_count":        nvd_count,
+        "kev_count":        kev_count,
+        "osv_count":        osv_count,
+        "last_updated":     last_updated_ts,
+        "stale":            is_db_stale(),
+        "kev_last_modified":stats.get("kev_last_updated", ""),
+        "db_path":          str(DB_PATH),
+        # Full detail keys (web dashboard etc.)
+        "nvd_cve_count":    nvd_count,
+        "kev_cve_count":    kev_count,
+        "osv_entry_count":  osv_count,
         "nvd_last_updated": stats.get("nvd_last_updated", "never"),
         "kev_last_updated": stats.get("kev_last_updated", "never"),
         "osv_last_updated": stats.get("osv_last_updated", "never"),
-        "nvd_cache_path": str(NVD_CACHE_PATH),
-        "kev_cache_path": str(KEV_CACHE_PATH),
+        "nvd_cache_path":   str(DB_PATH),
+        "kev_cache_path":   str(DB_PATH),
     }
 
 
 def is_db_stale(max_age_days: int = 7) -> bool:
-    """Return True if NVD cache is older than max_age_days or missing."""
+    """Return True if NVD data is older than max_age_days or missing."""
     stats = _load_stats()
     last_updated = stats.get("nvd_last_updated")
     if not last_updated:

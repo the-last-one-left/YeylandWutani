@@ -30,7 +30,7 @@ LOG_FILE = BASE_DIR / "logs" / "risk-scanner.log"
 DATA_DIR = BASE_DIR / "data"
 HISTORY_DIR = DATA_DIR / "history"
 LOCK_FILE = DATA_DIR / ".scanner.lock"
-VULN_DB_PATH = DATA_DIR / "vuln-db" / "nvd-cache.json"
+VULN_DB_PATH = DATA_DIR / "vuln-db" / "vuln-db.sqlite"
 
 logger = logging.getLogger("risk-scanner-main")
 
