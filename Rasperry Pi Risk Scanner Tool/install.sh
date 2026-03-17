@@ -130,19 +130,6 @@ check_git() {
 install_packages() {
     print_step "Step 1: Installing system packages"
 
-    # snmp-mibs-downloader lives in the non-free repo (Debian/Raspberry Pi OS).
-    # Enable it if not already present, then re-run apt-get update.
-    local sources_file="/etc/apt/sources.list"
-    if ! grep -qE '^deb .* non-free' "${sources_file}" 2>/dev/null && \
-       ! grep -rlE '^deb .* non-free' /etc/apt/sources.list.d/ 2>/dev/null | grep -q .; then
-        info "Enabling non-free apt component for snmp-mibs-downloader..."
-        # Append non-free to every existing deb line that doesn't already have it
-        sed -i '/^deb /{ /non-free/! s/$/ non-free/ }' "${sources_file}"
-        print_ok "non-free component enabled in ${sources_file}"
-    else
-        info "non-free apt component already enabled."
-    fi
-
     apt-get update -qq
     apt-get install -y --no-install-recommends \
         nmap \
@@ -150,7 +137,6 @@ install_packages() {
         fping \
         sshpass \
         snmp \
-        snmp-mibs-downloader \
         python3-venv \
         python3-pip \
         openssl \
@@ -167,6 +153,15 @@ install_packages() {
         logrotate \
         libcap2-bin
     print_ok "System packages installed."
+
+    # snmp-mibs-downloader is only in Debian's non-free repo and is not available
+    # on Raspberry Pi OS mirrors. Install it if possible; skip it if not — SNMP
+    # scanning still works without it (OIDs appear as numbers instead of names).
+    if apt-get install -y --no-install-recommends snmp-mibs-downloader 2>/dev/null; then
+        print_ok "snmp-mibs-downloader installed (human-readable OID names enabled)."
+    else
+        print_warn "snmp-mibs-downloader not available on this OS — SNMP will use numeric OIDs. This is non-fatal."
+    fi
 }
 
 # ── Step 2: Create service user ───────────────────────────────────────────────
