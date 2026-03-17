@@ -189,6 +189,14 @@ def size_environment(scan_results: dict) -> dict:
     subnets = recon.get("subnets", [])
     subnet  = subnets[0] if subnets else ""
 
+    # ── Virtualization detection ──────────────────────────────────────────
+    # MAC OUI prefixes that indicate a VM's virtual NIC
+    _vm_mac_ouis = {
+        "00:0c:29", "00:50:56", "00:05:69", "00:0e:c8",  # VMware
+        "00:15:5d",                                        # Microsoft Hyper-V
+        "08:00:27",                                        # VirtualBox
+    }
+
     # ── Active Directory enrichment (credentialed scan) ───────────────────
     ad_available = bool(ad.get("available"))
     if ad_available:
@@ -196,6 +204,36 @@ def size_environment(scan_results: dict) -> dict:
         ad_server_count = ad.get("server_count", 0)
         if ad_server_count > 0:
             server_count = ad_server_count
+
+    # ── VM vs physical host classification ───────────────────────────────
+    # Count VMs and confirmed physical hosts so we recommend the right number
+    # of physical servers rather than one-per-VM.
+    vm_count      = 0
+    phys_detected = 0
+
+    if ad_available and ad.get("hardware"):
+        for _cname, _hw in (ad.get("hardware") or {}).items():
+            _mfr   = (_hw.get("manufacturer") or "").lower()
+            _model = (_hw.get("model") or "").lower()
+            if "vmware" in _mfr or "virtual machine" in _model:
+                vm_count += 1
+            elif _hw.get("wmi_accessible") and _mfr and "microsoft" not in _mfr:
+                # WMI-accessible + real hardware vendor = confirmed physical server
+                phys_detected += 1
+    else:
+        # No AD data — use MAC OUI heuristic
+        for _h in hosts:
+            _mac    = (_h.get("mac") or "").lower().replace("-", ":")
+            _prefix = _mac[:8] if len(_mac) >= 8 else ""
+            if _prefix in _vm_mac_ouis:
+                vm_count += 1
+
+    is_virtualized = vm_count > 0
+    # Physical host count: use confirmed count, or derive 1 host per 5 VMs
+    if is_virtualized and phys_detected == 0:
+        physical_host_count = max(1, math.ceil(vm_count / 5))
+    else:
+        physical_host_count = phys_detected if phys_detected > 0 else server_count
 
     # ── Security software signals ─────────────────────────────────────────
     # AuthPoint (MFA): recommend when VPN, RDS, or WatchGuard detected
@@ -548,6 +586,10 @@ def size_environment(scan_results: dict) -> dict:
         "ad":                      ad_context,
         # Datto sizing input
         "total_server_storage_tb": round(total_server_storage_tb, 1),
+        # Virtualization
+        "is_virtualized":       is_virtualized,
+        "vm_count":             vm_count,
+        "physical_host_count":  physical_host_count,
         # Security software signals
         "recommend_authpoint":  recommend_authpoint,
         "authpoint_reasons":    authpoint_reasons,
@@ -645,21 +687,38 @@ def _select_aps(env: dict, catalog: dict) -> Optional[tuple]:
 def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
     """
     Return (product_dict, count) or None if no servers detected.
+
+    When virtualisation is detected the recommended count is physical hosts
+    (1 per 5 VMs by default), not the raw VM count, and the product is
+    selected for a hypervisor workload (highest RAM/core density available).
     """
-    server_count = env["server_count"]
+    server_count = env.get("server_count", 0)
     if server_count == 0:
         return None
 
-    candidates = [s for s in catalog.get("servers", [])
-                  if s["min_servers"] <= server_count <= s["max_servers"]]
-    if not candidates:
-        candidates = catalog.get("servers", [])
-        product = max(candidates, key=lambda s: s["max_servers"]) if candidates else None
-    else:
-        product = min(candidates, key=lambda s: s["max_servers"])
-
-    if not product:
+    all_servers = catalog.get("servers", [])
+    if not all_servers:
         return None
+
+    is_virtualized = env.get("is_virtualized", False)
+
+    if is_virtualized:
+        # Recommend physical hosts to consolidate VMs
+        host_count = env.get("physical_host_count", max(1, math.ceil(server_count / 5)))
+        # Prefer the highest-RAM rack server — it will run the VMs
+        rack_servers = [s for s in all_servers
+                        if "rack" in (s.get("form_factor") or "").lower()]
+        pool = rack_servers if rack_servers else all_servers
+        product = max(pool, key=lambda s: s.get("max_ram_gb", 0))
+        return product, host_count
+
+    # Non-virtualised: size by raw server count as before
+    candidates = [s for s in all_servers
+                  if s.get("min_servers", 1) <= server_count <= s.get("max_servers", 99)]
+    if not candidates:
+        product = max(all_servers, key=lambda s: s.get("max_servers", 0))
+    else:
+        product = min(candidates, key=lambda s: s.get("max_servers", 99))
 
     return product, server_count
 
@@ -798,9 +857,17 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     if env["estimated_wireless"] > 0:
         ap_signals.append(f"~{env['estimated_wireless']} estimated wireless devices")
 
-    sv_signals = [
-        f"{env['server_count']} server(s) identified on network",
-    ]
+    if env.get("is_virtualized") and env.get("vm_count", 0) > 0:
+        vm_n   = env["vm_count"]
+        host_n = env.get("physical_host_count", max(1, math.ceil(vm_n / 5)))
+        sv_signals = [
+            f"{vm_n} virtual machine(s) detected — consolidating onto {host_n} physical host(s)",
+            f"Recommended ratio: ~{vm_n // host_n if host_n else vm_n} VMs per host with headroom for growth",
+        ]
+    else:
+        sv_signals = [
+            f"{env['server_count']} server(s) identified on network",
+        ]
     if env["eol_server_count"] > 0:
         sv_signals.append(
             f"{env['eol_server_count']} EOL server(s) — immediate replacement recommended"
@@ -1441,9 +1508,9 @@ def _draw_product_card(c, product: dict, count: int,
     # ── Estimate card height ───────────────────────────────────────────────
     features = product.get("key_features", [])[:4]
     n_specs  = _count_specs(product)
-    spec_h   = math.ceil(n_specs / 2) * 18 + 8
-    feat_h   = len(features) * 15 + 8
-    card_h   = 32 + spec_h + feat_h + 12   # header + specs + features + padding
+    spec_h   = math.ceil(n_specs / 2) * 20 + 12   # row_h=20, 12px padding
+    feat_h   = len(features) * 16 + 10
+    card_h   = 36 + spec_h + feat_h + 12   # header + specs + features + padding
 
     # ── Card background ────────────────────────────────────────────────────
     c.setFillColor(white)
@@ -1474,30 +1541,57 @@ def _draw_product_card(c, product: dict, count: int,
     sy -= spec_h
 
     # ── Feature bullets ────────────────────────────────────────────────────
-    sy -= 4
+    sy -= 6
     for feat in features:
         c.setFillColor(vc)
         c.circle(x + 14, sy + 4, 2.5, fill=1, stroke=0)
-        c.setFont("Helvetica", 8)
+        c.setFont("Helvetica", 8.5)
         c.setFillColor(_hex("#222222"))
-        _draw_wrapped(c, feat, x + 22, sy, w - 32, size=8, line_h=11)
-        sy -= 15
+        _draw_wrapped(c, feat, x + 22, sy, w - 32, size=8.5, line_h=12)
+        sy -= 16
 
     return y - card_h - 6
 
 
 def _count_specs(product: dict) -> int:
-    """Count how many spec fields are present for grid layout."""
-    keys = [
-        "stateful_throughput_gbps", "utm_throughput_mbps", "vpn_throughput_mbps",
-        "max_devices", "interfaces", "form_factor", "ports", "poe_ports",
-        "poe_budget_w", "uplinks", "max_throughput_mbps", "wifi_standard",
-        "max_clients", "form_factor", "processor", "max_ram_gb",
-        # Software / security product fields
-        "deployment", "authentication_methods", "detection_engine",
-        "platforms", "integrations", "management",
-    ]
-    return sum(1 for k in keys if product.get(k) is not None)
+    """
+    Count how many spec rows _draw_spec_grid will render for this product.
+    MUST stay in sync with _draw_spec_grid — add a key here whenever a new
+    spec is added to the grid, so card heights are calculated correctly.
+    """
+    n = 0
+    # Firewall specs
+    for k in ("stateful_throughput_gbps", "utm_throughput_mbps",
+              "vpn_throughput_mbps", "max_devices", "interfaces"):
+        if product.get(k) is not None:
+            n += 1
+    # form_factor only rendered for firewalls (when stateful_throughput_gbps present)
+    if product.get("form_factor") and product.get("stateful_throughput_gbps"):
+        n += 1
+    # Switch specs — "ports" only rendered when not a firewall
+    if product.get("ports") and not product.get("stateful_throughput_gbps"):
+        n += 1
+    for k in ("poe_ports", "poe_budget_w", "uplinks", "layer"):
+        if product.get(k) is not None:
+            n += 1
+    # AP specs
+    for k in ("wifi_standard", "max_throughput_mbps", "max_clients",
+              "bands", "poe_required"):
+        if product.get(k) is not None:
+            n += 1
+    # Security software specs
+    for k in ("deployment", "authentication_methods", "detection_engine",
+              "platforms", "integrations", "management"):
+        if product.get(k) is not None:
+            n += 1
+    # Server specs
+    for k in ("processor", "max_ram_gb", "max_storage"):
+        if product.get(k) is not None:
+            n += 1
+    # raid_support only rendered when form_factor also present
+    if product.get("raid_support") and product.get("form_factor"):
+        n += 1
+    return n
 
 
 def _draw_spec_grid(c, product: dict, x: float, y: float, w: float) -> None:
@@ -1572,24 +1666,26 @@ def _draw_spec_grid(c, product: dict, x: float, y: float, w: float) -> None:
         specs.append(("RAID", product["raid_support"][:40]))
 
     col_w = w / 2 - 4
-    row_h = 17
+    row_h = 20       # MUST match spec_h formula in _draw_product_card
     for i, (label, value) in enumerate(specs):
         cx  = x + (i % 2) * (col_w + 8)
         cy  = y - (i // 2) * row_h
 
-        # Alternating row shade
+        # Alternating row shade (full-width band across both columns)
         if (i // 2) % 2 == 0:
+            band_x = x - 2
+            band_w = w + 4
             c.setFillColor(_hex("#f8f9fa"))
-            c.rect(cx - 2, cy - row_h + 3, col_w + 4, row_h, fill=1, stroke=0)
+            c.rect(band_x, cy - row_h + 4, band_w, row_h, fill=1, stroke=0)
 
         c.setFont("Helvetica", 7)
         c.setFillColor(_hex("#888888"))
-        c.drawString(cx, cy - 4, label.upper())
+        c.drawString(cx + 2, cy - 5, label.upper())
         c.setFont("Helvetica-Bold", 8.5)
         c.setFillColor(_hex("#111111"))
-        # Truncate long values
-        disp = value if c.stringWidth(value, "Helvetica-Bold", 8.5) <= col_w - 4 else value[:30] + "..."
-        c.drawString(cx, cy - 14, disp)
+        # Truncate long values to fit column width
+        disp = value if c.stringWidth(value, "Helvetica-Bold", 8.5) <= col_w - 8 else value[:32] + "..."
+        c.drawString(cx + 2, cy - 15, disp)
 
 
 # ── Cover page ────────────────────────────────────────────────────────────────
