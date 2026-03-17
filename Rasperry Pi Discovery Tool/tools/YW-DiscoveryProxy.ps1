@@ -119,9 +119,11 @@ function Register-ProxyTxt {
         return
     }
     try {
-        # Remove any stale record silently
-        Remove-DnsServerResourceRecord -ZoneName $Domain -Name $TxtLabel `
-            -RRType "TXT" -Force -ErrorAction SilentlyContinue | Out-Null
+        # Remove any stale record silently (record may not exist — suppress all errors)
+        try {
+            Remove-DnsServerResourceRecord -ZoneName $Domain -Name $TxtLabel `
+                -RRType "TXT" -Force -ErrorAction Stop | Out-Null
+        } catch { <# no-op — record simply didn't exist yet #> }
 
         Add-DnsServerResourceRecord `
             -ZoneName $Domain -Name $TxtLabel -Txt `
