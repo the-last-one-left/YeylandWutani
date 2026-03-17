@@ -1,0 +1,687 @@
+"""
+ad_discovery.py — Credentialed Active Directory enrichment via YW Discovery Proxy.
+
+Phase 24 of the YW network scanner.
+
+The SE runs YW-DiscoveryProxy.ps1 on a Domain Controller as Domain Admin before
+the scan starts.  That script writes a self-expiring DNS TXT record:
+
+    _yw-discovery.<domain>   TXT   "ywp-v1|token=<TOKEN>|port=<PORT>"
+
+The Pi finds this record automatically (no manual key entry) and queries:
+
+    /computers       All AD computer objects (name, OS, OU, last logon, …)
+    /users           All AD user objects (name, email, title, groups, …)
+    /groups          Privileged group memberships (Domain Admins, etc.)
+    /password-policy Domain password and lockout policy
+    /dhcp            Full DHCP lease table  (IP ↔ hostname ground truth)
+    /dns             DNS zone records
+    /gpos            Group Policy objects
+    /hardware        CIM hardware inventory per server
+                     (CPU, RAM, disks, serial number, NIC, BIOS, uptime)
+    /done            Signal proxy to shut down cleanly
+
+merge_ad_into_hosts() then enriches every device in the Pi's hosts list with:
+    - Authoritative hostname (from AD computer name or DHCP)
+    - Exact OS string
+    - Organisational Unit (OU)
+    - Last logon date
+    - Server hardware details (model, CPU, RAM, disks, serial)
+    - Whether the computer account is enabled / stale
+
+scan_results["ad_enrichment"] receives a summary with security findings:
+    stale accounts, excessive Domain Admins, weak password policy, Kerberoastable
+    service accounts, accounts with non-expiring passwords, etc.
+"""
+
+from __future__ import annotations
+
+import logging
+import re
+import socket
+from datetime import datetime, timezone, timedelta
+from typing import Optional
+
+logger = logging.getLogger(__name__)
+
+_PROXY_PORT_DEFAULT = 8734
+_TXT_LABEL          = "_yw-discovery"
+
+# ── Domain / DC discovery ──────────────────────────────────────────────────────
+
+def _domain_candidates(recon: dict, dhcp_results: dict) -> list[str]:
+    """
+    Collect candidate AD domain names from scan data.
+    Includes internal .local / .lan domains (common in AD environments).
+    """
+    seen   = set()
+    result = []
+
+    def _add(d: str) -> None:
+        d = d.strip().lower()
+        if d and d not in seen and len(d) > 3:
+            seen.add(d)
+            result.append(d)
+
+    # DHCP domain name is the most direct indicator of the AD domain
+    for srv in (dhcp_results or {}).get("dhcp_servers", []):
+        dn = (srv.get("domain_name") or "").strip()
+        if dn:
+            _add(dn)
+
+    # Recon DNS search domains
+    for key in ("search_domain", "domain", "dns_domain"):
+        _add(recon.get(key, ""))
+
+    # DNS servers listed in recon — if one of them IS a DC its PTR may give us the domain
+    # (we don't resolve here; just keep for DC candidate use below)
+
+    return result
+
+
+def _find_dc_ips(hosts: list) -> list[str]:
+    """
+    Identify domain controller IPs from the hosts list.
+    Kerberos (88) + LDAP (389) together is the definitive DC signature.
+    Also accept LDAP + DNS (53) as a secondary heuristic.
+    """
+    dcs = []
+    for host in hosts:
+        open_ports = {
+            p["port"] for p in host.get("ports", [])
+            if p.get("state") == "open"
+        }
+        if (88 in open_ports and 389 in open_ports) or \
+           (389 in open_ports and 53 in open_ports and 636 in open_ports):
+            ip = host.get("ip")
+            if ip:
+                dcs.append(ip)
+    return dcs
+
+
+def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
+    """
+    Query _yw-discovery.<domain> TXT from dc_ip's DNS server.
+    Returns the raw TXT string if found, else None.
+    """
+    record = f"{_TXT_LABEL}.{domain}"
+
+    # dnspython is the reliable path (lets us target the DC's own DNS)
+    try:
+        import dns.resolver  # type: ignore
+        res = dns.resolver.Resolver(configure=False)
+        res.nameservers = [dc_ip]
+        res.timeout     = 3
+        res.lifetime    = 5
+        for rdata in res.resolve(record, "TXT"):
+            for chunk in rdata.strings:
+                txt = chunk.decode("utf-8", errors="ignore")
+                if txt.startswith("ywp-v1|"):
+                    return txt
+    except Exception:
+        pass
+
+    # Fallback: nslookup
+    try:
+        import subprocess
+        r = subprocess.run(
+            ["nslookup", "-type=TXT", record, dc_ip],
+            capture_output=True, text=True, timeout=6,
+        )
+        for line in r.stdout.splitlines():
+            m = re.search(r'ywp-v1\|[^\s"]+', line)
+            if m:
+                return m.group(0)
+    except Exception:
+        pass
+
+    return None
+
+
+def _parse_txt(txt: str) -> Optional[tuple[str, int]]:
+    """Parse 'ywp-v1|token=TOKEN|port=PORT' → (token, port)."""
+    parts = dict(seg.split("=", 1) for seg in txt.split("|") if "=" in seg)
+    token = parts.get("token", "")
+    try:
+        port = int(parts.get("port", _PROXY_PORT_DEFAULT))
+    except ValueError:
+        port = _PROXY_PORT_DEFAULT
+    return (token, port) if token else None
+
+
+def _get_domain_via_ldap_rootdse(dc_ip: str) -> Optional[str]:
+    """
+    Anonymous LDAP rootDSE query to get defaultNamingContext → domain name.
+    Fallback when DHCP domain is unavailable.
+    Uses ldap3 (already in requirements.txt).
+    """
+    try:
+        from ldap3 import Server, Connection, ALL, ANONYMOUS  # type: ignore
+        srv = Server(dc_ip, port=389, use_ssl=False, get_info=ALL, connect_timeout=4)
+        conn = Connection(srv, authentication=ANONYMOUS)
+        if conn.bind():
+            dnc = srv.info.other.get("defaultNamingContext", [""])
+            if isinstance(dnc, list):
+                dnc = dnc[0] if dnc else ""
+            # "DC=contoso,DC=local" → "contoso.local"
+            parts = re.findall(r"DC=([^,]+)", str(dnc), re.IGNORECASE)
+            if parts:
+                return ".".join(parts).lower()
+    except Exception:
+        pass
+    return None
+
+
+# ── Proxy location ─────────────────────────────────────────────────────────────
+
+def find_ad_proxy(
+    hosts: list,
+    recon: dict,
+    dhcp_results: dict,
+    config: dict,
+) -> Optional[tuple[str, int, str]]:
+    """
+    Scan DC candidates for a live YW Discovery Proxy.
+    Returns (dc_ip, port, token) or None.
+    """
+    dc_ips = _find_dc_ips(hosts)
+    if not dc_ips:
+        logger.debug("[Phase 24] No DC candidates found in hosts (need ports 88+389).")
+        return None
+
+    domains = _domain_candidates(recon, dhcp_results)
+    logger.info(
+        f"[Phase 24] Checking {len(dc_ips)} DC candidate(s) for YW proxy.  "
+        f"Domains to try: {domains or '(will query rootDSE)'}"
+    )
+
+    for dc_ip in dc_ips:
+        # Build domain list for this DC: known domains + rootDSE fallback
+        dc_domains = list(domains)
+        if not dc_domains:
+            rdse_domain = _get_domain_via_ldap_rootdse(dc_ip)
+            if rdse_domain:
+                logger.debug(f"[Phase 24]   rootDSE on {dc_ip} → {rdse_domain}")
+                dc_domains.append(rdse_domain)
+
+        for domain in dc_domains:
+            txt = _query_txt(dc_ip, domain)
+            if not txt:
+                logger.debug(f"[Phase 24]   {dc_ip}: no TXT at {_TXT_LABEL}.{domain}")
+                continue
+
+            parsed = _parse_txt(txt)
+            if not parsed:
+                logger.warning(f"[Phase 24]   {dc_ip}: malformed TXT: {txt}")
+                continue
+
+            token, port = parsed
+
+            # Confirm proxy is alive
+            try:
+                import requests as _req  # type: ignore
+                resp = _req.get(
+                    f"http://{dc_ip}:{port}/ping",
+                    headers={"Authorization": f"Bearer {token}"},
+                    timeout=6,
+                )
+                if resp.status_code == 200:
+                    info = resp.json()
+                    logger.info(
+                        f"[Phase 24]   Proxy confirmed at {dc_ip}:{port}  "
+                        f"domain={info.get('domain_name','?')}  "
+                        f"DCs={info.get('domain_controller_count','?')}"
+                    )
+                    return dc_ip, port, token
+            except Exception as e:
+                logger.debug(f"[Phase 24]   {dc_ip}:{port} ping failed: {e}")
+
+    return None
+
+
+# ── Proxy queries ──────────────────────────────────────────────────────────────
+
+def _get(dc_ip: str, port: int, token: str,
+         endpoint: str, timeout: int = 120) -> Optional[dict | list]:
+    """Authenticated GET to a proxy endpoint."""
+    try:
+        import requests as _req  # type: ignore
+        resp = _req.get(
+            f"http://{dc_ip}:{port}{endpoint}",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=timeout,
+        )
+        if resp.status_code == 200:
+            return resp.json()
+        logger.warning(f"[Phase 24] {endpoint} → HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Phase 24] {endpoint} failed: {e}")
+    return None
+
+
+def _signal_done(dc_ip: str, port: int, token: str) -> None:
+    """Tell the proxy the scan is complete so it can clean up and exit."""
+    try:
+        import requests as _req  # type: ignore
+        _req.post(
+            f"http://{dc_ip}:{port}/done",
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=5,
+        )
+    except Exception:
+        pass
+
+
+# ── Server identification ──────────────────────────────────────────────────────
+
+def _identify_server_names(computers: list, hosts: list) -> list[str]:
+    """
+    Return short AD computer names that are likely servers.
+    Sources: AD OperatingSystem field + Pi's own port-based server detection.
+    """
+    server_names: set[str] = set()
+
+    # From AD: OS contains "Server"
+    for c in computers:
+        if "server" in (c.get("OperatingSystem") or "").lower():
+            name = (c.get("Name") or
+                    (c.get("DNSHostName") or "").split(".")[0])
+            if name:
+                server_names.add(name.upper())
+
+    # From Pi's port scan: multiple server-class ports open
+    server_ports = {135, 445, 3389, 5985, 5986}   # RPC, SMB, RDP, WinRM
+    for host in hosts:
+        open_ports = {p["port"] for p in host.get("ports", [])
+                      if p.get("state") == "open"}
+        if len(server_ports & open_ports) >= 3:
+            hn = (host.get("hostname") or "").split(".")[0].upper()
+            if hn:
+                server_names.add(hn)
+
+    return sorted(server_names)
+
+
+# ── Data collection orchestration ─────────────────────────────────────────────
+
+def collect_ad_data(dc_ip: str, port: int, token: str, hosts: list) -> dict:
+    """Run all proxy endpoints and return the full collected data dict."""
+
+    logger.info("[Phase 24] /computers ...")
+    computers   = _get(dc_ip, port, token, "/computers",       timeout=90)  or []
+
+    logger.info("[Phase 24] /users ...")
+    users       = _get(dc_ip, port, token, "/users",           timeout=120) or []
+
+    logger.info("[Phase 24] /groups ...")
+    groups      = _get(dc_ip, port, token, "/groups",          timeout=30)  or {}
+
+    logger.info("[Phase 24] /password-policy ...")
+    pwd_policy  = _get(dc_ip, port, token, "/password-policy", timeout=15)  or {}
+
+    logger.info("[Phase 24] /dhcp ...")
+    dhcp        = _get(dc_ip, port, token, "/dhcp",            timeout=30)  or {}
+
+    logger.info("[Phase 24] /dns ...")
+    dns         = _get(dc_ip, port, token, "/dns",             timeout=60)  or {}
+
+    logger.info("[Phase 24] /gpos ...")
+    gpos        = _get(dc_ip, port, token, "/gpos",            timeout=15)  or {}
+
+    # Hardware: only for machines the scan thinks are servers
+    server_names = _identify_server_names(computers, hosts)
+    hardware: dict[str, dict] = {}
+    if server_names:
+        targets = ",".join(server_names)
+        logger.info(f"[Phase 24] /hardware for {len(server_names)} server(s): {targets}")
+        hw_resp = _get(
+            dc_ip, port, token,
+            f"/hardware?targets={targets}",
+            timeout=300,
+        )
+        if hw_resp:
+            for entry in hw_resp.get("servers", []):
+                key = (entry.get("computer_name") or "").upper()
+                if key:
+                    hardware[key] = entry
+
+    _signal_done(dc_ip, port, token)
+
+    return {
+        "computers":       computers,
+        "users":           users,
+        "groups":          groups,
+        "password_policy": pwd_policy,
+        "dhcp":            dhcp,
+        "dns":             dns,
+        "gpos":            gpos,
+        "hardware":        hardware,
+    }
+
+
+# ── Host enrichment ────────────────────────────────────────────────────────────
+
+def _dn_to_ou(dn: str) -> str:
+    """'OU=Servers,OU=Corp,DC=…' → 'Servers/Corp'"""
+    parts = [p[3:] for p in dn.split(",") if p.strip().upper().startswith("OU=")]
+    return "/".join(parts) if parts else ""
+
+
+def merge_ad_into_hosts(hosts: list, ad_data: dict) -> None:
+    """
+    Enrich host dicts in-place with AD data.
+
+    Matching priority (highest confidence first):
+      1. DHCP lease table  (IP → computer short name)
+      2. AD computer IPv4Address attribute
+      3. Existing Pi hostname matches AD computer Name
+    """
+    computers = ad_data.get("computers", [])
+    dhcp      = ad_data.get("dhcp",      {})
+    hardware  = ad_data.get("hardware",  {})
+
+    # Build DHCP: ip → short name
+    dhcp_by_ip: dict[str, str] = {}
+    if dhcp.get("available"):
+        for lease in dhcp.get("leases", []):
+            ip = (lease.get("ip") or "").strip()
+            hn = (lease.get("hostname") or "").strip().split(".")[0].upper()
+            if ip and hn:
+                dhcp_by_ip[ip] = hn
+
+    # Build AD lookups: name → object, ip → object
+    ad_by_name: dict[str, dict] = {}
+    ad_by_ip:   dict[str, dict] = {}
+    for c in computers:
+        name = (c.get("Name") or "").upper()
+        if name:
+            ad_by_name[name] = c
+        ip4 = (c.get("IPv4Address") or "").strip()
+        if ip4:
+            ad_by_ip[ip4] = c
+
+    for host in hosts:
+        host_ip = host.get("ip", "")
+
+        # Try each matching strategy in order
+        ad_computer = (
+            ad_by_name.get(dhcp_by_ip.get(host_ip, "")) or
+            ad_by_ip.get(host_ip) or
+            ad_by_name.get((host.get("hostname") or "").split(".")[0].upper())
+        )
+
+        if not ad_computer:
+            continue
+
+        short_name = ad_computer.get("Name", "")
+        dns_name   = ad_computer.get("DNSHostName", "")
+
+        # Authoritative hostname from AD
+        host["hostname"] = dns_name or short_name or host.get("hostname", "")
+
+        host["ad_computer"] = {
+            "name":         short_name,
+            "dns_hostname": dns_name,
+            "os":           ad_computer.get("OperatingSystem", ""),
+            "os_version":   ad_computer.get("OperatingSystemVersion", ""),
+            "ou":           _dn_to_ou(ad_computer.get("DistinguishedName", "")),
+            "description":  ad_computer.get("Description", ""),
+            "enabled":      ad_computer.get("Enabled", True),
+            "last_logon":   ad_computer.get("LastLogonDate", ""),
+            "when_created": ad_computer.get("WhenCreated", ""),
+            "spns":         ad_computer.get("ServicePrincipalNames") or [],
+        }
+
+        # Hardware from CIM proxy
+        hw_key = short_name.upper()
+        if hw_key in hardware:
+            host["hardware"] = hardware[hw_key]
+
+        # Upgrade OS string if Pi didn't already have one
+        ad_os = ad_computer.get("OperatingSystem", "")
+        if ad_os and not host.get("os"):
+            host["os"] = ad_os
+
+
+# ── Security analysis ──────────────────────────────────────────────────────────
+
+def _parse_dt(value) -> Optional[datetime]:
+    """Parse an AD date string to a UTC-aware datetime."""
+    if not value:
+        return None
+    try:
+        dt = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except Exception:
+        return None
+
+
+def build_ad_summary(ad_data: dict) -> dict:
+    """
+    Derive counts and security findings from raw AD data.
+    Returns the ad_enrichment dict that is stored in scan_results.
+    """
+    computers  = ad_data.get("computers",  [])
+    users      = ad_data.get("users",      [])
+    groups     = ad_data.get("groups",     {})
+    pwd_policy = ad_data.get("password_policy", {})
+    hardware   = ad_data.get("hardware",   {})
+    gpos       = ad_data.get("gpos",       {})
+
+    now           = datetime.now(timezone.utc)
+    stale_cutoff  = now - timedelta(days=90)
+
+    # ── User analysis ──────────────────────────────────────────────────────────
+    enabled_users     = [u for u in users if u.get("Enabled")]
+    stale_users       = []
+    never_logged_in   = []
+    pwd_never_expires = []
+
+    for u in enabled_users:
+        ll = _parse_dt(u.get("LastLogonDate"))
+        if ll:
+            if ll < stale_cutoff:
+                stale_users.append(u.get("SamAccountName", ""))
+        else:
+            never_logged_in.append(u.get("SamAccountName", ""))
+
+        if u.get("PasswordNeverExpires"):
+            pwd_never_expires.append(u.get("SamAccountName", ""))
+
+    # ── Computer analysis ──────────────────────────────────────────────────────
+    enabled_computers = [c for c in computers if c.get("Enabled", True)]
+    stale_computers   = []
+    server_names_list = []
+
+    for c in enabled_computers:
+        if "server" in (c.get("OperatingSystem") or "").lower():
+            server_names_list.append(c.get("Name", ""))
+
+        ll = _parse_dt(c.get("LastLogonDate"))
+        if ll and ll < stale_cutoff:
+            stale_computers.append(c.get("Name", ""))
+
+    # ── Privileged accounts ────────────────────────────────────────────────────
+    def _names_from_group(grp_name: str) -> list[str]:
+        return [
+            m.get("SamAccountName") or m.get("Name", "")
+            for m in groups.get(grp_name, [])
+        ]
+
+    domain_admins    = _names_from_group("Domain Admins")
+    enterprise_admins = _names_from_group("Enterprise Admins")
+
+    # Service accounts: enabled users with SPNs (excluding krbtgt)
+    service_accounts = [
+        u.get("SamAccountName", "")
+        for u in users
+        if u.get("Enabled") and
+           u.get("ServicePrincipalNames") and
+           not (u.get("SamAccountName") or "").lower().startswith("krbtgt")
+    ]
+
+    # ── Security findings ──────────────────────────────────────────────────────
+    findings = []
+
+    pw_len = pwd_policy.get("min_password_length", 99)
+    if isinstance(pw_len, (int, float)) and pw_len < 12:
+        findings.append({
+            "severity": "medium",
+            "title":    "Weak password length requirement",
+            "detail":   (
+                f"Domain policy requires only {int(pw_len)} characters. "
+                "NIST SP 800-63B recommends a minimum of 15 characters."
+            ),
+        })
+
+    if not pwd_policy.get("complexity_enabled", True):
+        findings.append({
+            "severity": "high",
+            "title":    "Password complexity not enforced",
+            "detail":   "Domain password policy does not require complex passwords.",
+        })
+
+    lockout = pwd_policy.get("lockout_threshold", 0)
+    if isinstance(lockout, (int, float)) and lockout == 0:
+        findings.append({
+            "severity": "high",
+            "title":    "No account lockout policy",
+            "detail":   "Accounts are never locked after failed login attempts, "
+                        "enabling unlimited brute-force attempts.",
+        })
+
+    if len(domain_admins) > 5:
+        findings.append({
+            "severity": "medium",
+            "title":    f"Excessive Domain Admin accounts ({len(domain_admins)})",
+            "detail":   (
+                f"{', '.join(domain_admins[:8])}"
+                f"{'...' if len(domain_admins) > 8 else ''}. "
+                "Best practice is ≤3 named Domain Admin accounts plus a break-glass account."
+            ),
+        })
+
+    if stale_users:
+        findings.append({
+            "severity": "medium",
+            "title":    f"{len(stale_users)} stale enabled user account(s) (inactive >90 days)",
+            "detail":   (
+                f"{', '.join(stale_users[:6])}"
+                f"{'...' if len(stale_users) > 6 else ''}. "
+                "Dormant enabled accounts extend the attack surface."
+            ),
+        })
+
+    if service_accounts:
+        findings.append({
+            "severity": "info",
+            "title":    f"{len(service_accounts)} Kerberoastable service account(s)",
+            "detail":   (
+                f"Accounts with registered SPNs: {', '.join(service_accounts[:5])}. "
+                "Any domain user can request TGS tickets for these accounts and "
+                "attempt offline password cracking."
+            ),
+        })
+
+    if pwd_never_expires:
+        findings.append({
+            "severity": "low",
+            "title":    f"{len(pwd_never_expires)} account(s) with password set to never expire",
+            "detail":   (
+                f"{', '.join(pwd_never_expires[:6])}"
+                f"{'...' if len(pwd_never_expires) > 6 else ''}."
+            ),
+        })
+
+    if stale_computers:
+        findings.append({
+            "severity": "low",
+            "title":    f"{len(stale_computers)} stale computer account(s) (inactive >90 days)",
+            "detail":   (
+                f"{', '.join(stale_computers[:6])}"
+                f"{'...' if len(stale_computers) > 6 else ''}. "
+                "May indicate decommissioned machines still enabled in AD."
+            ),
+        })
+
+    if never_logged_in:
+        findings.append({
+            "severity": "info",
+            "title":    f"{len(never_logged_in)} user account(s) that have never logged in",
+            "detail":   (
+                f"{', '.join(never_logged_in[:6])}"
+                f"{'...' if len(never_logged_in) > 6 else ''}."
+            ),
+        })
+
+    return {
+        "available":            True,
+        "computer_count":       len(computers),
+        "user_count":           len(users),
+        "enabled_user_count":   len(enabled_users),
+        "server_count":         len(server_names_list),
+        "server_names":         server_names_list,
+        "domain_admin_count":   len(domain_admins),
+        "domain_admins":        domain_admins,
+        "enterprise_admins":    enterprise_admins,
+        "stale_users":          stale_users,
+        "stale_computers":      stale_computers,
+        "never_logged_in":      never_logged_in,
+        "service_accounts":     service_accounts,
+        "password_never_expires": pwd_never_expires,
+        "password_policy":      pwd_policy,
+        "privileged_groups":    {
+            grp: [m.get("SamAccountName") or m.get("Name", "") for m in members]
+            for grp, members in groups.items()
+        },
+        "hardware":             hardware,        # keyed by COMPUTER_NAME.upper()
+        "gpos":                 gpos.get("gpos", []) if isinstance(gpos, dict) else [],
+        "security_findings":    findings,
+        "dhcp_leases":          (ad_data.get("dhcp") or {}).get("leases", []),
+        "dns_zones":            (ad_data.get("dns")  or {}).get("zones",  []),
+        # Full lists for report page generation
+        "computers":            computers,
+        "users":                users,
+    }
+
+
+# ── Phase 24 orchestration ─────────────────────────────────────────────────────
+
+def run_ad_enrichment(
+    hosts:        list,
+    recon:        dict,
+    dhcp_results: dict,
+    config:       dict,
+) -> dict:
+    """
+    Phase 24: Credentialed Active Directory enrichment via YW Discovery Proxy.
+
+    Mutates host records in-place (hostname, os, ad_computer, hardware fields).
+    Returns ad_enrichment summary dict; returns {"available": False} if no proxy found.
+    """
+    proxy = find_ad_proxy(hosts, recon, dhcp_results, config)
+    if proxy is None:
+        logger.info("[Phase 24] No YW Discovery Proxy found — skipping AD enrichment.")
+        return {"available": False}
+
+    dc_ip, port, token = proxy
+
+    try:
+        ad_data = collect_ad_data(dc_ip, port, token, hosts)
+        merge_ad_into_hosts(hosts, ad_data)
+        summary = build_ad_summary(ad_data)
+
+        logger.info(
+            f"[Phase 24] AD enrichment complete — "
+            f"{summary.get('computer_count', 0)} computers, "
+            f"{summary.get('user_count', 0)} users, "
+            f"{len(summary.get('security_findings', []))} findings, "
+            f"{len(ad_data.get('hardware', {}))} hardware records"
+        )
+        return summary
+
+    except Exception as e:
+        logger.error(f"[Phase 24] AD enrichment failed: {e}", exc_info=True)
+        return {"available": False, "error": str(e)}

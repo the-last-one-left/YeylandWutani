@@ -30,6 +30,7 @@ Twenty-five-phase discovery:
   Phase 21:  Passive OS Fingerprinting (p0f)
   Phase 22:  Kismet Passive Wireless IDS (Pi 4+, opt-in)
   Phase 23:  Network Topology Diagram (ASCII map)
+  Phase 24:  Active Directory Credentialed Enrichment (YW Discovery Proxy, opt-in)
 """
 
 import concurrent.futures
@@ -70,6 +71,14 @@ from network_utils import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Optional: AD credentialed enrichment (Phase 24).
+# Requires YW-DiscoveryProxy.ps1 running on a DC in the target environment.
+try:
+    from ad_discovery import run_ad_enrichment as _run_ad_enrichment
+    _AD_ENRICHMENT_AVAILABLE = True
+except ImportError:
+    _AD_ENRICHMENT_AVAILABLE = False
 
 # Suppresses per-host repetition of the nmap SYN→connect fallback message.
 # Logged at INFO the first time; demoted to DEBUG for every subsequent host.
@@ -5886,6 +5895,22 @@ def run_discovery(progress_callback=None) -> dict:
         "23", "Network topology diagram",
         phase23_topology_diagram, hosts, topology, recon)
 
+    # Phase 24: AD credentialed enrichment via YW Discovery Proxy (optional).
+    # Mutates hosts in-place (adds hostname, os, ad_computer, hardware fields).
+    # Returns summary dict; empty if proxy not present — scan still completes normally.
+    def _phase24_ad_enrichment():
+        if not _AD_ENRICHMENT_AVAILABLE:
+            logger.debug("[Phase 24] ad_discovery module not available — skipping.")
+            return {"available": False}
+        return _run_ad_enrichment(hosts, recon, dhcp_results, config)
+
+    ad_results = _run_phase(
+        "24", "Active Directory credentialed enrichment",
+        _phase24_ad_enrichment,
+        config_key="enable_ad_enrichment",
+        default={"available": False},
+    )
+
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
 
@@ -5942,6 +5967,8 @@ def run_discovery(progress_callback=None) -> dict:
         "p0f": p0f_results,
         "kismet": kismet_results,
         "topology_diagram": topology_diagram,
+        # Credentialed enrichment (present only when YW Discovery Proxy was running)
+        "ad_enrichment": ad_results,
         # Operational statistics
         "phase_timings": phase_timings,
     }
