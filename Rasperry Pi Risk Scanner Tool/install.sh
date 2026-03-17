@@ -418,7 +418,7 @@ run_config_wizard() {
     # ── Scan schedule ──────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}${CYAN}── Scan Schedule ──────────────────────────────────────────────────${RESET}"
-    local SCAN_TIME="" REPORT_DAY="" REPORT_TIME="" RUN_NOW="n"
+    SCAN_TIME="" REPORT_DAY="" REPORT_TIME="" RUN_NOW="n"
 
     while true; do
         prompt_msg "Daily scan time in HH:MM 24-hour format (default: 02:00):"; SCAN_TIME="$(read_tty)"
