@@ -47,6 +47,7 @@ VENDOR_COLORS = {
     "WatchGuard": "#c8102e",   # WatchGuard red
     "Aruba":      "#ff6b00",   # Aruba orange
     "Dell":       "#007db8",   # Dell blue
+    "Datto":      "#e8001b",   # Datto red
 }
 
 
@@ -196,6 +197,18 @@ def size_environment(scan_results: dict) -> dict:
         if ad_server_count > 0:
             server_count = ad_server_count
 
+    # ── Server storage total (for Datto sizing) ───────────────────────────
+    # Pull actual disk totals from AD WMI data when available;
+    # fall back to a conservative 1 TB-per-server estimate.
+    total_server_storage_tb = 0.0
+    if ad_available:
+        for _cname, h in (ad.get("hardware") or {}).items():
+            if h.get("wmi_accessible") and h.get("disks"):
+                disk_gb = sum(d.get("size_gb", 0) for d in h["disks"])
+                total_server_storage_tb += disk_gb / 1024.0
+    if total_server_storage_tb == 0 and server_count > 0:
+        total_server_storage_tb = server_count * 1.0   # 1 TB/server estimate
+
     ad_context = {}
     if ad_available:
         hw = ad.get("hardware", {})
@@ -251,8 +264,10 @@ def size_environment(scan_results: dict) -> dict:
         "eol_server_count":   eol_server_count,
         "subnet":             subnet,
         # AD credentialed scan data (empty dict if proxy was not used)
-        "ad_available":       ad_available,
-        "ad":                 ad_context,
+        "ad_available":            ad_available,
+        "ad":                      ad_context,
+        # Datto sizing input
+        "total_server_storage_tb": round(total_server_storage_tb, 1),
     }
 
 
@@ -350,6 +365,38 @@ def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
     return product, server_count
 
 
+def _select_datto(env: dict, catalog: dict) -> Optional[dict]:
+    """
+    Select the appropriate Datto BCDR appliance based on server storage.
+
+    Sizing input priority:
+      1. total_server_storage_tb from AD WMI hardware inventory (authoritative)
+      2. Conservative estimate: server_count × 1 TB
+
+    Returns the product dict, or None if no servers were found.
+    """
+    if env.get("server_count", 0) == 0:
+        return None
+
+    appliances = catalog.get("backup_appliances", [])
+    if not appliances:
+        return None
+
+    protected_tb = env.get("total_server_storage_tb", 0) or \
+                   (env.get("server_count", 0) * 1.0)
+
+    # Find the smallest appliance whose max_protected_tb covers the environment
+    candidates = [
+        a for a in appliances
+        if a.get("max_protected_tb", 0) >= protected_tb
+    ]
+    if candidates:
+        return min(candidates, key=lambda a: a.get("max_protected_tb", 9999))
+
+    # If somehow nothing fits, return the largest appliance
+    return max(appliances, key=lambda a: a.get("max_protected_tb", 0))
+
+
 def select_all_products(env: dict, catalog: dict) -> dict:
     """
     Run all selection functions and return a consolidated recommendations dict.
@@ -373,6 +420,7 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     sw_product, sw_count = _select_switches(env, catalog)
     ap_result = _select_aps(env, catalog)
     sv_result = _select_servers(env, catalog)
+    datto_product = _select_datto(env, catalog)
 
     # Build reason signals for each recommendation
     fw_signals = [
@@ -411,6 +459,19 @@ def select_all_products(env: dict, catalog: dict) -> dict:
             f"{env['eol_server_count']} EOL server(s) — immediate replacement recommended"
         )
 
+    datto_signals = [
+        f"{env['server_count']} server(s) to protect",
+    ]
+    storage_tb = env.get("total_server_storage_tb", 0)
+    if storage_tb > 0:
+        source = "WMI" if env.get("ad_available") else "estimated"
+        datto_signals.append(
+            f"{storage_tb:.1f} TB total server storage ({source}) — sizing basis"
+        )
+    else:
+        datto_signals.append("Server storage estimated at 1 TB per server")
+    datto_signals.append("No dedicated BCDR appliance detected on this network")
+
     result = {
         "firewall": {
             "product":        fw,
@@ -440,6 +501,15 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     else:
         result["servers"] = None
 
+    if datto_product:
+        result["backup"] = {
+            "product":        datto_product,
+            "count":          1,
+            "reason_signals": datto_signals,
+        }
+    else:
+        result["backup"] = None
+
     return result
 
 
@@ -458,7 +528,7 @@ _NARRATIVE_SYSTEM = (
     "Do not invent features not listed in the product specs provided."
 )
 
-_NARRATIVE_SECTION_KEYS = ["FIREWALL", "SWITCHING", "WIRELESS", "SERVERS"]
+_NARRATIVE_SECTION_KEYS = ["FIREWALL", "SWITCHING", "WIRELESS", "SERVERS", "BACKUP"]
 
 
 def get_recommendation_narratives(
@@ -543,6 +613,13 @@ RECOMMENDED PRODUCTS:
 - Servers:    {_spec(sv.get('product', {}), sv.get('count', 1)) if sv else 'None recommended'}
 """
 
+    bk   = recommendations.get("backup") or {}
+    context += (
+        f"- Backup/BCDR: {_spec(bk.get('product', {})) if bk else 'None recommended'}\n"
+        f"  Protected data: {env.get('total_server_storage_tb', 0):.1f} TB\n"
+        f"  Local storage: {bk.get('product', {}).get('local_storage_tb', 'N/A') if bk else 'N/A'} TB\n"
+    )
+
     user_msg = (
         "Based on the environment data and recommended products below, write a "
         "2-3 sentence justification for each product category. Use EXACTLY these "
@@ -550,7 +627,8 @@ RECOMMENDED PRODUCTS:
         "FIREWALL:\n"
         "SWITCHING:\n"
         "WIRELESS:\n"
-        "SERVERS:\n\n"
+        "SERVERS:\n"
+        "BACKUP:\n\n"
         + context
     )
 
@@ -736,11 +814,37 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
             "for a current Dell PowerEdge recommendation."
         )
 
+    # Backup / BCDR narrative
+    bk = recommendations.get("backup") or {}
+    if bk and bk.get("product"):
+        bk_product  = bk["product"]
+        bk_model    = f"{bk_product.get('vendor', 'Datto')} {bk_product.get('model', '')}"
+        bk_local    = bk_product.get("local_storage_tb", "")
+        storage_tb  = env.get("total_server_storage_tb", 0)
+        storage_src = "from the credentialed hardware scan" if env.get("ad_available") \
+                      else "estimated"
+        bk_text = (
+            f"With {env.get('server_count', 0)} server(s) and approximately "
+            f"{storage_tb:.1f} TB of protected data ({storage_src}), "
+            f"the {bk_model} ({bk_local} TB local storage) provides the right capacity for "
+            "local backup, instant on-site virtualization, and automatic off-site replication "
+            "to the Datto Cloud. "
+            "In the event of ransomware or hardware failure, servers can be running in "
+            "the Datto appliance within minutes — not hours or days."
+        )
+    else:
+        bk_text = (
+            "No servers requiring backup protection were identified in this scan. "
+            "Contact Yeyland Wutani for a Datto BCDR recommendation when server "
+            "infrastructure is deployed."
+        )
+
     return {
-        "firewall": fw_text,
+        "firewall":  fw_text,
         "switching": sw_text,
-        "wireless": ap_text,
-        "servers":  sv_text,
+        "wireless":  ap_text,
+        "servers":   sv_text,
+        "backup":    bk_text,
     }
 
 
@@ -1233,6 +1337,13 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
                           f"{p.get('vendor','')} {p.get('model','')}",
                           p.get("best_for", "")))
 
+        bk = recommendations.get("backup") or {}
+        if bk and bk.get("product"):
+            p = bk["product"]
+            rows.append(("Backup / BCDR",
+                          f"{p.get('vendor','')} {p.get('model','')}",
+                          p.get("best_for", "")))
+
         col_ws = [90, 130, CONTENT_W - 90 - 130]
         hdr_y  = y
         c.setFillColor(_hex("#343a40"))
@@ -1302,7 +1413,8 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
     # ── Analyse environment + select products ─────────────────────────────
     catalog = load_product_catalog()
     if not catalog or not any(catalog.get(k) for k in
-                               ("firewalls", "switches", "access_points", "servers")):
+                               ("firewalls", "switches", "access_points", "servers",
+                                "backup_appliances")):
         raise FileNotFoundError(
             "product_catalog.json not found or empty. "
             "Ensure lib/product_catalog.json is deployed to "
@@ -1400,6 +1512,22 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
             product   = sv["product"],
             count     = sv["count"],
             narrative = narratives.get("servers", ""),
+            scan_date = scan_date, brand_name = brand_name,
+            company_color = company_color,
+        )
+        c.showPage()
+
+    # Page 6: Backup & Disaster Recovery — Datto (optional, only when servers present)
+    bk = recs.get("backup")
+    if bk:
+        _draw_category_page(
+            c,
+            title     = "NETWORK INFRASTRUCTURE RECOMMENDATIONS",
+            subtitle  = "Backup & Disaster Recovery — Datto BCDR",
+            current_state_lines = bk["reason_signals"],
+            product   = bk["product"],
+            count     = 1,
+            narrative = narratives.get("backup", ""),
             scan_date = scan_date, brand_name = brand_name,
             company_color = company_color,
         )

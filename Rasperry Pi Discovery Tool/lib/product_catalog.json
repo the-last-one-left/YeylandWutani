@@ -1,14 +1,15 @@
 {
   "_metadata": {
-    "version": "1.2",
+    "version": "1.3",
     "updated": "2026-03",
     "currency": "USD",
-    "note": "MSRP hardware estimates only. WatchGuard Firebox requires a Basic Security Suite (BSS) or Total Security Suite (TSS) subscription in addition to hardware. Contact Yeyland Wutani LLC for current partner pricing.",
+    "note": "MSRP hardware estimates only. WatchGuard Firebox requires a Basic Security Suite (BSS) or Total Security Suite (TSS) subscription. Datto requires a cloud backup subscription. Contact Yeyland Wutani LLC for current partner pricing.",
     "vendors": {
       "firewall":      "WatchGuard",
       "switching":     "Aruba (HPE)",
       "wireless":      "Aruba (HPE)",
-      "servers":       "Dell Technologies"
+      "servers":       "Dell Technologies",
+      "backup":        "Datto (Kaseya)"
     }
   },
 
@@ -372,6 +373,124 @@
         "Suitable for warehouses, parking lots, outdoor seating"
       ],
       "best_for": "Outdoor wireless coverage for yards, parking areas, or warehouses"
+    }
+  ],
+
+  "backup_appliances": [
+    {
+      "vendor": "Datto",
+      "line": "ALTO",
+      "model": "ALTO 4",
+      "sku": "DATTO-ALTO4",
+      "form_factor": "Small appliance (1U)",
+      "local_storage_tb": 4,
+      "min_protected_tb": 0,
+      "max_protected_tb": 2,
+      "min_servers": 1,
+      "max_servers": 1,
+      "cloud_replication": true,
+      "instant_virtualization": true,
+      "subscription_required": "Datto Cloud backup subscription",
+      "key_features": [
+        "Instant local and cloud virtualization",
+        "Screenshot-based backup verification",
+        "Ransomware detection and rollback",
+        "Datto RMM integration",
+        "Automated backup testing — verified recovery"
+      ],
+      "best_for": "Single-server small offices needing BCDR with < 2 TB of protected data"
+    },
+    {
+      "vendor": "Datto",
+      "line": "SIRIS 4",
+      "model": "SIRIS 4 Small",
+      "sku": "DATTO-S4S",
+      "form_factor": "1U Rack appliance",
+      "local_storage_tb": 8,
+      "min_protected_tb": 2,
+      "max_protected_tb": 5,
+      "min_servers": 1,
+      "max_servers": 3,
+      "cloud_replication": true,
+      "instant_virtualization": true,
+      "subscription_required": "Datto Cloud backup subscription",
+      "key_features": [
+        "Instant local virtualization — spin up protected servers in seconds",
+        "Screenshot-based backup verification",
+        "Ransomware detection with point-in-time rollback",
+        "Datto Cloud secondary off-site copy included",
+        "Full BMR (bare metal restore) for physical and virtual servers"
+      ],
+      "best_for": "1-3 server environments with up to 5 TB of protected data"
+    },
+    {
+      "vendor": "Datto",
+      "line": "SIRIS 4",
+      "model": "SIRIS 4 Medium",
+      "sku": "DATTO-S4M",
+      "form_factor": "2U Rack appliance",
+      "local_storage_tb": 20,
+      "min_protected_tb": 5,
+      "max_protected_tb": 15,
+      "min_servers": 3,
+      "max_servers": 8,
+      "cloud_replication": true,
+      "instant_virtualization": true,
+      "subscription_required": "Datto Cloud backup subscription",
+      "key_features": [
+        "Instant local virtualization for multiple servers simultaneously",
+        "Screenshot-based automated recovery verification",
+        "Ransomware detection and isolated recovery environment",
+        "Off-site Datto Cloud replication with infinite retention",
+        "Datto RMM and PSA integrations for MSP management"
+      ],
+      "best_for": "3-8 server environments with 5-15 TB of protected data"
+    },
+    {
+      "vendor": "Datto",
+      "line": "SIRIS 4",
+      "model": "SIRIS 4 Large",
+      "sku": "DATTO-S4L",
+      "form_factor": "2U Rack appliance",
+      "local_storage_tb": 40,
+      "min_protected_tb": 15,
+      "max_protected_tb": 30,
+      "min_servers": 8,
+      "max_servers": 20,
+      "cloud_replication": true,
+      "instant_virtualization": true,
+      "subscription_required": "Datto Cloud backup subscription",
+      "key_features": [
+        "High-capacity local storage for large server environments",
+        "Run multiple virtualized servers locally during an outage",
+        "Automated screenshot verification for all protected systems",
+        "Datto Cloud infinite retention for compliance requirements",
+        "Priority support and dedicated recovery manager option"
+      ],
+      "best_for": "8-20 server environments or those with 15-30 TB of protected data"
+    },
+    {
+      "vendor": "Datto",
+      "line": "SIRIS X",
+      "model": "SIRIS X",
+      "sku": "DATTO-SX",
+      "form_factor": "2U Rack appliance (scalable)",
+      "local_storage_tb": 80,
+      "min_protected_tb": 30,
+      "max_protected_tb": 9999,
+      "min_servers": 15,
+      "max_servers": 9999,
+      "cloud_replication": true,
+      "instant_virtualization": true,
+      "subscription_required": "Datto Cloud backup subscription",
+      "key_features": [
+        "Enterprise-scale local storage with expansion capability",
+        "Simultaneous instant virtualization of all protected systems",
+        "Automated boot-time and screenshot verification",
+        "Datto Cloud with dedicated bandwidth and SLA options",
+        "Multi-site replication and centralized management console"
+      ],
+      "best_for": "Large environments, multi-server data centers, or > 30 TB protected"
     }
   ],
 
