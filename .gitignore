@@ -63,3 +63,16 @@ desktop.ini
 # Documentation drafts
 *.draft.md
 *.wip.md
+
+# -----------------------------------------------------------------------
+# Exceptions — Rasperry Pi Risk Scanner Tool (managed subfolder)
+# Must come LAST so they override the broad rules above
+# -----------------------------------------------------------------------
+!Rasperry Pi Risk Scanner Tool/test/
+!Rasperry Pi Risk Scanner Tool/test/**
+!Rasperry Pi Risk Scanner Tool/logs/
+!Rasperry Pi Risk Scanner Tool/logs/.gitkeep
+!Rasperry Pi Risk Scanner Tool/data/history/.gitkeep
+!Rasperry Pi Risk Scanner Tool/**/*.json
+!Rasperry Pi Risk Scanner Tool/web/
+!Rasperry Pi Risk Scanner Tool/web/**

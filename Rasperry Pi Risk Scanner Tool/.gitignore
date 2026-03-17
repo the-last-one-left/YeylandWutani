@@ -5,8 +5,9 @@ config/config.json
 config/credentials.enc
 config/.env
 
-# Scan data and history (large, device-specific)
-data/history/
+# Scan data and history (large, device-specific) — keep directory skeleton
+data/history/*
+!data/history/.gitkeep
 data/vuln-db/nvd-cache.json
 data/vuln-db/kev-catalog.json
 data/vuln-db/osv-cache.json

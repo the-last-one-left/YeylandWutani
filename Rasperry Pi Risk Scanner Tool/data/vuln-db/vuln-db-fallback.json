@@ -1,0 +1,2029 @@
+{
+  "_meta": {
+    "version": "fallback-1.0",
+    "description": "Static fallback CVE database - 200 high-severity CVEs covering common enterprise attack surfaces",
+    "last_updated": "2025-01-01",
+    "cve_count": 200
+  },
+  "cves": {
+    "CVE-2017-0144": {
+      "cve_id": "CVE-2017-0144",
+      "description": "The SMBv1 server in Microsoft Windows allows remote attackers to execute arbitrary code via crafted packets (EternalBlue / MS17-010).",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2017-03-16",
+      "fix_available": true
+    },
+    "CVE-2021-34527": {
+      "cve_id": "CVE-2021-34527",
+      "description": "Windows Print Spooler Remote Code Execution Vulnerability (PrintNightmare). Allows an authenticated attacker to execute arbitrary code with SYSTEM privileges.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-07-01",
+      "fix_available": true
+    },
+    "CVE-2021-1675": {
+      "cve_id": "CVE-2021-1675",
+      "description": "Windows Print Spooler Remote Code Execution Vulnerability. Allows a remote attacker to execute code as SYSTEM via print driver installation.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-06-08",
+      "fix_available": true
+    },
+    "CVE-2021-26855": {
+      "cve_id": "CVE-2021-26855",
+      "description": "Microsoft Exchange Server Server-Side Request Forgery vulnerability (ProxyLogon). Allows unauthenticated attackers to send HTTP requests as the Exchange server.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-03-02",
+      "fix_available": true
+    },
+    "CVE-2021-26857": {
+      "cve_id": "CVE-2021-26857",
+      "description": "Microsoft Exchange Server Insecure Deserialization vulnerability. Allows code execution as SYSTEM on Exchange servers.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-03-02",
+      "fix_available": true
+    },
+    "CVE-2021-26858": {
+      "cve_id": "CVE-2021-26858",
+      "description": "Microsoft Exchange Server Post-Authentication Arbitrary File Write vulnerability. Allows arbitrary file write after authentication (ProxyLogon chain).",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-03-02",
+      "fix_available": true
+    },
+    "CVE-2021-27065": {
+      "cve_id": "CVE-2021-27065",
+      "description": "Microsoft Exchange Server Post-Authentication Arbitrary File Write vulnerability. Part of the ProxyLogon exploit chain.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-03-02",
+      "fix_available": true
+    },
+    "CVE-2019-0708": {
+      "cve_id": "CVE-2019-0708",
+      "description": "BlueKeep - Remote Code Execution vulnerability in Windows Remote Desktop Services. Allows unauthenticated remote code execution via RDP.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "windows_7|windows_server_2008|windows_xp"}],
+      "kev": true,
+      "published": "2019-05-14",
+      "fix_available": true
+    },
+    "CVE-2019-1181": {
+      "cve_id": "CVE-2019-1181",
+      "description": "Remote Desktop Services Remote Code Execution Vulnerability. Pre-authentication vulnerability similar to BlueKeep.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2019-08-13",
+      "fix_available": true
+    },
+    "CVE-2019-1182": {
+      "cve_id": "CVE-2019-1182",
+      "description": "Remote Desktop Services Remote Code Execution Vulnerability. Pre-authentication RCE via RDP on Windows 8 and later.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2019-08-13",
+      "fix_available": true
+    },
+    "CVE-2021-36942": {
+      "cve_id": "CVE-2021-36942",
+      "description": "Windows LSA Spoofing Vulnerability (PetitPotam). Allows an unauthenticated attacker to force a domain controller to authenticate to an attacker-controlled server.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-08-10",
+      "fix_available": true
+    },
+    "CVE-2023-34362": {
+      "cve_id": "CVE-2023-34362",
+      "description": "MOVEit Transfer SQL injection vulnerability allowing unauthenticated remote attackers to gain access to MOVEit Transfer database content.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "progress", "product": "moveit_transfer", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-06-02",
+      "fix_available": true
+    },
+    "CVE-2022-41040": {
+      "cve_id": "CVE-2022-41040",
+      "description": "Microsoft Exchange Server Server-Side Request Forgery Vulnerability (ProxyNotShell). Allows authenticated attackers to chain with CVE-2022-41082.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-10-03",
+      "fix_available": true
+    },
+    "CVE-2022-41082": {
+      "cve_id": "CVE-2022-41082",
+      "description": "Microsoft Exchange Server Remote Code Execution Vulnerability (ProxyNotShell). Allows authenticated remote code execution.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "exchange_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-10-03",
+      "fix_available": true
+    },
+    "CVE-2022-30190": {
+      "cve_id": "CVE-2022-30190",
+      "description": "Microsoft Windows Support Diagnostic Tool (MSDT) Remote Code Execution Vulnerability (Follina). Triggered via Office documents using ms-msdt: URI scheme.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-06-01",
+      "fix_available": true
+    },
+    "CVE-2021-44228": {
+      "cve_id": "CVE-2021-44228",
+      "description": "Apache Log4j2 JNDI injection vulnerability (Log4Shell). Remote code execution via a specially crafted log message containing JNDI lookup strings.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [
+        {"vendor": "apache", "product": "log4j", "version_match": "2.0-beta9..2.14.1"},
+        {"vendor": "microsoft", "product": "windows", "version_match": "*"}
+      ],
+      "kev": true,
+      "published": "2021-12-10",
+      "fix_available": true
+    },
+    "CVE-2021-1423": {
+      "cve_id": "CVE-2021-1423",
+      "description": "Microsoft Windows NTLM Relay vulnerability enabling privilege escalation via NTLM authentication coercion.",
+      "cvss_v3_score": 5.5,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2021-01-12",
+      "fix_available": true
+    },
+    "CVE-2020-0796": {
+      "cve_id": "CVE-2020-0796",
+      "description": "Windows SMBv3 Client/Server Remote Code Execution Vulnerability (SMBGhost/CoronaBlue). Allows unauthenticated RCE via malformed compressed SMB3 packets.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "windows_10|windows_server_2019"}],
+      "kev": false,
+      "published": "2020-03-12",
+      "fix_available": true
+    },
+    "CVE-2021-34486": {
+      "cve_id": "CVE-2021-34486",
+      "description": "Windows Event Log Elevation of Privilege Vulnerability allowing local attackers to gain SYSTEM privileges.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2021-08-10",
+      "fix_available": true
+    },
+    "CVE-2022-26925": {
+      "cve_id": "CVE-2022-26925",
+      "description": "Windows LSA Spoofing Vulnerability. Allows an unauthenticated attacker to call a method on the LSARPC interface, coercing authentication.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-05-10",
+      "fix_available": true
+    },
+    "CVE-2022-21999": {
+      "cve_id": "CVE-2022-21999",
+      "description": "Windows Print Spooler Elevation of Privilege Vulnerability. Allows a local attacker to elevate privileges to SYSTEM.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2022-02-08",
+      "fix_available": true
+    },
+    "CVE-2023-23397": {
+      "cve_id": "CVE-2023-23397",
+      "description": "Microsoft Outlook Elevation of Privilege Vulnerability. Zero-click NTLM hash theft via specially crafted Outlook calendar invitations.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "outlook", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-03-14",
+      "fix_available": true
+    },
+    "CVE-2024-21338": {
+      "cve_id": "CVE-2024-21338",
+      "description": "Windows Kernel Elevation of Privilege Vulnerability exploited in the wild to disable security tools via a vulnerable appid.sys driver.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-02-13",
+      "fix_available": true
+    },
+    "CVE-2024-1709": {
+      "cve_id": "CVE-2024-1709",
+      "description": "ConnectWise ScreenConnect Authentication Bypass vulnerability allows unauthenticated access to setup wizard and admin functionality.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "connectwise", "product": "screenconnect", "version_match": "<23.9.8"}],
+      "kev": true,
+      "published": "2024-02-21",
+      "fix_available": true
+    },
+    "CVE-2023-36884": {
+      "cve_id": "CVE-2023-36884",
+      "description": "Windows HTML Remote Code Execution Vulnerability. Exploitation via Office documents with search-ms: URI handler bypass.",
+      "cvss_v3_score": 8.3,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-07-11",
+      "fix_available": true
+    },
+    "CVE-2023-28252": {
+      "cve_id": "CVE-2023-28252",
+      "description": "Windows Common Log File System Driver Elevation of Privilege Vulnerability actively exploited in ransomware campaigns.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-04-11",
+      "fix_available": true
+    },
+    "CVE-2023-21768": {
+      "cve_id": "CVE-2023-21768",
+      "description": "Windows Ancillary Function Driver for WinSock Elevation of Privilege Vulnerability.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": false,
+      "published": "2023-01-10",
+      "fix_available": true
+    },
+    "CVE-2022-37969": {
+      "cve_id": "CVE-2022-37969",
+      "description": "Windows Common Log File System Driver Elevation of Privilege Vulnerability enabling local privilege escalation to SYSTEM.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-09-13",
+      "fix_available": true
+    },
+    "CVE-2021-40444": {
+      "cve_id": "CVE-2021-40444",
+      "description": "Microsoft MSHTML Remote Code Execution Vulnerability. Exploited via ActiveX control in Microsoft Office documents.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows", "version_match": "*"}],
+      "kev": true,
+      "published": "2021-09-14",
+      "fix_available": true
+    },
+    "CVE-2020-1380": {
+      "cve_id": "CVE-2020-1380",
+      "description": "Scripting Engine Memory Corruption Vulnerability in Internet Explorer allowing remote code execution.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "internet_explorer", "version_match": "*"}],
+      "kev": true,
+      "published": "2020-08-11",
+      "fix_available": true
+    },
+    "CVE-2023-38408": {
+      "cve_id": "CVE-2023-38408",
+      "description": "OpenSSH ssh-agent Remote Code Execution Vulnerability. A remote attacker can exploit forwarded ssh-agent sockets to execute arbitrary commands.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<9.3p2"}],
+      "kev": false,
+      "published": "2023-07-19",
+      "fix_available": true
+    },
+    "CVE-2024-6387": {
+      "cve_id": "CVE-2024-6387",
+      "description": "regreSSHion - OpenSSH Remote Unauthenticated Code Execution Vulnerability. Race condition in signal handler allows RCE as root on glibc-based Linux systems.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "8.5p1..9.7p1"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2023-48795": {
+      "cve_id": "CVE-2023-48795",
+      "description": "Terrapin Attack - SSH Protocol Prefix Truncation Vulnerability. Allows a MitM attacker to downgrade SSH connection security by truncating the handshake.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [
+        {"vendor": "openbsd", "product": "openssh", "version_match": "<9.6"},
+        {"vendor": "putty", "product": "putty", "version_match": "*"}
+      ],
+      "kev": false,
+      "published": "2023-12-18",
+      "fix_available": true
+    },
+    "CVE-2021-28041": {
+      "cve_id": "CVE-2021-28041",
+      "description": "OpenSSH ssh-agent double-free vulnerability. Could lead to code execution in the ssh-agent process.",
+      "cvss_v3_score": 7.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<8.5"}],
+      "kev": false,
+      "published": "2021-03-05",
+      "fix_available": true
+    },
+    "CVE-2020-14145": {
+      "cve_id": "CVE-2020-14145",
+      "description": "OpenSSH client information disclosure through observable discrepancy in algorithm negotiation, allowing server fingerprinting.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "5.7..8.4"}],
+      "kev": false,
+      "published": "2020-06-29",
+      "fix_available": true
+    },
+    "CVE-2023-51384": {
+      "cve_id": "CVE-2023-51384",
+      "description": "OpenSSH ssh-agent incomplete length check vulnerability allowing destination constraints bypass.",
+      "cvss_v3_score": 5.5,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<9.6"}],
+      "kev": false,
+      "published": "2023-12-18",
+      "fix_available": true
+    },
+    "CVE-2023-51385": {
+      "cve_id": "CVE-2023-51385",
+      "description": "OpenSSH OS command injection vulnerability via shell metacharacters in username or hostname when ProxyCommand is used.",
+      "cvss_v3_score": 6.5,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<9.6"}],
+      "kev": false,
+      "published": "2023-12-18",
+      "fix_available": true
+    },
+    "CVE-2019-6111": {
+      "cve_id": "CVE-2019-6111",
+      "description": "OpenSSH scp client arbitrary file overwrite vulnerability. A malicious server can overwrite arbitrary files on the client.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<7.9p1"}],
+      "kev": false,
+      "published": "2019-01-31",
+      "fix_available": true
+    },
+    "CVE-2019-6110": {
+      "cve_id": "CVE-2019-6110",
+      "description": "OpenSSH scp client ANSI escape sequence injection enabling output manipulation and path confusion.",
+      "cvss_v3_score": 6.8,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<7.9p1"}],
+      "kev": false,
+      "published": "2019-01-31",
+      "fix_available": true
+    },
+    "CVE-2018-15919": {
+      "cve_id": "CVE-2018-15919",
+      "description": "OpenSSH username enumeration vulnerability through timing differences in authentication responses.",
+      "cvss_v3_score": 5.3,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openbsd", "product": "openssh", "version_match": "<7.8"}],
+      "kev": false,
+      "published": "2018-08-28",
+      "fix_available": true
+    },
+    "CVE-2021-41773": {
+      "cve_id": "CVE-2021-41773",
+      "description": "Apache HTTP Server path traversal and remote code execution. A flaw in path normalization allows attackers to map URLs outside the document root.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "2.4.49"}],
+      "kev": true,
+      "published": "2021-10-05",
+      "fix_available": true
+    },
+    "CVE-2021-42013": {
+      "cve_id": "CVE-2021-42013",
+      "description": "Apache HTTP Server path traversal and remote code execution. Bypasses the fix for CVE-2021-41773 with additional path traversal encoding.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "2.4.49|2.4.50"}],
+      "kev": true,
+      "published": "2021-10-07",
+      "fix_available": true
+    },
+    "CVE-2022-22720": {
+      "cve_id": "CVE-2022-22720",
+      "description": "Apache HTTP Server HTTP Request Smuggling vulnerability. Incorrect handling of invalid Transfer-Encoding headers allows request smuggling.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.53"}],
+      "kev": false,
+      "published": "2022-03-14",
+      "fix_available": true
+    },
+    "CVE-2022-31813": {
+      "cve_id": "CVE-2022-31813",
+      "description": "Apache HTTP Server mod_proxy X-Forwarded-For header bypass allowing forwarding of IP addresses stripped by reverse proxy.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.55"}],
+      "kev": false,
+      "published": "2022-06-08",
+      "fix_available": true
+    },
+    "CVE-2021-45046": {
+      "cve_id": "CVE-2021-45046",
+      "description": "Apache Log4j2 incomplete fix for CVE-2021-44228 JNDI injection. Thread context map patterns with non-default configurations allow RCE.",
+      "cvss_v3_score": 9.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "log4j", "version_match": "2.0-beta9..2.15.0"}],
+      "kev": true,
+      "published": "2021-12-14",
+      "fix_available": true
+    },
+    "CVE-2021-45105": {
+      "cve_id": "CVE-2021-45105",
+      "description": "Apache Log4j2 uncontrolled recursion from self-referential lookups causing Denial of Service via StackOverflowError.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "apache", "product": "log4j", "version_match": "2.0-beta9..2.16.0"}],
+      "kev": false,
+      "published": "2021-12-18",
+      "fix_available": true
+    },
+    "CVE-2023-50164": {
+      "cve_id": "CVE-2023-50164",
+      "description": "Apache Struts file upload logic flaw allowing path traversal and remote code execution by uploading files to arbitrary locations.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "struts", "version_match": "2.0.0..2.5.32|6.0.0..6.3.0"}],
+      "kev": true,
+      "published": "2023-12-07",
+      "fix_available": true
+    },
+    "CVE-2017-5638": {
+      "cve_id": "CVE-2017-5638",
+      "description": "Apache Struts Jakarta Multipart parser remote code execution. Used in the Equifax breach. Allows RCE via Content-Type header.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "struts", "version_match": "2.3.5..2.3.31|2.5..2.5.10"}],
+      "kev": true,
+      "published": "2017-03-11",
+      "fix_available": true
+    },
+    "CVE-2023-25690": {
+      "cve_id": "CVE-2023-25690",
+      "description": "Apache HTTP Server mod_proxy HTTP Request Smuggling vulnerability. HTTP headers can be injected in proxied requests via special characters.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "2.4.0..2.4.55"}],
+      "kev": false,
+      "published": "2023-03-07",
+      "fix_available": true
+    },
+    "CVE-2024-38472": {
+      "cve_id": "CVE-2024-38472",
+      "description": "Apache HTTP Server Windows UNC path SSRF vulnerability allowing server-side request forgery via malicious URLs.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.60"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2024-38473": {
+      "cve_id": "CVE-2024-38473",
+      "description": "Apache HTTP Server mod_rewrite proxy handler substitution encoding issue allowing SSRF via special characters.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.60"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2024-38474": {
+      "cve_id": "CVE-2024-38474",
+      "description": "Apache HTTP Server substitution encoding issue with backreferences allowing code execution in certain configurations.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.60"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2024-38475": {
+      "cve_id": "CVE-2024-38475",
+      "description": "Apache HTTP Server mod_rewrite improper escaping of output allowing code execution via specially crafted request.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.60"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2024-38476": {
+      "cve_id": "CVE-2024-38476",
+      "description": "Apache HTTP Server backend applications can cause mod_proxy to forward local error responses to client.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.4.60"}],
+      "kev": false,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2021-23017": {
+      "cve_id": "CVE-2021-23017",
+      "description": "NGINX DNS resolver off-by-one heap write vulnerability allowing remote code execution via specially crafted DNS response.",
+      "cvss_v3_score": 7.7,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "nginx", "product": "nginx", "version_match": "0.6.18..1.20.0"}],
+      "kev": false,
+      "published": "2021-06-01",
+      "fix_available": true
+    },
+    "CVE-2022-41741": {
+      "cve_id": "CVE-2022-41741",
+      "description": "NGINX ngx_http_mp4_module heap memory corruption when processing specially crafted mp4 files.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "nginx", "product": "nginx", "version_match": "<1.23.2"}],
+      "kev": false,
+      "published": "2022-10-19",
+      "fix_available": true
+    },
+    "CVE-2022-41742": {
+      "cve_id": "CVE-2022-41742",
+      "description": "NGINX ngx_http_mp4_module use-after-free vulnerability causing memory disclosure or denial of service.",
+      "cvss_v3_score": 7.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "nginx", "product": "nginx", "version_match": "<1.23.2"}],
+      "kev": false,
+      "published": "2022-10-19",
+      "fix_available": true
+    },
+    "CVE-2019-9511": {
+      "cve_id": "CVE-2019-9511",
+      "description": "HTTP/2 Data Dribble attack on NGINX allowing denial of service by sending small windows to force server into many tiny sends.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "nginx", "product": "nginx", "version_match": "<1.17.3"}],
+      "kev": false,
+      "published": "2019-08-13",
+      "fix_available": true
+    },
+    "CVE-2019-9513": {
+      "cve_id": "CVE-2019-9513",
+      "description": "HTTP/2 Resource Loop attack on NGINX causing excessive CPU usage via RST_STREAM frames triggering rapid creation/deletion of streams.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "nginx", "product": "nginx", "version_match": "<1.17.3"}],
+      "kev": false,
+      "published": "2019-08-13",
+      "fix_available": true
+    },
+    "CVE-2024-4577": {
+      "cve_id": "CVE-2024-4577",
+      "description": "PHP CGI argument injection vulnerability on Windows allowing remote code execution via specially crafted URL parameters.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "8.1.0..8.1.28|8.2.0..8.2.19|8.3.0..8.3.7"}],
+      "kev": true,
+      "published": "2024-06-09",
+      "fix_available": true
+    },
+    "CVE-2023-3823": {
+      "cve_id": "CVE-2023-3823",
+      "description": "PHP libxml2 external entity loading vulnerability leading to information disclosure via XML documents.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<8.0.30|<8.1.22|<8.2.8"}],
+      "kev": false,
+      "published": "2023-08-11",
+      "fix_available": true
+    },
+    "CVE-2023-3824": {
+      "cve_id": "CVE-2023-3824",
+      "description": "PHP phar extension buffer over-read vulnerability during uncompression of phar files allowing code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<8.0.30|<8.1.22|<8.2.8"}],
+      "kev": false,
+      "published": "2023-08-11",
+      "fix_available": true
+    },
+    "CVE-2022-31625": {
+      "cve_id": "CVE-2022-31625",
+      "description": "PHP Postgres connection string parameter injection vulnerability via uninitialized pg_connect() arguments.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<7.4.30|<8.0.20|<8.1.7"}],
+      "kev": false,
+      "published": "2022-06-16",
+      "fix_available": true
+    },
+    "CVE-2022-31626": {
+      "cve_id": "CVE-2022-31626",
+      "description": "PHP mysqlnd password buffer overflow when using pdo_mysql with a server supplying a password longer than expected.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<7.4.30|<8.0.20|<8.1.7"}],
+      "kev": false,
+      "published": "2022-06-16",
+      "fix_available": true
+    },
+    "CVE-2021-21705": {
+      "cve_id": "CVE-2021-21705",
+      "description": "PHP SSRF bypass via ftpwrapper URL validation flaw allowing access to internal services.",
+      "cvss_v3_score": 5.3,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<7.3.29|<7.4.21|<8.0.8"}],
+      "kev": false,
+      "published": "2021-07-01",
+      "fix_available": true
+    },
+    "CVE-2020-7067": {
+      "cve_id": "CVE-2020-7067",
+      "description": "PHP urldecode() out-of-bounds read vulnerability causing information disclosure from adjacent memory.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<7.2.30|<7.3.17|<7.4.5"}],
+      "kev": false,
+      "published": "2020-04-27",
+      "fix_available": true
+    },
+    "CVE-2019-11043": {
+      "cve_id": "CVE-2019-11043",
+      "description": "PHP-FPM env_path processing bug leading to heap buffer underflow and remote code execution in specific NGINX configurations.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "php", "product": "php", "version_match": "<7.1.33|<7.2.24|<7.3.11"}],
+      "kev": true,
+      "published": "2019-10-28",
+      "fix_available": true
+    },
+    "CVE-2018-7600": {
+      "cve_id": "CVE-2018-7600",
+      "description": "Drupal remote code execution vulnerability (Drupalgeddon2). Allows unauthenticated RCE via form API in Drupal core.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "drupal", "product": "drupal", "version_match": "6.0..6.38|7.0..7.57|8.0..8.5.0"}],
+      "kev": true,
+      "published": "2018-03-28",
+      "fix_available": true
+    },
+    "CVE-2017-7679": {
+      "cve_id": "CVE-2017-7679",
+      "description": "Apache HTTP Server mod_mime buffer overread vulnerability. A malicious server can cause a heap buffer overread when sending crafted headers.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "http_server", "version_match": "<2.2.33|<2.4.26"}],
+      "kev": false,
+      "published": "2017-06-19",
+      "fix_available": true
+    },
+    "CVE-2014-3566": {
+      "cve_id": "CVE-2014-3566",
+      "description": "POODLE - SSL 3.0 CBC padding oracle vulnerability. Allows a MITM attacker to decrypt sensitive information from HTTPS connections using SSLv3.",
+      "cvss_v3_score": 3.4,
+      "cvss_v3_severity": "LOW",
+      "affected_products": [
+        {"vendor": "openssl", "product": "openssl", "version_match": "<1.0.1j"},
+        {"vendor": "mozilla", "product": "nss", "version_match": "*"}
+      ],
+      "kev": false,
+      "published": "2014-10-15",
+      "fix_available": true
+    },
+    "CVE-2011-3389": {
+      "cve_id": "CVE-2011-3389",
+      "description": "BEAST - SSL/TLS CBC cipher block chaining attack. Allows MITM attacker to decrypt HTTP cookies via chosen-boundary attack on CBC mode.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "<1.0.1"}],
+      "kev": false,
+      "published": "2011-09-06",
+      "fix_available": true
+    },
+    "CVE-2022-0778": {
+      "cve_id": "CVE-2022-0778",
+      "description": "OpenSSL BN_mod_sqrt() infinite loop vulnerability causing denial of service via specially crafted certificates.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "<1.0.2zd|<1.1.1n|<3.0.2"}],
+      "kev": true,
+      "published": "2022-03-15",
+      "fix_available": true
+    },
+    "CVE-2021-3449": {
+      "cve_id": "CVE-2021-3449",
+      "description": "OpenSSL NULL pointer dereference vulnerability. A server process can crash via a maliciously crafted renegotiation ClientHello message.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "1.1.1..1.1.1j"}],
+      "kev": false,
+      "published": "2021-03-25",
+      "fix_available": true
+    },
+    "CVE-2021-3450": {
+      "cve_id": "CVE-2021-3450",
+      "description": "OpenSSL CA certificate check bypass allowing trusted certificate chains to bypass verification.",
+      "cvss_v3_score": 7.4,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "1.1.1h..1.1.1j|3.0.0"}],
+      "kev": false,
+      "published": "2021-03-25",
+      "fix_available": true
+    },
+    "CVE-2020-1971": {
+      "cve_id": "CVE-2020-1971",
+      "description": "OpenSSL EDIPARTYNAME NULL pointer dereference (GENERAL_NAME_cmp) causing denial of service via specially crafted X.509 certificates.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "1.1.1..1.1.1h|1.0.2..1.0.2w"}],
+      "kev": false,
+      "published": "2020-12-08",
+      "fix_available": true
+    },
+    "CVE-2019-1559": {
+      "cve_id": "CVE-2019-1559",
+      "description": "OpenSSL 0-byte record padding oracle vulnerability. Padding oracle allows decryption of traffic when using CBC TLS 1.2 and earlier.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "1.0.2..1.0.2r"}],
+      "kev": false,
+      "published": "2019-02-26",
+      "fix_available": true
+    },
+    "CVE-2014-0160": {
+      "cve_id": "CVE-2014-0160",
+      "description": "Heartbleed - OpenSSL TLS heartbeat extension buffer overread. Allows an unauthenticated attacker to read server memory including private keys.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "1.0.1..1.0.1f"}],
+      "kev": true,
+      "published": "2014-04-07",
+      "fix_available": true
+    },
+    "CVE-2022-2274": {
+      "cve_id": "CVE-2022-2274",
+      "description": "OpenSSL RSA implementation incorrect computation for large moduli on x86_64 with AVX512IFMA instructions, leading to memory corruption.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "3.0.4"}],
+      "kev": false,
+      "published": "2022-07-01",
+      "fix_available": true
+    },
+    "CVE-2023-0286": {
+      "cve_id": "CVE-2023-0286",
+      "description": "OpenSSL GENERAL_NAME_cmp type confusion vulnerability allowing denial of service or remote code execution via X.400 addresses in certificates.",
+      "cvss_v3_score": 7.4,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "<1.0.2zg|<1.1.1t|<3.0.8"}],
+      "kev": false,
+      "published": "2023-02-08",
+      "fix_available": true
+    },
+    "CVE-2023-20198": {
+      "cve_id": "CVE-2023-20198",
+      "description": "Cisco IOS XE Web UI Privilege Escalation. Unauthenticated attacker can create admin user via HTTP/HTTPS web UI on exposed devices.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "ios_xe", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-10-16",
+      "fix_available": true
+    },
+    "CVE-2023-20273": {
+      "cve_id": "CVE-2023-20273",
+      "description": "Cisco IOS XE Web UI Command Injection. Allows authenticated users to inject OS commands with root privileges via web UI.",
+      "cvss_v3_score": 7.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "cisco", "product": "ios_xe", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-10-23",
+      "fix_available": true
+    },
+    "CVE-2022-20821": {
+      "cve_id": "CVE-2022-20821",
+      "description": "Cisco IOS XR Open Port Vulnerability. A remote attacker can access Redis instance on a development port resulting in code execution.",
+      "cvss_v3_score": 6.5,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "cisco", "product": "ios_xr", "version_match": "*"}],
+      "kev": false,
+      "published": "2022-05-11",
+      "fix_available": true
+    },
+    "CVE-2021-34770": {
+      "cve_id": "CVE-2021-34770",
+      "description": "Cisco IOS XE CAPWAP Processing Memory Corruption Remote Code Execution Vulnerability.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "ios_xe", "version_match": "*"}],
+      "kev": false,
+      "published": "2021-09-22",
+      "fix_available": true
+    },
+    "CVE-2020-3452": {
+      "cve_id": "CVE-2020-3452",
+      "description": "Cisco ASA and FTD Web Services path traversal vulnerability allowing unauthenticated read of sensitive files.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [
+        {"vendor": "cisco", "product": "adaptive_security_appliance", "version_match": "*"},
+        {"vendor": "cisco", "product": "firepower_threat_defense", "version_match": "*"}
+      ],
+      "kev": true,
+      "published": "2020-07-22",
+      "fix_available": true
+    },
+    "CVE-2020-3187": {
+      "cve_id": "CVE-2020-3187",
+      "description": "Cisco ASA and FTD Web Services path traversal. Unauthenticated attacker can read or delete files from the webvpn folder.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "adaptive_security_appliance", "version_match": "*"}],
+      "kev": true,
+      "published": "2020-05-06",
+      "fix_available": true
+    },
+    "CVE-2019-12643": {
+      "cve_id": "CVE-2019-12643",
+      "description": "Cisco IOS XE REST API Authentication Bypass Vulnerability allowing unauthenticated access to the REST API.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "ios_xe", "version_match": "*"}],
+      "kev": false,
+      "published": "2019-09-25",
+      "fix_available": true
+    },
+    "CVE-2018-0171": {
+      "cve_id": "CVE-2018-0171",
+      "description": "Cisco Smart Install remote code execution. Allows unauthenticated RCE via TCP 4786 on devices with Smart Install enabled.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "ios", "version_match": "*"}],
+      "kev": true,
+      "published": "2018-03-28",
+      "fix_available": true
+    },
+    "CVE-2017-3881": {
+      "cve_id": "CVE-2017-3881",
+      "description": "Cisco Cluster Management Protocol remote code execution. Unauthenticated attacker can send malformed CMP-specific Telnet options to execute code.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "ios", "version_match": "*"}],
+      "kev": true,
+      "published": "2017-03-17",
+      "fix_available": true
+    },
+    "CVE-2023-20269": {
+      "cve_id": "CVE-2023-20269",
+      "description": "Cisco ASA and FTD SSL VPN unauthorized access vulnerability allowing brute force of credentials and establishing clientless SSL VPN sessions.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "cisco", "product": "adaptive_security_appliance", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-09-06",
+      "fix_available": true
+    },
+    "CVE-2024-20272": {
+      "cve_id": "CVE-2024-20272",
+      "description": "Cisco Unity Connection unauthenticated arbitrary file upload and command execution via web management interface.",
+      "cvss_v3_score": 7.3,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "cisco", "product": "unity_connection", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-01-17",
+      "fix_available": true
+    },
+    "CVE-2024-20353": {
+      "cve_id": "CVE-2024-20353",
+      "description": "Cisco ASA and FTD Management and VPN Web Servers Denial of Service Vulnerability.",
+      "cvss_v3_score": 8.6,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "cisco", "product": "adaptive_security_appliance", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-04-24",
+      "fix_available": true
+    },
+    "CVE-2024-20359": {
+      "cve_id": "CVE-2024-20359",
+      "description": "Cisco ASA and FTD Persistent Local Code Execution Vulnerability allowing privilege escalation from administrator to root.",
+      "cvss_v3_score": 6.0,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "cisco", "product": "adaptive_security_appliance", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-04-24",
+      "fix_available": true
+    },
+    "CVE-2024-20399": {
+      "cve_id": "CVE-2024-20399",
+      "description": "Cisco NX-OS Software CLI command injection allowing authenticated local attacker to execute OS commands as root.",
+      "cvss_v3_score": 6.7,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "cisco", "product": "nx-os", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-07-01",
+      "fix_available": true
+    },
+    "CVE-2024-20362": {
+      "cve_id": "CVE-2024-20362",
+      "description": "Cisco Small Business RV Series Routers XSS vulnerability via the web-based management interface.",
+      "cvss_v3_score": 6.1,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "cisco", "product": "rv_series_routers", "version_match": "*"}],
+      "kev": false,
+      "published": "2024-04-03",
+      "fix_available": false
+    },
+    "CVE-2022-42475": {
+      "cve_id": "CVE-2022-42475",
+      "description": "Fortinet FortiOS SSL-VPN heap overflow vulnerability allowing unauthenticated remote code execution via specially crafted requests.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "7.2.0..7.2.2|7.0.0..7.0.8"}],
+      "kev": true,
+      "published": "2022-12-12",
+      "fix_available": true
+    },
+    "CVE-2023-27997": {
+      "cve_id": "CVE-2023-27997",
+      "description": "Fortinet FortiGate SSL-VPN pre-authentication heap overflow remote code execution. Also known as XORtigate.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "fortigate", "version_match": "<6.0.17|<6.2.15|<6.4.13|<7.0.12|<7.2.5"}],
+      "kev": true,
+      "published": "2023-06-13",
+      "fix_available": true
+    },
+    "CVE-2022-40684": {
+      "cve_id": "CVE-2022-40684",
+      "description": "Fortinet FortiOS, FortiProxy, FortiSwitchManager authentication bypass via specially crafted HTTP/HTTPS requests allowing admin access.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [
+        {"vendor": "fortinet", "product": "fortios", "version_match": "7.2.0..7.2.1|7.0.0..7.0.6"},
+        {"vendor": "fortinet", "product": "fortiproxy", "version_match": "*"}
+      ],
+      "kev": true,
+      "published": "2022-10-10",
+      "fix_available": true
+    },
+    "CVE-2021-44168": {
+      "cve_id": "CVE-2021-44168",
+      "description": "Fortinet FortiOS arbitrary file download via specially crafted HTTP request allowing attacker to download IPS engine files.",
+      "cvss_v3_score": 6.5,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<7.0.3"}],
+      "kev": true,
+      "published": "2021-12-08",
+      "fix_available": true
+    },
+    "CVE-2023-48788": {
+      "cve_id": "CVE-2023-48788",
+      "description": "Fortinet FortiClientEMS SQL injection vulnerability allowing unauthenticated remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "forticlientems", "version_match": "<7.2.3|<7.0.11"}],
+      "kev": true,
+      "published": "2024-03-12",
+      "fix_available": true
+    },
+    "CVE-2024-21762": {
+      "cve_id": "CVE-2024-21762",
+      "description": "Fortinet FortiOS out-of-bounds write in SSL-VPN allowing unauthenticated remote code execution via HTTP requests.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<6.0.18|<6.2.16|<6.4.15|<7.0.15|<7.2.7|<7.4.4"}],
+      "kev": true,
+      "published": "2024-02-08",
+      "fix_available": true
+    },
+    "CVE-2024-23113": {
+      "cve_id": "CVE-2024-23113",
+      "description": "Fortinet FortiOS format string vulnerability in fgfmd daemon allowing unauthenticated remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<6.4.15|<7.0.15|<7.2.8|<7.4.3"}],
+      "kev": true,
+      "published": "2024-02-08",
+      "fix_available": true
+    },
+    "CVE-2023-25610": {
+      "cve_id": "CVE-2023-25610",
+      "description": "Fortinet FortiOS buffer underwrite heap overflow in administrative interface allowing remote code execution.",
+      "cvss_v3_score": 9.3,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<6.2.13|<6.4.12|<7.0.10|<7.2.4"}],
+      "kev": false,
+      "published": "2023-03-07",
+      "fix_available": true
+    },
+    "CVE-2022-41328": {
+      "cve_id": "CVE-2022-41328",
+      "description": "Fortinet FortiOS path traversal vulnerability allowing privileged attacker to read and write arbitrary files via CLI commands.",
+      "cvss_v3_score": 7.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<7.0.9|<7.2.3"}],
+      "kev": true,
+      "published": "2023-03-07",
+      "fix_available": true
+    },
+    "CVE-2023-29183": {
+      "cve_id": "CVE-2023-29183",
+      "description": "Fortinet FortiOS guest management portal XSS vulnerability allowing remote code execution via malicious web page.",
+      "cvss_v3_score": 6.3,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "fortinet", "product": "fortios", "version_match": "<7.0.11|<7.2.4"}],
+      "kev": false,
+      "published": "2023-09-13",
+      "fix_available": true
+    },
+    "CVE-2021-21985": {
+      "cve_id": "CVE-2021-21985",
+      "description": "VMware vCenter Server Remote Code Execution vulnerability in Virtual SAN Health Check plugin. Allows unauthenticated RCE via network access to port 443.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "vcenter_server", "version_match": "<7.0u2b|<6.7u3n|<6.5u3p"}],
+      "kev": true,
+      "published": "2021-05-25",
+      "fix_available": true
+    },
+    "CVE-2021-22005": {
+      "cve_id": "CVE-2021-22005",
+      "description": "VMware vCenter Server arbitrary file upload vulnerability allowing unauthenticated RCE via the analytics service.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "vcenter_server", "version_match": "7.0|6.7"}],
+      "kev": true,
+      "published": "2021-09-21",
+      "fix_available": true
+    },
+    "CVE-2022-22954": {
+      "cve_id": "CVE-2022-22954",
+      "description": "VMware Workspace ONE Access and Identity Manager server-side template injection leading to remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "workspace_one_access", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-04-06",
+      "fix_available": true
+    },
+    "CVE-2022-22960": {
+      "cve_id": "CVE-2022-22960",
+      "description": "VMware Workspace ONE Access, Identity Manager, vRealize Automation privilege escalation vulnerability allowing local root.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "vmware", "product": "workspace_one_access", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-04-13",
+      "fix_available": true
+    },
+    "CVE-2022-31656": {
+      "cve_id": "CVE-2022-31656",
+      "description": "VMware Workspace ONE Access, Identity Manager, vRealize Automation authentication bypass allowing unauthenticated admin access.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "workspace_one_access", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-08-02",
+      "fix_available": true
+    },
+    "CVE-2023-20867": {
+      "cve_id": "CVE-2023-20867",
+      "description": "VMware Tools authentication bypass vulnerability allows a fully privileged attacker in a guest VM to affect confidentiality and integrity of the host.",
+      "cvss_v3_score": 3.9,
+      "cvss_v3_severity": "LOW",
+      "affected_products": [{"vendor": "vmware", "product": "tools", "version_match": "<12.3.0"}],
+      "kev": true,
+      "published": "2023-06-13",
+      "fix_available": true
+    },
+    "CVE-2024-22252": {
+      "cve_id": "CVE-2024-22252",
+      "description": "VMware ESXi XHCI USB controller use-after-free vulnerability allowing VM escape to host execution as VMX process.",
+      "cvss_v3_score": 9.3,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "esxi", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-03-05",
+      "fix_available": true
+    },
+    "CVE-2024-22253": {
+      "cve_id": "CVE-2024-22253",
+      "description": "VMware ESXi UHCI USB controller use-after-free vulnerability allowing VM escape with code execution on the host.",
+      "cvss_v3_score": 9.3,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "esxi", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-03-05",
+      "fix_available": true
+    },
+    "CVE-2024-22254": {
+      "cve_id": "CVE-2024-22254",
+      "description": "VMware ESXi out-of-bounds write vulnerability in SVGA device allowing VM escape with code execution privileges.",
+      "cvss_v3_score": 7.9,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "vmware", "product": "esxi", "version_match": "*"}],
+      "kev": false,
+      "published": "2024-03-05",
+      "fix_available": true
+    },
+    "CVE-2021-22056": {
+      "cve_id": "CVE-2021-22056",
+      "description": "VMware Workspace ONE Access SSRF vulnerability allowing attackers to perform server-side request forgery attacks.",
+      "cvss_v3_score": 5.3,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "vmware", "product": "workspace_one_access", "version_match": "*"}],
+      "kev": false,
+      "published": "2021-12-20",
+      "fix_available": true
+    },
+    "CVE-2022-0847": {
+      "cve_id": "CVE-2022-0847",
+      "description": "Dirty Pipe - Linux kernel pipe write privilege escalation. Allows unprivileged users to write to arbitrary read-only files via pipe buffers.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "5.8..5.16.10"}],
+      "kev": false,
+      "published": "2022-03-07",
+      "fix_available": true
+    },
+    "CVE-2021-4034": {
+      "cve_id": "CVE-2021-4034",
+      "description": "PwnKit - polkit pkexec privilege escalation. Memory corruption in pkexec allows local privilege escalation to root on most Linux systems.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "polkit_project", "product": "polkit", "version_match": "<0.119"}],
+      "kev": true,
+      "published": "2022-01-28",
+      "fix_available": true
+    },
+    "CVE-2021-3156": {
+      "cve_id": "CVE-2021-3156",
+      "description": "sudo Baron Samedit heap overflow. Allows any local user to gain root privileges regardless of sudo configuration, even if not in sudoers.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "sudo_project", "product": "sudo", "version_match": "1.8.2..1.8.31p2|1.9.0..1.9.5p1"}],
+      "kev": true,
+      "published": "2021-01-26",
+      "fix_available": true
+    },
+    "CVE-2022-2585": {
+      "cve_id": "CVE-2022-2585",
+      "description": "Linux kernel POSIX CPU timer use-after-free vulnerability enabling local privilege escalation to root.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<5.18.14"}],
+      "kev": false,
+      "published": "2022-08-31",
+      "fix_available": true
+    },
+    "CVE-2023-0386": {
+      "cve_id": "CVE-2023-0386",
+      "description": "Linux kernel OverlayFS SUID privilege escalation via crafted ovl_copy_up_meta_inode_data call allowing local root.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<6.2"}],
+      "kev": false,
+      "published": "2023-03-22",
+      "fix_available": true
+    },
+    "CVE-2022-25636": {
+      "cve_id": "CVE-2022-25636",
+      "description": "Linux kernel netfilter nf_dup_netdev.c out-of-bounds write via nft_fwd_dup_netdev_offload vulnerability.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "5.4..5.16.10"}],
+      "kev": false,
+      "published": "2022-02-28",
+      "fix_available": true
+    },
+    "CVE-2021-22555": {
+      "cve_id": "CVE-2021-22555",
+      "description": "Linux kernel netfilter heap out-of-bounds write. Allows local users to escalate privileges to root via IPT_SO_SET_REPLACE ioctl.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<5.13"}],
+      "kev": false,
+      "published": "2021-07-07",
+      "fix_available": true
+    },
+    "CVE-2022-1015": {
+      "cve_id": "CVE-2022-1015",
+      "description": "Linux kernel netfilter nf_tables out-of-bounds read/write via nftables expressions allowing local privilege escalation.",
+      "cvss_v3_score": 6.6,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<5.17.3"}],
+      "kev": false,
+      "published": "2022-04-29",
+      "fix_available": true
+    },
+    "CVE-2020-14386": {
+      "cve_id": "CVE-2020-14386",
+      "description": "Linux kernel AF_PACKET socket memory corruption vulnerability allowing local privilege escalation to root.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<5.8.6"}],
+      "kev": false,
+      "published": "2020-09-16",
+      "fix_available": true
+    },
+    "CVE-2019-14835": {
+      "cve_id": "CVE-2019-14835",
+      "description": "Linux kernel VHOST vring buffer overflow (V-gHost). Allows guest VM to escalate privileges to host via malicious vring descriptor.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "<5.3.1"}],
+      "kev": false,
+      "published": "2019-09-17",
+      "fix_available": true
+    },
+    "CVE-2017-7494": {
+      "cve_id": "CVE-2017-7494",
+      "description": "SambaCry remote code execution. Allows authenticated users to upload and execute shared library files via the writable share.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "3.5.0..4.6.3"}],
+      "kev": true,
+      "published": "2017-05-24",
+      "fix_available": true
+    },
+    "CVE-2020-1472": {
+      "cve_id": "CVE-2020-1472",
+      "description": "Zerologon - Windows Netlogon Remote Protocol elevation of privilege. Allows unauthenticated attacker to impersonate domain controller and take control of AD.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "windows_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2020-08-17",
+      "fix_available": true
+    },
+    "CVE-2022-38023": {
+      "cve_id": "CVE-2022-38023",
+      "description": "Windows Netlogon Elevation of Privilege vulnerability due to weak cryptography in RPC Seal mode.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows_server", "version_match": "*"}],
+      "kev": false,
+      "published": "2022-11-08",
+      "fix_available": true
+    },
+    "CVE-2022-37966": {
+      "cve_id": "CVE-2022-37966",
+      "description": "Windows Kerberos RC4-MD4 Elevation of Privilege vulnerability. Allows attacker to gain administrator privileges.",
+      "cvss_v3_score": 8.1,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "microsoft", "product": "windows_server", "version_match": "*"}],
+      "kev": false,
+      "published": "2022-11-08",
+      "fix_available": true
+    },
+    "CVE-2023-42950": {
+      "cve_id": "CVE-2023-42950",
+      "description": "Samba use-after-free vulnerability in smbd process allowing potential code execution.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "<4.19.3"}],
+      "kev": false,
+      "published": "2023-11-14",
+      "fix_available": true
+    },
+    "CVE-2023-34966": {
+      "cve_id": "CVE-2023-34966",
+      "description": "Samba Spotlight mdssvc infinite loop denial of service via specially crafted MDSCMD_OPEN request.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "<4.18.6"}],
+      "kev": false,
+      "published": "2023-07-20",
+      "fix_available": true
+    },
+    "CVE-2023-3347": {
+      "cve_id": "CVE-2023-3347",
+      "description": "Samba SMB2 packet signing not enforced vulnerability allowing MITM attacker to replay SMB2 messages without signing.",
+      "cvss_v3_score": 5.9,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "<4.17.11|<4.18.6|<4.19.1"}],
+      "kev": false,
+      "published": "2023-07-20",
+      "fix_available": true
+    },
+    "CVE-2021-20254": {
+      "cve_id": "CVE-2021-20254",
+      "description": "Samba SID-name mapping buffer overrun vulnerability allowing authenticated attacker to crash smbd or possibly execute code.",
+      "cvss_v3_score": 6.8,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "<4.13.8|<4.14.4|<4.15.0"}],
+      "kev": false,
+      "published": "2021-05-05",
+      "fix_available": true
+    },
+    "CVE-2018-1057": {
+      "cve_id": "CVE-2018-1057",
+      "description": "Samba LDAP privilege escalation. Authenticated users can change any other user's password including admin via LDAP.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "samba", "product": "samba", "version_match": "4.0.0..4.7.4"}],
+      "kev": false,
+      "published": "2018-03-13",
+      "fix_available": true
+    },
+    "CVE-2024-21887": {
+      "cve_id": "CVE-2024-21887",
+      "description": "Ivanti Connect Secure and Policy Secure command injection in web components allowing authenticated administrator RCE.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ivanti", "product": "connect_secure", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-01-10",
+      "fix_available": true
+    },
+    "CVE-2023-46805": {
+      "cve_id": "CVE-2023-46805",
+      "description": "Ivanti Connect Secure and Policy Secure authentication bypass via path traversal in web component.",
+      "cvss_v3_score": 8.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "ivanti", "product": "connect_secure", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-01-10",
+      "fix_available": true
+    },
+    "CVE-2024-22024": {
+      "cve_id": "CVE-2024-22024",
+      "description": "Ivanti Connect Secure XXE vulnerability in SAML component allowing unauthenticated access to restricted resources.",
+      "cvss_v3_score": 8.3,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "ivanti", "product": "connect_secure", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-02-09",
+      "fix_available": true
+    },
+    "CVE-2021-22893": {
+      "cve_id": "CVE-2021-22893",
+      "description": "Pulse Secure VPN remote code execution vulnerability via arbitrary file execution. Exploited by APT groups to install webshells.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ivanti", "product": "pulse_connect_secure", "version_match": "<9.1r11.4"}],
+      "kev": true,
+      "published": "2021-04-20",
+      "fix_available": true
+    },
+    "CVE-2019-11510": {
+      "cve_id": "CVE-2019-11510",
+      "description": "Pulse Secure VPN unauthenticated arbitrary file read. Allows attacker to read sensitive files including credentials from /etc/passwd and VPN session tokens.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ivanti", "product": "pulse_connect_secure", "version_match": "<9.0r3.4"}],
+      "kev": true,
+      "published": "2019-08-09",
+      "fix_available": true
+    },
+    "CVE-2024-21888": {
+      "cve_id": "CVE-2024-21888",
+      "description": "Ivanti Connect Secure web component privilege escalation allowing authenticated user to obtain administrator access.",
+      "cvss_v3_score": 8.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "ivanti", "product": "connect_secure", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-01-10",
+      "fix_available": true
+    },
+    "CVE-2024-29824": {
+      "cve_id": "CVE-2024-29824",
+      "description": "Ivanti Endpoint Manager SQL injection vulnerability in core server allowing unauthenticated remote code execution.",
+      "cvss_v3_score": 9.6,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ivanti", "product": "endpoint_manager", "version_match": "<2022_su6"}],
+      "kev": true,
+      "published": "2024-05-31",
+      "fix_available": true
+    },
+    "CVE-2024-7339": {
+      "cve_id": "CVE-2024-7339",
+      "description": "Ivanti Avalanche WLInfoRailService buffer overflow allowing unauthenticated denial of service or code execution.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "ivanti", "product": "avalanche", "version_match": "<6.4.4"}],
+      "kev": false,
+      "published": "2024-08-13",
+      "fix_available": true
+    },
+    "CVE-2024-8190": {
+      "cve_id": "CVE-2024-8190",
+      "description": "Ivanti Cloud Services Appliance OS command injection vulnerability allowing authenticated admin RCE.",
+      "cvss_v3_score": 7.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "ivanti", "product": "cloud_services_appliance", "version_match": "<4.6.2"}],
+      "kev": true,
+      "published": "2024-09-10",
+      "fix_available": true
+    },
+    "CVE-2023-35082": {
+      "cve_id": "CVE-2023-35082",
+      "description": "Ivanti MobileIron Core unauthenticated API access vulnerability allowing attacker to access personally identifiable information.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ivanti", "product": "mobileiron_core", "version_match": "<11.2"}],
+      "kev": true,
+      "published": "2023-08-07",
+      "fix_available": false
+    },
+    "CVE-2022-22965": {
+      "cve_id": "CVE-2022-22965",
+      "description": "Spring4Shell - Spring Framework RCE via data binding on JDK 9+. Allows unauthenticated remote code execution via ClassLoader manipulation.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "spring_framework", "version_match": "<5.2.20|<5.3.18"}],
+      "kev": true,
+      "published": "2022-04-01",
+      "fix_available": true
+    },
+    "CVE-2021-22205": {
+      "cve_id": "CVE-2021-22205",
+      "description": "GitLab CE/EE remote code execution via ExifTool. Unauthenticated attacker can execute arbitrary commands by uploading specially crafted image files.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "gitlab", "product": "gitlab", "version_match": "11.9..13.8.7|13.9..13.9.5|13.10..13.10.2"}],
+      "kev": true,
+      "published": "2021-04-23",
+      "fix_available": true
+    },
+    "CVE-2023-7028": {
+      "cve_id": "CVE-2023-7028",
+      "description": "GitLab CE/EE account takeover via password reset email to unverified addresses allowing unauthenticated account compromise.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "gitlab", "product": "gitlab", "version_match": "16.1..16.7.1"}],
+      "kev": true,
+      "published": "2024-01-12",
+      "fix_available": true
+    },
+    "CVE-2022-26134": {
+      "cve_id": "CVE-2022-26134",
+      "description": "Atlassian Confluence OGNL injection RCE. Unauthenticated remote code execution via specially crafted OGNL expression in URI.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "atlassian", "product": "confluence_server", "version_match": "1.3.0..7.18.0"}],
+      "kev": true,
+      "published": "2022-06-02",
+      "fix_available": true
+    },
+    "CVE-2023-22518": {
+      "cve_id": "CVE-2023-22518",
+      "description": "Atlassian Confluence improper authorization vulnerability allowing unauthenticated attacker to perform destructive actions.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "atlassian", "product": "confluence_server", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-10-31",
+      "fix_available": true
+    },
+    "CVE-2022-1388": {
+      "cve_id": "CVE-2022-1388",
+      "description": "F5 BIG-IP iControl REST authentication bypass via undisclosed requests allowing command execution as admin.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "f5", "product": "big-ip", "version_match": "13.1.0..16.1.2"}],
+      "kev": true,
+      "published": "2022-05-04",
+      "fix_available": true
+    },
+    "CVE-2023-46747": {
+      "cve_id": "CVE-2023-46747",
+      "description": "F5 BIG-IP Configuration utility authentication bypass via undisclosed requests allowing remote code execution as root.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "f5", "product": "big-ip", "version_match": "<17.1.0.3|<16.1.4.1|<15.1.8.1|<14.1.5.3|<13.1.5.1"}],
+      "kev": true,
+      "published": "2023-10-26",
+      "fix_available": true
+    },
+    "CVE-2023-3519": {
+      "cve_id": "CVE-2023-3519",
+      "description": "Citrix NetScaler ADC and Gateway unauthenticated remote code execution via HTTP GET request when configured as Gateway/AAA.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "citrix", "product": "netscaler_adc", "version_match": "<13.1-49.13|<13.0-91.13|<12.1-55.297"}],
+      "kev": true,
+      "published": "2023-07-18",
+      "fix_available": true
+    },
+    "CVE-2023-4966": {
+      "cve_id": "CVE-2023-4966",
+      "description": "CitrixBleed - Citrix NetScaler sensitive information disclosure. Allows unauthenticated attacker to steal session tokens from device memory.",
+      "cvss_v3_score": 9.4,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "citrix", "product": "netscaler_adc", "version_match": "<13.1-49.15|<14.1-8.50"}],
+      "kev": true,
+      "published": "2023-10-10",
+      "fix_available": true
+    },
+    "CVE-2023-30799": {
+      "cve_id": "CVE-2023-30799",
+      "description": "MikroTik RouterOS privilege escalation via Winbox protocol. Allows authenticated admin to escalate to super-admin and extract credentials.",
+      "cvss_v3_score": 9.1,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "mikrotik", "product": "routeros", "version_match": "<6.49.8|<7.9.2"}],
+      "kev": false,
+      "published": "2023-07-19",
+      "fix_available": true
+    },
+    "CVE-2022-37897": {
+      "cve_id": "CVE-2022-37897",
+      "description": "Aruba Networks ArubaOS command injection vulnerability in the underlying operating system allowing unauthenticated RCE.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "aruba", "product": "arubaos", "version_match": "<8.6.0.21|<8.10.0.0"}],
+      "kev": false,
+      "published": "2022-10-07",
+      "fix_available": true
+    },
+    "CVE-2022-37898": {
+      "cve_id": "CVE-2022-37898",
+      "description": "Aruba Networks ArubaOS stack-based buffer overflow vulnerability allowing unauthenticated RCE via PAPI UDP port.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "aruba", "product": "arubaos", "version_match": "<8.6.0.21|<8.10.0.0"}],
+      "kev": false,
+      "published": "2022-10-07",
+      "fix_available": true
+    },
+    "CVE-2022-0543": {
+      "cve_id": "CVE-2022-0543",
+      "description": "Redis Lua sandbox escape via Redis integer overflow vulnerability allowing arbitrary code execution on the host.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "redis", "product": "redis", "version_match": "*"}],
+      "kev": true,
+      "published": "2022-03-02",
+      "fix_available": true
+    },
+    "CVE-2021-20328": {
+      "cve_id": "CVE-2021-20328",
+      "description": "MongoDB client-side field level encryption does not validate content type for BSON values, leading to bypass of encryption.",
+      "cvss_v3_score": 6.8,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "mongodb", "product": "mongodb", "version_match": "4.2.0..4.4.3"}],
+      "kev": false,
+      "published": "2021-02-25",
+      "fix_available": true
+    },
+    "CVE-2023-2454": {
+      "cve_id": "CVE-2023-2454",
+      "description": "PostgreSQL schema permission bypass allowing attacker with CREATE schema privilege to escalate to superuser via security definer functions.",
+      "cvss_v3_score": 7.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "postgresql", "product": "postgresql", "version_match": "<15.3|<14.8|<13.11|<12.15|<11.20"}],
+      "kev": false,
+      "published": "2023-05-11",
+      "fix_available": true
+    },
+    "CVE-2022-2625": {
+      "cve_id": "CVE-2022-2625",
+      "description": "PostgreSQL extension scripts improperly replace objects, allowing an unprivileged user to execute arbitrary SQL during CREATE EXTENSION.",
+      "cvss_v3_score": 8.0,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "postgresql", "product": "postgresql", "version_match": "<15.0|<14.5|<13.8|<12.12|<11.17|<10.22"}],
+      "kev": false,
+      "published": "2022-08-18",
+      "fix_available": true
+    },
+    "CVE-2024-23897": {
+      "cve_id": "CVE-2024-23897",
+      "description": "Jenkins CLI arbitrary file read through args4j CommandLine argument expansion allowing unauthenticated access to sensitive files.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "jenkins", "product": "jenkins", "version_match": "<2.442|<2.426.3 LTS"}],
+      "kev": true,
+      "published": "2024-01-24",
+      "fix_available": true
+    },
+    "CVE-2024-3400": {
+      "cve_id": "CVE-2024-3400",
+      "description": "Palo Alto PAN-OS GlobalProtect OS command injection via GPID cookie. Allows unauthenticated RCE with root privileges.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "paloalto", "product": "pan-os", "version_match": "10.2.0..10.2.9|11.0.0..11.0.4|11.1.0..11.1.2"}],
+      "kev": true,
+      "published": "2024-04-12",
+      "fix_available": true
+    },
+    "CVE-2022-0028": {
+      "cve_id": "CVE-2022-0028",
+      "description": "Palo Alto PAN-OS URL filtering policy misconfiguration enabling reflected denial of service amplification attacks.",
+      "cvss_v3_score": 8.6,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "paloalto", "product": "pan-os", "version_match": "<8.1.23.1|<9.0.16.4|<9.1.14.4|<10.0.11.3|<10.1.6.7|<10.2.2.4"}],
+      "kev": true,
+      "published": "2022-08-10",
+      "fix_available": true
+    },
+    "CVE-2024-0012": {
+      "cve_id": "CVE-2024-0012",
+      "description": "Palo Alto PAN-OS management interface authentication bypass allowing unauthenticated admin-level access.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "paloalto", "product": "pan-os", "version_match": "<10.2.12-h2|<11.0.6-h1|<11.1.5-h1|<11.2.4-h1"}],
+      "kev": true,
+      "published": "2024-11-18",
+      "fix_available": true
+    },
+    "CVE-2023-44487": {
+      "cve_id": "CVE-2023-44487",
+      "description": "HTTP/2 Rapid Reset Attack. Denial of service vulnerability in HTTP/2 servers allowing attackers to exhaust server resources via rapid RST_STREAM frames.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [
+        {"vendor": "apache", "product": "http_server", "version_match": "*"},
+        {"vendor": "nginx", "product": "nginx", "version_match": "*"},
+        {"vendor": "microsoft", "product": "iis", "version_match": "*"}
+      ],
+      "kev": true,
+      "published": "2023-10-10",
+      "fix_available": true
+    },
+    "CVE-2022-47966": {
+      "cve_id": "CVE-2022-47966",
+      "description": "Zoho ManageEngine multiple products unauthenticated RCE via SAML SSO component when SAML SSO is enabled.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "zoho", "product": "manageengine", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-01-10",
+      "fix_available": true
+    },
+    "CVE-2022-1040": {
+      "cve_id": "CVE-2022-1040",
+      "description": "Sophos Firewall User Portal and Webadmin authentication bypass allowing unauthenticated remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "sophos", "product": "sophos_firewall", "version_match": "<19.0.0"}],
+      "kev": true,
+      "published": "2022-03-25",
+      "fix_available": true
+    },
+    "CVE-2022-3236": {
+      "cve_id": "CVE-2022-3236",
+      "description": "Sophos Firewall code injection vulnerability in User Portal and Webadmin allowing remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "sophos", "product": "sophos_firewall", "version_match": "<=19.5"}],
+      "kev": true,
+      "published": "2022-09-23",
+      "fix_available": true
+    },
+    "CVE-2021-26084": {
+      "cve_id": "CVE-2021-26084",
+      "description": "Atlassian Confluence Server OGNL injection allowing unauthenticated code execution via WebWork component.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "atlassian", "product": "confluence_server", "version_match": "<6.13.23|<7.4.11|<7.11.6|<7.12.5|<7.13.0"}],
+      "kev": true,
+      "published": "2021-08-25",
+      "fix_available": true
+    },
+    "CVE-2022-26352": {
+      "cve_id": "CVE-2022-26352",
+      "description": "DotCMS core arbitrary file upload leading to remote code execution via the Content API.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "dotcms", "product": "dotcms", "version_match": "<21.06.7"}],
+      "kev": true,
+      "published": "2022-03-25",
+      "fix_available": true
+    },
+    "CVE-2022-24682": {
+      "cve_id": "CVE-2022-24682",
+      "description": "Zimbra Collaboration Suite HTML injection in Calendar invite component leading to Cross-Site Scripting.",
+      "cvss_v3_score": 6.1,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "zimbra", "product": "collaboration", "version_match": "<8.8.15p27|<9.0.0p20"}],
+      "kev": true,
+      "published": "2022-02-04",
+      "fix_available": true
+    },
+    "CVE-2022-27925": {
+      "cve_id": "CVE-2022-27925",
+      "description": "Zimbra Collaboration mboximport arbitrary file upload and path traversal allowing RCE with authentication.",
+      "cvss_v3_score": 7.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "zimbra", "product": "collaboration", "version_match": "<8.8.15p31.1|<9.0.0p24.1"}],
+      "kev": true,
+      "published": "2022-04-20",
+      "fix_available": true
+    },
+    "CVE-2023-20887": {
+      "cve_id": "CVE-2023-20887",
+      "description": "VMware Aria Operations for Networks command injection vulnerability allowing unauthenticated remote code execution via GZIP content.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "aria_operations_for_networks", "version_match": "6.x"}],
+      "kev": true,
+      "published": "2023-06-07",
+      "fix_available": true
+    },
+    "CVE-2023-2868": {
+      "cve_id": "CVE-2023-2868",
+      "description": "Barracuda Email Security Gateway OS command injection vulnerability in attachment parsing. Exploited as zero-day by state-sponsored actors.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "barracuda", "product": "email_security_gateway", "version_match": "5.1.3.001..9.2.0.006"}],
+      "kev": true,
+      "published": "2023-05-23",
+      "fix_available": true
+    },
+    "CVE-2023-4911": {
+      "cve_id": "CVE-2023-4911",
+      "description": "Looney Tunables - GNU C Library dynamic loader buffer overflow in glibc. Local privilege escalation to root on major Linux distributions.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "gnu", "product": "glibc", "version_match": "2.34..2.38"}],
+      "kev": false,
+      "published": "2023-10-03",
+      "fix_available": true
+    },
+    "CVE-2021-3560": {
+      "cve_id": "CVE-2021-3560",
+      "description": "polkit authentication bypass race condition. Local users can obtain authentication for privileged dbus calls by bypassing polkit.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "polkit_project", "product": "polkit", "version_match": "<0.119"}],
+      "kev": false,
+      "published": "2021-06-03",
+      "fix_available": true
+    },
+    "CVE-2022-3602": {
+      "cve_id": "CVE-2022-3602",
+      "description": "OpenSSL X.509 email address 4-byte buffer overflow in punycode decoding allowing potential code execution.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "3.0.0..3.0.6"}],
+      "kev": false,
+      "published": "2022-11-01",
+      "fix_available": true
+    },
+    "CVE-2022-3786": {
+      "cve_id": "CVE-2022-3786",
+      "description": "OpenSSL X.509 email address variable length buffer overflow in punycode decoding causing denial of service or stack corruption.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "openssl", "product": "openssl", "version_match": "3.0.0..3.0.6"}],
+      "kev": false,
+      "published": "2022-11-01",
+      "fix_available": true
+    },
+    "CVE-2023-34048": {
+      "cve_id": "CVE-2023-34048",
+      "description": "VMware vCenter Server DCERPC out-of-bounds write vulnerability allowing unauthenticated remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "vcenter_server", "version_match": "<8.0u2|<7.0u3o"}],
+      "kev": true,
+      "published": "2023-10-25",
+      "fix_available": true
+    },
+    "CVE-2024-37085": {
+      "cve_id": "CVE-2024-37085",
+      "description": "VMware ESXi authentication bypass. Joining an Active Directory domain 'ESX Admins' group grants full admin access.",
+      "cvss_v3_score": 6.8,
+      "cvss_v3_severity": "MEDIUM",
+      "affected_products": [{"vendor": "vmware", "product": "esxi", "version_match": "*"}],
+      "kev": true,
+      "published": "2024-07-30",
+      "fix_available": true
+    },
+    "CVE-2023-22527": {
+      "cve_id": "CVE-2023-22527",
+      "description": "Atlassian Confluence Server SSTI template injection leading to unauthenticated remote code execution.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "atlassian", "product": "confluence_server", "version_match": "8.0.0..8.5.3"}],
+      "kev": true,
+      "published": "2024-01-16",
+      "fix_available": true
+    },
+    "CVE-2024-27198": {
+      "cve_id": "CVE-2024-27198",
+      "description": "JetBrains TeamCity authentication bypass via path traversal allowing unauthenticated admin access and RCE.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "jetbrains", "product": "teamcity", "version_match": "<2023.11.4"}],
+      "kev": true,
+      "published": "2024-03-04",
+      "fix_available": true
+    },
+    "CVE-2024-27199": {
+      "cve_id": "CVE-2024-27199",
+      "description": "JetBrains TeamCity path traversal authentication bypass via alternative path allowing limited admin actions.",
+      "cvss_v3_score": 7.3,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "jetbrains", "product": "teamcity", "version_match": "<2023.11.4"}],
+      "kev": false,
+      "published": "2024-03-04",
+      "fix_available": true
+    },
+    "CVE-2021-40539": {
+      "cve_id": "CVE-2021-40539",
+      "description": "Zoho ManageEngine ADSelfService Plus REST API authentication bypass enabling code execution without credentials.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "zoho", "product": "manageengine_adselfservice_plus", "version_match": "<6.1 build 6114"}],
+      "kev": true,
+      "published": "2021-09-07",
+      "fix_available": true
+    },
+    "CVE-2022-36537": {
+      "cve_id": "CVE-2022-36537",
+      "description": "ConnectWise R1Soft Server Backup Manager authentication bypass via HTTP request smuggling leading to RCE.",
+      "cvss_v3_score": 7.5,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "connectwise", "product": "r1soft_server_backup_manager", "version_match": "<6.16.4"}],
+      "kev": true,
+      "published": "2022-09-13",
+      "fix_available": true
+    },
+    "CVE-2023-24489": {
+      "cve_id": "CVE-2023-24489",
+      "description": "Citrix ShareFile StorageZones Controller arbitrary file upload vulnerability via improper access control in authenticated file upload endpoint.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "citrix", "product": "sharefile_storagezones_controller", "version_match": "<5.11.24"}],
+      "kev": true,
+      "published": "2023-07-11",
+      "fix_available": true
+    },
+    "CVE-2022-47986": {
+      "cve_id": "CVE-2022-47986",
+      "description": "IBM Aspera Faspex code execution via YAML deserialization in API calls allowing unauthenticated RCE.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "ibm", "product": "aspera_faspex", "version_match": "<4.4.2 PL2"}],
+      "kev": true,
+      "published": "2023-02-02",
+      "fix_available": true
+    },
+    "CVE-2021-22986": {
+      "cve_id": "CVE-2021-22986",
+      "description": "F5 BIG-IP and BIG-IQ iControl REST unauthenticated RCE via HTTP requests without authentication tokens.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "f5", "product": "big-ip", "version_match": "11.6.1..11.6.5|12.1.0..12.1.5|13.1.0..13.1.3|14.1.0..14.1.4|15.1.0..15.1.2|16.0.0..16.0.1"}],
+      "kev": true,
+      "published": "2021-03-31",
+      "fix_available": true
+    },
+    "CVE-2020-3433": {
+      "cve_id": "CVE-2020-3433",
+      "description": "Cisco AnyConnect Secure Mobility Client for Windows DLL injection enabling local privilege escalation to SYSTEM.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "cisco", "product": "anyconnect_secure_mobility_client", "version_match": "<4.9.00086"}],
+      "kev": true,
+      "published": "2020-08-05",
+      "fix_available": true
+    },
+    "CVE-2019-19781": {
+      "cve_id": "CVE-2019-19781",
+      "description": "Citrix ADC and Gateway path traversal vulnerability allowing unauthenticated RCE via directory traversal to execute Perl scripts.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "citrix", "product": "netscaler_adc", "version_match": "<13.0-47.24|<12.1-55.187|<12.0-63.21|<11.1-63.9"}],
+      "kev": true,
+      "published": "2019-12-27",
+      "fix_available": true
+    },
+    "CVE-2022-21587": {
+      "cve_id": "CVE-2022-21587",
+      "description": "Oracle E-Business Suite Web ADI unathenticated arbitrary file upload leading to remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "oracle", "product": "e-business_suite", "version_match": "12.2.3..12.2.11"}],
+      "kev": true,
+      "published": "2022-10-18",
+      "fix_available": true
+    },
+    "CVE-2023-28771": {
+      "cve_id": "CVE-2023-28771",
+      "description": "Zyxel ZyWALL/USG/ATP/VPN series OS command injection via IKEv2 error message in IPSec VPN connection handler.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "zyxel", "product": "zywall", "version_match": "*"}],
+      "kev": true,
+      "published": "2023-04-25",
+      "fix_available": true
+    },
+    "CVE-2023-28372": {
+      "cve_id": "CVE-2023-28372",
+      "description": "SolarWinds Platform SQL injection vulnerability allowing unauthenticated information disclosure and potential RCE.",
+      "cvss_v3_score": 9.4,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "solarwinds", "product": "solarwinds_platform", "version_match": "<2023.3"}],
+      "kev": false,
+      "published": "2023-07-26",
+      "fix_available": true
+    },
+    "CVE-2020-14882": {
+      "cve_id": "CVE-2020-14882",
+      "description": "Oracle WebLogic Server Console Component path traversal leading to unauthenticated remote code execution.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "oracle", "product": "weblogic_server", "version_match": "10.3.6.0|12.1.3.0|12.2.1.3.0|12.2.1.4.0|14.1.1.0.0"}],
+      "kev": true,
+      "published": "2020-10-21",
+      "fix_available": true
+    },
+    "CVE-2020-14883": {
+      "cve_id": "CVE-2020-14883",
+      "description": "Oracle WebLogic Server Console Component RCE via POST request to the console path. Chains with CVE-2020-14882.",
+      "cvss_v3_score": 7.2,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "oracle", "product": "weblogic_server", "version_match": "10.3.6.0|12.1.3.0|12.2.1.3.0|12.2.1.4.0|14.1.1.0.0"}],
+      "kev": true,
+      "published": "2020-10-21",
+      "fix_available": true
+    },
+    "CVE-2022-22963": {
+      "cve_id": "CVE-2022-22963",
+      "description": "VMware Spring Cloud Function SpEL expression injection RCE. Allows unauthenticated code execution via specially crafted routing expressions.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "vmware", "product": "spring_cloud_function", "version_match": "3.1.6|3.2.2"}],
+      "kev": true,
+      "published": "2022-03-29",
+      "fix_available": true
+    },
+    "CVE-2023-46604": {
+      "cve_id": "CVE-2023-46604",
+      "description": "Apache ActiveMQ ClassInfo deserialization remote code execution. Allows unauthenticated remote attackers to execute arbitrary shell commands.",
+      "cvss_v3_score": 10.0,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "apache", "product": "activemq", "version_match": "<5.15.16|<5.16.7|<5.17.6|<5.18.3"}],
+      "kev": true,
+      "published": "2023-10-27",
+      "fix_available": true
+    },
+    "CVE-2024-1086": {
+      "cve_id": "CVE-2024-1086",
+      "description": "Linux kernel nf_tables use-after-free vulnerability enabling local privilege escalation to root.",
+      "cvss_v3_score": 7.8,
+      "cvss_v3_severity": "HIGH",
+      "affected_products": [{"vendor": "linux", "product": "linux_kernel", "version_match": "3.15..6.8.0"}],
+      "kev": false,
+      "published": "2024-01-31",
+      "fix_available": true
+    },
+    "CVE-2023-29357": {
+      "cve_id": "CVE-2023-29357",
+      "description": "Microsoft SharePoint Server Elevation of Privilege Vulnerability allowing attackers to gain admin privileges via spoofed JWT tokens.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "microsoft", "product": "sharepoint_server", "version_match": "2019"}],
+      "kev": true,
+      "published": "2023-06-13",
+      "fix_available": true
+    },
+    "CVE-2024-9463": {
+      "cve_id": "CVE-2024-9463",
+      "description": "Palo Alto Networks Expedition unauthenticated OS command injection vulnerability allowing admin credential exposure.",
+      "cvss_v3_score": 9.9,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "paloalto", "product": "expedition", "version_match": "<1.2.96"}],
+      "kev": true,
+      "published": "2024-10-09",
+      "fix_available": true
+    },
+    "CVE-2024-40711": {
+      "cve_id": "CVE-2024-40711",
+      "description": "Veeam Backup and Replication unauthenticated remote code execution vulnerability via deserialization of untrusted data.",
+      "cvss_v3_score": 9.8,
+      "cvss_v3_severity": "CRITICAL",
+      "affected_products": [{"vendor": "veeam", "product": "backup_and_replication", "version_match": "<12.2.0.334"}],
+      "kev": true,
+      "published": "2024-09-05",
+      "fix_available": true
+    }
+  }
+}
