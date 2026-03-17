@@ -1,0 +1,26 @@
+[Unit]
+Description=Yeyland Wutani Risk Scanner - Daily Credentialed Scan
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=risk-scanner
+Group=risk-scanner
+WorkingDirectory=/opt/risk-scanner
+ExecStart=/opt/risk-scanner/venv/bin/python /opt/risk-scanner/bin/risk-scanner-main.py --scan-only
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=7200
+KillMode=process
+KillSignal=SIGTERM
+SendSIGKILL=no
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+ReadWritePaths=/opt/risk-scanner/data /opt/risk-scanner/logs
+
+[Install]
+WantedBy=multi-user.target

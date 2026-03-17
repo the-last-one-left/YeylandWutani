@@ -1,0 +1,33 @@
+# Yeyland Wutani - Risk Scanner Tool
+
+# Never commit secrets or encrypted credentials
+config/config.json
+config/credentials.enc
+config/.env
+
+# Scan data and history (large, device-specific)
+data/history/
+data/vuln-db/nvd-cache.json
+data/vuln-db/kev-catalog.json
+data/vuln-db/osv-cache.json
+
+# Token cache
+data/.token_cache.json
+data/.checkin_sent
+data/.scanner.lock
+
+# Logs
+logs/*.log
+logs/*.log.*
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+venv/
+.venv/
+*.egg-info/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,21 @@
+[Unit]
+Description=Yeyland Wutani Risk Scanner - Weekly Report Generator
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=risk-scanner
+Group=risk-scanner
+WorkingDirectory=/opt/risk-scanner
+ExecStart=/opt/risk-scanner/venv/bin/python /opt/risk-scanner/bin/risk-scanner-main.py --report-only
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=1800
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/opt/risk-scanner/data /opt/risk-scanner/logs /tmp
+
+[Install]
+WantedBy=multi-user.target

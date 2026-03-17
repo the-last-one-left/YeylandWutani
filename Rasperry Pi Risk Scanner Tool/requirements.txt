@@ -1,0 +1,30 @@
+# Yeyland Wutani - Risk Scanner Pi
+# Python package requirements
+# Install into venv: pip install -r requirements.txt
+
+# Microsoft Graph API / MSAL authentication
+msal>=1.28.0
+
+# PDF report generation
+reportlab>=4.2.0
+
+# Credential encryption (AES-256 Fernet)
+cryptography>=42.0.0
+
+# SSH credentialed scanning
+paramiko>=3.4.0
+
+# SNMP scanning
+pysnmp>=4.4.12
+
+# Windows WMI/DCOM scanning (fallback when WinRM unavailable)
+impacket>=0.12.0
+
+# Windows WinRM scanning (preferred over DCOM)
+pypsrp>=0.8.0
+
+# HTTP requests (Graph API, NVD API, CISA KEV, Hatz AI)
+requests>=2.31.0
+
+# Date parsing utilities
+python-dateutil>=2.9.0

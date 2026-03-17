@@ -1,0 +1,80 @@
+{
+  "_comment": "Yeyland Wutani Risk Scanner - Configuration Template. Copy to config.json and fill in your values.",
+
+  "system": {
+    "device_name": "RiskScanner-Pi",
+    "log_level": "INFO",
+    "min_free_disk_mb": 500
+  },
+
+  "graph_api": {
+    "tenant_id": "YOUR_AZURE_TENANT_ID",
+    "client_id": "YOUR_AZURE_APP_CLIENT_ID",
+    "client_secret": "YOUR_AZURE_APP_CLIENT_SECRET",
+    "from_email": "scanner@yourdomain.com",
+    "to_email": "admin@yourdomain.com",
+    "cc_emails": []
+  },
+
+  "hatz_ai": {
+    "api_key": "",
+    "enable_per_host_narrative": false,
+    "max_hosts_for_narrative": 20
+  },
+
+  "scan_schedule": {
+    "daily_scan_time": "02:00",
+    "weekly_report_day": "Monday",
+    "weekly_report_time": "06:00",
+    "scan_on_install": true
+  },
+
+  "scan": {
+    "scan_timeout": 3600,
+    "max_threads": 30,
+    "port_scan_top_ports": 1000,
+    "port_scan_full": false,
+    "subnet_labels": {
+      "10.0.1.0/24": "Servers",
+      "10.0.2.0/24": "Workstations",
+      "10.0.3.0/24": "Network"
+    },
+    "excluded_hosts": [],
+    "enable_service_version": true,
+    "enable_ssh_scan": true,
+    "enable_wmi_scan": true,
+    "enable_snmp_scan": true,
+    "enable_ssl_audit": true,
+    "enable_smb_audit": true,
+    "enable_nse_vulners": true,
+    "enable_cve_correlation": true,
+    "enable_delta_tracking": true,
+    "snmp_timeout": 5,
+    "ssh_timeout": 15,
+    "wmi_timeout": 30
+  },
+
+  "vulnerability": {
+    "nvd_api_key": "",
+    "auto_update_vuln_db": true,
+    "vuln_db_update_interval_days": 1,
+    "vuln_db_max_age_years": 5,
+    "cvss_critical_threshold": 9.0,
+    "cvss_high_threshold": 7.0,
+    "cvss_medium_threshold": 4.0,
+    "prioritize_kev": true,
+    "max_cves_per_host": 50
+  },
+
+  "reporting": {
+    "company_name": "Yeyland Wutani LLC",
+    "company_color": "#FF6600",
+    "tagline": "Building Better Systems",
+    "client_name": "Client Name Here",
+    "include_executive_pdf": true,
+    "include_detail_pdf": true,
+    "include_html_email": true,
+    "attach_scan_json": false,
+    "risk_score_history_weeks": 12
+  }
+}

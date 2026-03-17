@@ -1,0 +1,22 @@
+[Unit]
+Description=Yeyland Wutani Risk Scanner - Initial Check-In
+After=network-online.target
+Wants=network-online.target
+ConditionPathExists=!/opt/risk-scanner/data/.checkin_sent
+
+[Service]
+Type=oneshot
+User=risk-scanner
+Group=risk-scanner
+WorkingDirectory=/opt/risk-scanner
+ExecStart=/opt/risk-scanner/venv/bin/python /opt/risk-scanner/bin/initial-checkin.py
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=300
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+ReadWritePaths=/opt/risk-scanner/data /opt/risk-scanner/logs
+
+[Install]
+WantedBy=multi-user.target
