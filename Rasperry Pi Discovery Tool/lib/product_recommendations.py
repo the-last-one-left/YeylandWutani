@@ -199,7 +199,53 @@ def size_environment(scan_results: dict) -> dict:
 
     # ── Active Directory enrichment (credentialed scan) ───────────────────
     ad_available = bool(ad.get("available"))
-    ad_context   = {}    # populated below once hardware data is collected
+
+    # Build ad_context immediately so downstream logic in this same function
+    # (cloud migration scoring, M365 user count, security-gap count, etc.)
+    # all see real AD values instead of an empty dict.
+    ad_context = {}
+    if ad_available:
+        _hw = ad.get("hardware", {})
+        _hw_summaries = []
+        for _cname, _h in _hw.items():
+            if _h.get("wmi_accessible"):
+                _parts = []
+                if _h.get("manufacturer") and _h.get("model"):
+                    _parts.append(f"{_h['manufacturer']} {_h['model']}")
+                if _h.get("cpu_name"):
+                    _parts.append(f"{_h['cpu_socket_count']}x {_h['cpu_name']} "
+                                  f"({_h.get('cpu_cores_total','?')} cores)")
+                if _h.get("total_ram_gb"):
+                    _parts.append(f"{_h['total_ram_gb']} GB RAM")
+                if _h.get("disks"):
+                    _dsz = sum(_d.get("size_gb", 0) for _d in _h["disks"])
+                    _used = _h.get("total_used_gb")
+                    if _used is not None and _used > 0:
+                        _parts.append(
+                            f"{len(_h['disks'])}x disk "
+                            f"({_used} GB used / {_dsz} GB total)"
+                        )
+                    else:
+                        _parts.append(f"{len(_h['disks'])}x disk ({_dsz} GB total)")
+                if _h.get("uptime_days") is not None:
+                    _parts.append(f"up {_h['uptime_days']} days")
+                if _parts:
+                    _hw_summaries.append(f"  {_cname}: " + ", ".join(_parts))
+
+        ad_context = {
+            "user_count":         ad.get("user_count", 0),
+            "enabled_users":      ad.get("enabled_user_count", 0),
+            "domain_admins":      len(ad.get("domain_admins", [])),
+            "stale_users":        len(ad.get("stale_users", [])),
+            "service_accounts":   len(ad.get("service_accounts", [])),
+            "pwd_never_expires":  len(ad.get("password_never_expires", [])),
+            "stale_computers":    len(ad.get("stale_computers", [])),
+            "security_findings":  ad.get("security_findings", []),
+            "password_policy":    ad.get("password_policy", {}),
+            "hardware_summaries": _hw_summaries,
+            "gpo_count":          len(ad.get("gpos", [])),
+        }
+
     if ad_available:
         # AD server count is authoritative — overrides port-based heuristic
         ad_server_count = ad.get("server_count", 0)
@@ -517,53 +563,22 @@ def size_environment(scan_results: dict) -> dict:
             )
 
     # ── Server storage total (for Datto sizing) ───────────────────────────
-    # Pull actual disk totals from AD WMI data when available;
-    # fall back to a conservative 1 TB-per-server estimate.
+    # Prefer actual USED space from volume inventory (total_used_gb, added by
+    # Win32_LogicalDisk query) because Datto sizing should reflect data to
+    # protect, not raw disk capacity.  Fall back to total disk size when
+    # volume data is absent, then to a 1 TB/server estimate.
     total_server_storage_tb = 0.0
     if ad_available:
         for _cname, h in (ad.get("hardware") or {}).items():
-            if h.get("wmi_accessible") and h.get("disks"):
-                disk_gb = sum(d.get("size_gb", 0) for d in h["disks"])
-                total_server_storage_tb += disk_gb / 1024.0
+            if h.get("wmi_accessible"):
+                _used = h.get("total_used_gb")
+                if _used is not None and _used > 0:
+                    total_server_storage_tb += _used / 1024.0
+                elif h.get("disks"):
+                    disk_gb = sum(d.get("size_gb", 0) for d in h["disks"])
+                    total_server_storage_tb += disk_gb / 1024.0
     if total_server_storage_tb == 0 and server_count > 0:
         total_server_storage_tb = server_count * 1.0   # 1 TB/server estimate
-
-    ad_context = {}
-    if ad_available:
-        hw = ad.get("hardware", {})
-        # Summarise hardware across all servers for the AI prompt
-        hw_summaries = []
-        for cname, h in hw.items():
-            if h.get("wmi_accessible"):
-                parts = []
-                if h.get("manufacturer") and h.get("model"):
-                    parts.append(f"{h['manufacturer']} {h['model']}")
-                if h.get("cpu_name"):
-                    parts.append(f"{h['cpu_socket_count']}x {h['cpu_name']} "
-                                 f"({h.get('cpu_cores_total','?')} cores)")
-                if h.get("total_ram_gb"):
-                    parts.append(f"{h['total_ram_gb']} GB RAM")
-                if h.get("disks"):
-                    dsz = sum(d.get("size_gb", 0) for d in h["disks"])
-                    parts.append(f"{len(h['disks'])}x disk ({dsz} GB total)")
-                if h.get("uptime_days") is not None:
-                    parts.append(f"up {h['uptime_days']} days")
-                if parts:
-                    hw_summaries.append(f"  {cname}: " + ", ".join(parts))
-
-        ad_context = {
-            "user_count":        ad.get("user_count", 0),
-            "enabled_users":     ad.get("enabled_user_count", 0),
-            "domain_admins":     len(ad.get("domain_admins", [])),
-            "stale_users":       len(ad.get("stale_users", [])),
-            "service_accounts":  len(ad.get("service_accounts", [])),
-            "pwd_never_expires": len(ad.get("password_never_expires", [])),
-            "stale_computers":   len(ad.get("stale_computers", [])),
-            "security_findings": ad.get("security_findings", []),
-            "password_policy":   ad.get("password_policy", {}),
-            "hardware_summaries": hw_summaries,
-            "gpo_count":         len(ad.get("gpos", [])),
-        }
 
     return {
         "device_count":       device_count,

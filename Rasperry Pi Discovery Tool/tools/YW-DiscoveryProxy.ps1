@@ -255,6 +255,26 @@ function Get-ServerHardware([string[]]$ComputerNames) {
             foreach ($d in $disks) { if ($d.size_gb) { $diskTotal += $d.size_gb } }
             $hw.disk_total_gb  = $diskTotal
 
+            # Volumes — logical drive usage (used vs free) for BCDR sizing
+            # DriveType=3 = local fixed disks; excludes CD-ROM, network, removable
+            $vols = @(Get-CimInstance -ComputerName $name -ClassName Win32_LogicalDisk `
+                          -Filter "DriveType=3" -OperationTimeoutSec 10 `
+                          -ErrorAction SilentlyContinue)
+            $hw.volumes = @($vols | ForEach-Object {
+                $total_gb = if ($_.Size)      { [math]::Round($_.Size      / 1GB, 1) } else { 0 }
+                $free_gb  = if ($_.FreeSpace) { [math]::Round($_.FreeSpace / 1GB, 1) } else { 0 }
+                @{
+                    drive_letter = $_.DeviceID
+                    label        = $_.VolumeName
+                    total_gb     = $total_gb
+                    free_gb      = $free_gb
+                    used_gb      = [math]::Round($total_gb - $free_gb, 1)
+                }
+            })
+            $totalUsed = 0
+            foreach ($v in $hw.volumes) { $totalUsed += $v.used_gb }
+            $hw.total_used_gb = $totalUsed
+
             # BIOS / firmware (serial number critical for warranty lookup)
             $bios = Get-CimInstance -ComputerName $name -ClassName Win32_BIOS `
                         -OperationTimeoutSec 10 -ErrorAction SilentlyContinue
