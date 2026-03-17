@@ -40,8 +40,8 @@ _REQUIRED_KEYS = [
     ("graph_api", "tenant_id"),
     ("graph_api", "client_id"),
     ("graph_api", "client_secret"),
-    ("reporting", "to_addresses"),
-    ("scan", "targets"),
+    ("graph_api", "from_email"),
+    ("graph_api", "to_email"),
 ]
 
 _OPTIONAL_KEYS = [

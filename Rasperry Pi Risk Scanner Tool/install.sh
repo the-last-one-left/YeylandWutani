@@ -208,6 +208,15 @@ clone_repo() {
             git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}" || \
                 print_warn "git reset failed; continuing with existing files."
         fi
+
+        # git reset recreates the sparse-checkout subfolder — flatten it back to root
+        if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}" ]]; then
+            info "Flattening updated subfolder to install root..."
+            cp -rfT "${INSTALL_DIR}/${REPO_SUBFOLDER}" "${INSTALL_DIR}/"
+            rm -rf "${INSTALL_DIR}/${REPO_SUBFOLDER:?}"
+            info "Subfolder removed."
+        fi
+
         print_ok "Repository updated."
         return
     fi
@@ -991,12 +1000,19 @@ install_services() {
     systemctl enable risk-scanner-web.service 2>/dev/null || \
         print_warn "risk-scanner-web.service not found — check systemd/ directory."
 
-    systemctl start risk-scanner-daily.timer  2>/dev/null || \
+    systemctl start risk-scanner-daily.timer 2>/dev/null || \
         print_warn "Could not start risk-scanner-daily.timer — may need a reboot."
     systemctl start risk-scanner-report.timer 2>/dev/null || \
         print_warn "Could not start risk-scanner-report.timer — may need a reboot."
-    systemctl start risk-scanner-web.service  2>/dev/null || \
-        print_warn "Could not start risk-scanner-web.service — may need a reboot."
+
+    # Start web service and report any failure clearly
+    local _web_err
+    if ! _web_err="$(systemctl start risk-scanner-web.service 2>&1)"; then
+        print_warn "risk-scanner-web.service failed to start: ${_web_err}"
+        print_warn "Check: journalctl -u risk-scanner-web.service -n 30"
+    else
+        print_ok "risk-scanner-web.service started on port 8080."
+    fi
 
     print_ok "Systemd units installed and enabled."
 }
@@ -1195,6 +1211,7 @@ main() {
         install_packages       # Step 1 — update packages
         clone_repo             # Step 3 — pull latest code
         setup_venv             # Step 4 — rebuild venv / update deps
+        setup_directories      # Step 5 — repair any permission drift
         install_services       # Step 9 — reload systemd units
         init_vuln_db           # Step 11 — update vuln DB
         print_success_banner
@@ -1205,6 +1222,7 @@ main() {
         # ── Reconfigure mode: re-run wizard, reload services ─────────────────
         run_config_wizard      # Steps 6 & 7 — wizard with pre-filled defaults
         encrypt_credentials    # Step 8 — skip if keeping existing creds
+        setup_directories      # Step 5 — repair any permission drift
         install_services       # Step 9 — reload timers with new schedule
         print_success_banner
         return
