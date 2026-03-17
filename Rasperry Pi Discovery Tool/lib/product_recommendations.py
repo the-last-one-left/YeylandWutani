@@ -718,7 +718,6 @@ def _draw_product_card(c, product: dict, count: int,
         Colored header bar  – vendor + model name
         Spec grid           – key numeric specs in a 2-column grid
         Feature bullets     – up to 4 key features
-        MSRP line
     """
     if not product:
         return y
@@ -732,7 +731,7 @@ def _draw_product_card(c, product: dict, count: int,
     n_specs  = _count_specs(product)
     spec_h   = math.ceil(n_specs / 2) * 18 + 8
     feat_h   = len(features) * 15 + 8
-    card_h   = 32 + spec_h + feat_h + 28   # header + specs + features + msrp/padding
+    card_h   = 32 + spec_h + feat_h + 12   # header + specs + features + padding
 
     # ── Card background ────────────────────────────────────────────────────
     c.setFillColor(white)
@@ -771,16 +770,6 @@ def _draw_product_card(c, product: dict, count: int,
         c.setFillColor(_hex("#222222"))
         _draw_wrapped(c, feat, x + 22, sy, w - 32, size=8, line_h=11)
         sy -= 15
-
-    # ── MSRP ──────────────────────────────────────────────────────────────
-    msrp = product.get("msrp_usd", 0)
-    if msrp:
-        sy -= 4
-        c.setFont("Helvetica", 7.5)
-        c.setFillColor(_hex("#888888"))
-        sub = product.get("subscription_required", "")
-        sub_note = f"  + {sub}" if sub else ""
-        c.drawString(x + 8, sy, f"Est. MSRP: ${msrp:,} (hardware){sub_note}")
 
     return y - card_h - 6
 
@@ -1132,32 +1121,32 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
         if fw:
             rows.append(("Firewall",
                           f"{fw.get('vendor','')} {fw.get('model','')}",
-                          f"${fw.get('msrp_usd', 0):,}+"))
+                          fw.get("best_for", "")))
         sw = recommendations.get("switches", {})
         if sw and sw.get("product"):
             p = sw["product"]
             rows.append(("Switching",
                           f"{sw['count']}x {p.get('vendor','')} {p.get('model','')}",
-                          f"${p.get('msrp_usd', 0) * sw['count']:,}+"))
+                          p.get("best_for", "")))
         ap = recommendations.get("access_points") or {}
         if ap and ap.get("product"):
             p = ap["product"]
             rows.append(("Wireless",
                           f"{ap['count']}x {p.get('vendor','')} {p.get('model','')}",
-                          f"${p.get('msrp_usd', 0) * ap['count']:,}+"))
+                          p.get("best_for", "")))
         sv = recommendations.get("servers") or {}
         if sv and sv.get("product"):
             p = sv["product"]
             rows.append(("Servers",
                           f"{p.get('vendor','')} {p.get('model','')}",
-                          f"${p.get('msrp_usd_base', 0):,}+"))
+                          p.get("best_for", "")))
 
-        col_ws = [90, CONTENT_W - 90 - 80, 80]
+        col_ws = [90, 130, CONTENT_W - 90 - 130]
         hdr_y  = y
         c.setFillColor(_hex("#343a40"))
         c.rect(MARGIN, hdr_y - 16, CONTENT_W, 16, fill=1, stroke=0)
         for j, (hdr, cw) in enumerate(
-                zip(["CATEGORY", "PRODUCT", "EST. HARDWARE"], col_ws)):
+                zip(["CATEGORY", "PRODUCT", "BEST FOR"], col_ws)):
             cx = MARGIN + sum(col_ws[:j]) + 6
             c.setFillColor(white)
             c.setFont("Helvetica-Bold", 8)
@@ -1172,6 +1161,10 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
                 cx = MARGIN + sum(col_ws[:j]) + 6
                 c.setFont("Helvetica", 8.5)
                 c.setFillColor(_hex("#222222"))
+                # Truncate "BEST FOR" text to fit column width
+                if j == 2:
+                    while val and c.stringWidth(val, "Helvetica", 8.5) > cw - 12:
+                        val = val[:-1]
                 c.drawString(cx, y - 12, str(val))
             y -= row_h
 
@@ -1179,9 +1172,8 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
         c.setFont("Helvetica", 7.5)
         c.setFillColor(_hex("#888888"))
         c.drawString(MARGIN, y,
-                     "All prices are estimated MSRP hardware costs only. "
-                     "Subscriptions, licensing, and professional services are "
-                     "quoted separately. Contact Yeyland Wutani for current pricing.")
+                     "Contact Yeyland Wutani LLC for current partner pricing and "
+                     "solution design. Subscriptions and professional services quoted separately.")
 
     _draw_page_footer(c, scan_date, brand_name)
 
