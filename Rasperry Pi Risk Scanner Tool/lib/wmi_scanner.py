@@ -33,7 +33,7 @@ def scan_host_wmi(ip: str, credential_profile: dict) -> dict:
         "domain": None,
         "manufacturer": None,
         "model": None,
-        "installed_software": [],
+        "wmi_software": [],
         "installed_kbs": [],
         "local_users": [],
         "running_services": [],
@@ -99,20 +99,28 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
         def ps(cmd: str) -> Optional[str]:
             try:
                 stdout, stderr, rc = client.execute_ps(cmd)
-                return stdout.strip() if stdout else None
+                out = (stdout or "").strip()
+                if not out and stderr:
+                    logger.debug(f"WinRM PS cmd stderr: {cmd[:60]}... — {stderr[:200]}")
+                return out or None
             except Exception as e:
                 logger.debug(f"WinRM PS cmd failed: {cmd[:60]}... — {e}")
                 return None
 
         # OS info
-        os_info = ps("Get-WmiObject Win32_OperatingSystem | Select-Object Caption,BuildNumber,LastBootUpTime | ConvertTo-Json")
+        os_info = ps(
+            "$os = Get-WmiObject Win32_OperatingSystem; "
+            "[PSCustomObject]@{Caption=$os.Caption; BuildNumber=$os.BuildNumber} | ConvertTo-Json"
+        )
         if os_info:
             try:
                 import json
                 data = json.loads(os_info)
-                result["os_version"] = data.get("Caption", "")
-                result["os_build"] = str(data.get("BuildNumber", ""))
-                result["last_boot"] = str(data.get("LastBootUpTime", ""))
+                if isinstance(data, list):
+                    data = data[0] if data else {}
+                caption = data.get("Caption") or data.get("caption") or ""
+                result["os_version"] = str(caption).strip()
+                result["os_build"] = str(data.get("BuildNumber") or data.get("buildNumber") or "").strip()
             except Exception:
                 result["os_version"] = os_info[:100]
 
@@ -158,6 +166,34 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
                             }
                         except Exception:
                             pass
+            except Exception:
+                pass
+
+        # Installed software via registry (faster than Win32_Product, no MSI side-effects)
+        sw_out = ps(
+            "$paths = @("
+            "'HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*',"
+            "'HKLM:\\Software\\Wow6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*');"
+            "$paths | ForEach-Object { if (Test-Path $_) { Get-ItemProperty $_ } } | "
+            "Where-Object { $_.DisplayName } | "
+            "Select-Object DisplayName,DisplayVersion,Publisher | "
+            "Select-Object -First 200 | ConvertTo-Json -Compress"
+        )
+        if sw_out:
+            try:
+                import json
+                sws = json.loads(sw_out)
+                if isinstance(sws, dict):
+                    sws = [sws]
+                result["wmi_software"] = [
+                    {
+                        "name": s.get("DisplayName", ""),
+                        "version": s.get("DisplayVersion", ""),
+                        "publisher": s.get("Publisher", ""),
+                    }
+                    for s in sws
+                    if s.get("DisplayName")
+                ]
             except Exception:
                 pass
 

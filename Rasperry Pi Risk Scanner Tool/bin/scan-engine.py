@@ -1233,7 +1233,7 @@ def _run_risk_scoring(hosts: list) -> tuple:
         try:
             host["risk_score"] = score_host(host)
             host["risk_level"] = classify_host_risk(host["risk_score"])
-            host["top_risks"] = get_risk_summary(host)
+            host["top_risks"] = get_risk_summary([host])
         except Exception as exc:
             logger.warning(f"Phase 10: risk scoring failed for {host['ip']}: {exc}")
             host["risk_score"] = 0
