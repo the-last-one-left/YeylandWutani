@@ -36,6 +36,7 @@ scan_results["ad_enrichment"] receives a summary with security findings:
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import re
 import socket
@@ -285,6 +286,21 @@ def find_ad_proxy(
             logger.debug(f"[Phase 24] Adding recon-discovered DC {ip} (from recon['domain_controllers'])")
             dc_ips.append(ip)
 
+    # When the Pi uses the DC as its DNS resolver (common AD setup), port scanning
+    # may miss Kerberos/LDAP ports due to Windows firewall rules.  Add any internal
+    # DNS server IPs as fallback DC candidates — if no proxy TXT is found there the
+    # loop simply continues.
+    for dns_ip in (recon or {}).get("dns_servers", []):
+        if dns_ip and dns_ip not in dc_ips:
+            try:
+                if ipaddress.ip_address(dns_ip).is_private:
+                    logger.debug(
+                        f"[Phase 24] Adding internal DNS server {dns_ip} as fallback DC candidate"
+                    )
+                    dc_ips.append(dns_ip)
+            except ValueError:
+                pass
+
     if not dc_ips:
         logger.debug("[Phase 24] No DC candidates found in hosts or recon data.")
         return None
@@ -379,13 +395,14 @@ def _signal_done(dc_ip: str, port: int, token: str) -> None:
     """Tell the proxy the scan is complete so it can clean up and exit."""
     try:
         import requests as _req  # type: ignore
-        _req.post(
+        resp = _req.post(
             f"http://{dc_ip}:{port}/done",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=5,
+            timeout=8,
         )
-    except Exception:
-        pass
+        logger.info(f"[Phase 24] Proxy signaled /done — HTTP {resp.status_code}")
+    except Exception as e:
+        logger.warning(f"[Phase 24] Failed to signal /done to proxy at {dc_ip}:{port}: {e}")
 
 
 # ── Server identification ──────────────────────────────────────────────────────
