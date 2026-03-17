@@ -142,8 +142,19 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
     # Determine date range for incremental update
     if force_full or not stats.get("nvd_last_updated"):
         # Full fetch: last max_age_years years
-        start_date = now_utc - timedelta(days=365 * max_age_years)
-        logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
+        full_start = now_utc - timedelta(days=365 * max_age_years)
+        # Resume: if a previous --init was interrupted, skip already-done windows
+        resume_from = stats.get("nvd_init_window_start")
+        if resume_from and not force_full:
+            try:
+                start_date = datetime.fromisoformat(resume_from).replace(tzinfo=timezone.utc)
+                logger.info(f"NVD: Resuming full fetch from {start_date.date()} (interrupted earlier)...")
+            except Exception:
+                start_date = full_start
+                logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
+        else:
+            start_date = full_start
+            logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
     else:
         # Incremental: 1 day overlap to catch any late edits
         last_updated = datetime.fromisoformat(stats["nvd_last_updated"]).replace(tzinfo=timezone.utc)
@@ -285,9 +296,13 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
 
             time.sleep(delay)
 
-        # Checkpoint: save after each window so progress survives interruption
+        # Checkpoint: save cache and record next window start so a re-run can resume
         NVD_CACHE_PATH.write_text(json.dumps(_nvd_cache))
-        window_start = window_end + timedelta(seconds=1)
+        next_window = window_end + timedelta(seconds=1)
+        stats["nvd_init_window_start"] = next_window.isoformat()
+        stats["nvd_cve_count"] = len(_nvd_cache)
+        _save_stats(stats)
+        window_start = next_window
 
     # Also do incremental update for lastModStartDate
     # Run same fetch for lastModStartDate to catch edited CVEs
@@ -296,6 +311,7 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
 
     stats["nvd_last_updated"] = now_utc.isoformat()
     stats["nvd_cve_count"] = len(_nvd_cache)
+    stats.pop("nvd_init_window_start", None)  # clear resume marker on success
     _save_stats(stats)
 
     logger.info(f"NVD update complete: {new_count} CVEs processed, {len(_nvd_cache)} total in cache")
