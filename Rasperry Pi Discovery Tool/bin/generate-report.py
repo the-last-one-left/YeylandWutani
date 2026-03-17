@@ -235,6 +235,24 @@ def main() -> int:
     logger.info(f"Devices discovered: {len(hosts)}")
     logger.info(f"Risk score: {risk}/100")
 
+    # Pull Hatz AI insights — use stored value if available, otherwise request fresh.
+    ai_insights: "str | None" = scan_results.get("ai_insights")
+    if not ai_insights:
+        hatz_key = config.get("hatz_ai", {}).get("api_key", "")
+        if hatz_key:
+            logger.info("Requesting Hatz AI insights for report (not cached in scan file)...")
+            try:
+                from hatz_ai import get_hatz_insights as _get_insights
+                ai_insights = _get_insights(scan_results, hatz_key)
+                if ai_insights:
+                    logger.info("Hatz AI insights retrieved.")
+                else:
+                    logger.info("No Hatz AI insights returned — report will use static observations.")
+            except ImportError:
+                logger.info("hatz_ai module not available — skipping AI insights.")
+        else:
+            logger.info("Hatz AI: API key not configured — report will use static observations.")
+
     generated = []
 
     # ── Summary Report ─────────────────────────────────────────────────────
@@ -242,7 +260,7 @@ def main() -> int:
         out_path = out_dir / f"{stem}_Summary_Report.pdf"
         logger.info(f"Generating Summary Report -> {out_path}")
         try:
-            pdf_bytes = build_client_summary_pdf(scan_results, config)
+            pdf_bytes = build_client_summary_pdf(scan_results, config, ai_insights=ai_insights)
             out_path.write_bytes(pdf_bytes)
             logger.info(f"  Summary Report: {len(pdf_bytes)//1024:.0f} KB  ({out_path})")
             generated.append(str(out_path))

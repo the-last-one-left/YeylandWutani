@@ -1294,9 +1294,119 @@ def _draw_inventory_page(c, pw: float, ph: float, hosts: list, summary: dict,
     _draw_content_footer(c, pw, scan_date, brand_name)
 
 
+def _parse_ai_sections(ai_text: str) -> dict:
+    """Parse Hatz AI markdown into {section_title: [item, ...]} dict.
+
+    Expects sections headed by "## Section Title" with bullet or numbered list
+    items below.  Returns an empty dict when ai_text is None or empty.
+    """
+    import re
+    sections: dict = {}
+    current: "str | None" = None
+    for raw_line in (ai_text or "").splitlines():
+        line = raw_line.strip()
+        if line.startswith("## "):
+            current = line[3:].strip()
+            sections[current] = []
+        elif current is not None and line:
+            # Strip markdown bullet/numbered list markers
+            line = re.sub(r"^[-*•]\s+", "", line)
+            line = re.sub(r"^\d+[.)]\s+", "", line)
+            # Skip bare markdown like "---"
+            if line and not re.fullmatch(r"[-*=]+", line):
+                sections[current].append(line)
+    return sections
+
+
+def _draw_ai_insights_page(c, pw: float, ph: float, company_color: str,
+                           brand_name: str, scan_date: str,
+                           ai_text: str) -> None:
+    """Draw a dedicated AI Insights page from Hatz AI markdown output."""
+    col = _hex(company_color)
+
+    # ── Header band ──────────────────────────────────────────────────────
+    c.setFillColor(col)
+    c.rect(0, ph - 60, pw, 60, fill=1, stroke=0)
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", 18)
+    c.drawString(MARGIN, ph - 38, "AI SECURITY INSIGHTS")
+    c.setFont("Helvetica", 10)
+    c.setFillColor(_hex("#ffffffcc"))
+    c.drawRightString(pw - MARGIN, ph - 38, f"Analyzed {scan_date}")
+
+    # ── AI badge sub-header ───────────────────────────────────────────────
+    c.setFillColor(_hex("#f8f9fa"))
+    c.rect(0, ph - 80, pw, 20, fill=1, stroke=0)
+    c.setFillColor(_hex("#555555"))
+    c.setFont("Helvetica-Oblique", 8)
+    c.drawString(MARGIN, ph - 72,
+                 "AI-generated analysis powered by Hatz AI  |  "
+                 "Review findings with your security engineer before acting.")
+
+    sections = _parse_ai_sections(ai_text)
+
+    # Section display order and icon labels
+    _SECTION_ORDER = [
+        ("Key Findings",          "CRITICAL OBSERVATIONS"),
+        ("Recommended Actions",   "PRIORITIZED REMEDIATION STEPS"),
+        ("Positive Observations", "WHAT IS WORKING WELL"),
+    ]
+
+    y = ph - 100
+    line_h = 14
+    bullet_indent = 16
+
+    def _section_heading(title: str):
+        nonlocal y
+        # Thin accent rule
+        c.setStrokeColor(col)
+        c.setLineWidth(1.5)
+        c.line(MARGIN, y, pw - MARGIN, y)
+        y -= 2
+        c.setFillColor(col)
+        c.setFont("Helvetica-Bold", 11)
+        c.drawString(MARGIN, y - 12, title)
+        y -= 20
+
+    def _ai_bullet(text: str, numbered: bool = False, index: int = 0):
+        nonlocal y
+        if numbered:
+            label = f"{index}."
+            c.setFillColor(_hex("#333333"))
+            c.setFont("Helvetica-Bold", 9)
+            c.drawString(MARGIN, y, label)
+            text_x = MARGIN + 18
+            avail_w = CONTENT_W - 18
+        else:
+            c.setFillColor(col)
+            c.circle(MARGIN + 5, y + 4, 3, fill=1, stroke=0)
+            text_x = MARGIN + bullet_indent
+            avail_w = CONTENT_W - bullet_indent
+
+        y = _draw_wrapped_text(c, text, text_x, y, avail_w,
+                               font="Helvetica", size=9.5, color="#333333",
+                               line_height=line_h)
+        y -= 4
+
+    for key, label in _SECTION_ORDER:
+        items = sections.get(key, [])
+        if not items:
+            continue
+        _section_heading(label)
+        numbered = (key == "Recommended Actions")
+        for i, item in enumerate(items, 1):
+            if y < FOOTER_H + 40:
+                break  # Prevent overflow into footer
+            _ai_bullet(item, numbered=numbered, index=i)
+        y -= 6
+
+    _draw_content_footer(c, pw, scan_date, brand_name)
+
+
 def _draw_final_page(c, pw: float, ph: float, company_color: str,
                      brand_name: str, brand_tagline: str, scan_date: str,
-                     client_name: str) -> None:
+                     client_name: str,
+                     ai_actions: "list | None" = None) -> None:
     """Draw final observations / recommendations page."""
     col = _hex(company_color)
 
@@ -1349,7 +1459,7 @@ def _draw_final_page(c, pw: float, ph: float, company_color: str,
     y -= 4
 
     _heading("RECOMMENDED NEXT STEPS")
-    _bullet([
+    next_steps = ai_actions if ai_actions else [
         "Remediate all HIGH and CRITICAL findings immediately — prioritize EOL "
         "devices, exposed management services, and any CVE findings.",
         "Implement multi-factor authentication (MFA) for all remote access, "
@@ -1362,7 +1472,8 @@ def _draw_final_page(c, pw: float, ph: float, company_color: str,
         "available and recoverable.",
         "Implement security awareness training to reduce susceptibility to "
         "phishing — the entry point for over 90% of cyberattacks.",
-    ])
+    ]
+    _bullet(next_steps)
 
     _heading("ONGOING ASSESSMENT PROGRAM")
     _para(
@@ -1418,13 +1529,18 @@ def _draw_content_footer(c, pw: float, scan_date: str, brand_name: str) -> None:
 
 # ── Public API ────────────────────────────────────────────────────────────────
 
-def build_client_summary_pdf(scan_results: dict, config: dict) -> bytes:
+def build_client_summary_pdf(scan_results: dict, config: dict,
+                             ai_insights: "str | None" = None) -> bytes:
     """
     Build and return the client-facing Summary Report PDF as bytes.
 
     Args:
         scan_results : dict from network-scanner.py run_discovery()
         config       : config dict from config.json
+        ai_insights  : optional Hatz AI markdown string; if provided an AI
+                       Insights page is inserted before Final Observations and
+                       the AI-generated recommended actions replace the static
+                       bullet list on the Final Observations page.
 
     Returns:
         PDF bytes, or raises ImportError if reportlab is not installed.
@@ -1460,6 +1576,10 @@ def build_client_summary_pdf(scan_results: dict, config: dict) -> bytes:
     hosts      = scan_results.get("hosts", [])
     summary    = scan_results.get("summary", {})
 
+    # Parse AI insights (may be None when Hatz AI key not configured)
+    ai_sections = _parse_ai_sections(ai_insights) if ai_insights else {}
+    ai_actions  = ai_sections.get("Recommended Actions") or None
+
     buf = io.BytesIO()
     c = rl_canvas.Canvas(buf, pagesize=(PAGE_W, PAGE_H))
     c.setTitle(f"Cyber Risk Assessment — {client_name}")
@@ -1487,9 +1607,16 @@ def build_client_summary_pdf(scan_results: dict, config: dict) -> bytes:
                          company_color, brand_name, scan_date)
     c.showPage()
 
+    # ── AI Insights page (when Hatz AI insights are available) ────────────
+    if ai_insights:
+        _draw_ai_insights_page(c, PAGE_W, PAGE_H, company_color,
+                               brand_name, scan_date, ai_insights)
+        c.showPage()
+
     # ── Final observations page ────────────────────────────────────────────
     _draw_final_page(c, PAGE_W, PAGE_H, company_color,
-                     brand_name, tagline, scan_date, client_name)
+                     brand_name, tagline, scan_date, client_name,
+                     ai_actions=ai_actions)
     c.showPage()
 
     c.save()

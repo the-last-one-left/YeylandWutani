@@ -455,6 +455,7 @@ def main():
             ai_insights = get_hatz_insights(scan_results, hatz_key)
             ai_duration = time.time() - ai_start
             if ai_insights:
+                scan_results["ai_insights"] = ai_insights   # persist for PDF report consumers
                 logger.info(f"Hatz AI: insights generated in {ai_duration:.1f}s.")
             else:
                 logger.info(f"Hatz AI: no insights returned ({ai_duration:.1f}s).")
