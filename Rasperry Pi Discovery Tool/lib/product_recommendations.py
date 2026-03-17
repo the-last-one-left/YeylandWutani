@@ -199,6 +199,7 @@ def size_environment(scan_results: dict) -> dict:
 
     # ── Active Directory enrichment (credentialed scan) ───────────────────
     ad_available = bool(ad.get("available"))
+    ad_context   = {}    # populated below once hardware data is collected
     if ad_available:
         # AD server count is authoritative — overrides port-based heuristic
         ad_server_count = ad.get("server_count", 0)
