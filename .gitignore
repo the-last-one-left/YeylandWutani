@@ -40,6 +40,7 @@ find-sections.ps1
 
 # Claude Code AI working directories
 .claude/
+.firecrawl/
 
 # Operating System
 .DS_Store
