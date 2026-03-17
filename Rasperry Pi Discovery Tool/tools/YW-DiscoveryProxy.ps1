@@ -40,7 +40,7 @@
     .\YW-DiscoveryProxy.ps1
 
     # Custom port / timeout:
-    .\YW-DiscoveryProxy.ps1 -Port 9000 -TimeoutMinutes 30
+    .\YW-DiscoveryProxy.ps1 -Port 9000 -TimeoutMinutes 60
 #>
 
 #Requires -RunAsAdministrator
@@ -48,7 +48,7 @@
 [CmdletBinding()]
 param(
     [int]    $Port           = 8734,
-    [int]    $TimeoutMinutes = 45,
+    [int]    $TimeoutMinutes = 90,
     [string] $Domain         = $env:USERDNSDOMAIN
 )
 
@@ -141,6 +141,47 @@ function Remove-ProxyTxt {
         Remove-DnsServerResourceRecord -ZoneName $Domain -Name $TxtLabel `
             -RRType "TXT" -Force -ErrorAction SilentlyContinue | Out-Null
         $script:DnsCleanOk = $true
+    }
+    catch { }
+}
+
+# ── Windows Firewall management ───────────────────────────────────────────────
+
+$FwRuleName    = "YW-DiscoveryProxy-TCP-$Port"
+$FwRuleCreated = $false
+
+function Add-ProxyFirewallRule {
+    # If a rule for this port/name already exists, leave it alone
+    $existing = Get-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue
+    if ($existing) {
+        Write-KV "Firewall" "Rule already present — skipping" "DarkGray"
+        return
+    }
+    try {
+        New-NetFirewallRule `
+            -DisplayName    $FwRuleName `
+            -Direction      Inbound `
+            -Protocol       TCP `
+            -LocalPort      $Port `
+            -Action         Allow `
+            -Profile        Any `
+            -Description    "Temporary YW Discovery Proxy rule. Auto-removed on script exit." `
+            -ErrorAction    Stop | Out-Null
+        $script:FwRuleCreated = $true
+        Write-KV "Firewall" "Inbound TCP $Port — rule added (auto-removed on exit)" "Green"
+    }
+    catch {
+        Write-KV "Firewall" "Could not add rule: $_" "Yellow"
+        Write-Host "         Manual fallback:" -ForegroundColor DarkGray
+        Write-Host "         netsh advfirewall firewall add rule name=`"YW Proxy`" protocol=TCP dir=in localport=$Port action=allow" `
+            -ForegroundColor DarkGray
+    }
+}
+
+function Remove-ProxyFirewallRule {
+    if (-not $script:FwRuleCreated) { return }
+    try {
+        Remove-NetFirewallRule -DisplayName $FwRuleName -ErrorAction SilentlyContinue | Out-Null
     }
     catch { }
 }
@@ -576,6 +617,7 @@ if (-not $DcIP) {
 }
 
 Register-ProxyTxt
+Add-ProxyFirewallRule
 
 $Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 
@@ -631,9 +673,11 @@ finally {
     $Listener.Stop()
     $Listener.Close()
     Remove-ProxyTxt
+    Remove-ProxyFirewallRule
 
     Write-Host ""
-    Write-Host ("  Requests served : {0}" -f $RequestCount) -ForegroundColor DarkGray
-    Write-Host ("  DNS TXT removed : {0}" -f $script:DnsCleanOk) -ForegroundColor DarkGray
+    Write-Host ("  Requests served  : {0}" -f $RequestCount)         -ForegroundColor DarkGray
+    Write-Host ("  DNS TXT removed  : {0}" -f $script:DnsCleanOk)    -ForegroundColor DarkGray
+    Write-Host ("  Firewall cleaned : {0}" -f $script:FwRuleCreated)  -ForegroundColor DarkGray
     Write-Host "  Proxy stopped cleanly.`n" -ForegroundColor DarkGray
 }

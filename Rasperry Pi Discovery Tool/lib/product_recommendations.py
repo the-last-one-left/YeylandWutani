@@ -100,6 +100,7 @@ def size_environment(scan_results: dict) -> dict:
     speed   = scan_results.get("speedtest", {})
     wifi    = scan_results.get("wifi", {})
     eol     = scan_results.get("eol_detection", {})
+    ad      = scan_results.get("ad_enrichment", {})
 
     # ── Device counts ─────────────────────────────────────────────────────
     device_count = summary.get("total_hosts", len(hosts))
@@ -187,6 +188,51 @@ def size_environment(scan_results: dict) -> dict:
     subnets = recon.get("subnets", [])
     subnet  = subnets[0] if subnets else ""
 
+    # ── Active Directory enrichment (credentialed scan) ───────────────────
+    ad_available = bool(ad.get("available"))
+    if ad_available:
+        # AD server count is authoritative — overrides port-based heuristic
+        ad_server_count = ad.get("server_count", 0)
+        if ad_server_count > 0:
+            server_count = ad_server_count
+
+    ad_context = {}
+    if ad_available:
+        hw = ad.get("hardware", {})
+        # Summarise hardware across all servers for the AI prompt
+        hw_summaries = []
+        for cname, h in hw.items():
+            if h.get("wmi_accessible"):
+                parts = []
+                if h.get("manufacturer") and h.get("model"):
+                    parts.append(f"{h['manufacturer']} {h['model']}")
+                if h.get("cpu_name"):
+                    parts.append(f"{h['cpu_socket_count']}x {h['cpu_name']} "
+                                 f"({h.get('cpu_cores_total','?')} cores)")
+                if h.get("total_ram_gb"):
+                    parts.append(f"{h['total_ram_gb']} GB RAM")
+                if h.get("disks"):
+                    dsz = sum(d.get("size_gb", 0) for d in h["disks"])
+                    parts.append(f"{len(h['disks'])}x disk ({dsz} GB total)")
+                if h.get("uptime_days") is not None:
+                    parts.append(f"up {h['uptime_days']} days")
+                if parts:
+                    hw_summaries.append(f"  {cname}: " + ", ".join(parts))
+
+        ad_context = {
+            "user_count":        ad.get("user_count", 0),
+            "enabled_users":     ad.get("enabled_user_count", 0),
+            "domain_admins":     len(ad.get("domain_admins", [])),
+            "stale_users":       len(ad.get("stale_users", [])),
+            "service_accounts":  len(ad.get("service_accounts", [])),
+            "pwd_never_expires": len(ad.get("password_never_expires", [])),
+            "stale_computers":   len(ad.get("stale_computers", [])),
+            "security_findings": ad.get("security_findings", []),
+            "password_policy":   ad.get("password_policy", {}),
+            "hardware_summaries": hw_summaries,
+            "gpo_count":         len(ad.get("gpos", [])),
+        }
+
     return {
         "device_count":       device_count,
         "server_count":       server_count,
@@ -204,6 +250,9 @@ def size_environment(scan_results: dict) -> dict:
         "consumer_wifi_brands": has_consumer_wifi,
         "eol_server_count":   eol_server_count,
         "subnet":             subnet,
+        # AD credentialed scan data (empty dict if proxy was not used)
+        "ad_available":       ad_available,
+        "ad":                 ad_context,
     }
 
 
@@ -453,7 +502,36 @@ def get_recommendation_narratives(
 - WatchGuard on network:    {'Yes' if env['has_watchguard'] else 'No'}
 - Aruba on network:         {'Yes' if env['has_aruba'] else 'No'}
 - Consumer WiFi detected:   {', '.join(env['consumer_wifi_brands']) or 'No'}
+"""
 
+    # Append AD credentialed data when available — gives AI much richer context
+    if env.get("ad_available") and env.get("ad"):
+        ad = env["ad"]
+        pp = ad.get("password_policy", {})
+        context += f"""
+ACTIVE DIRECTORY (credentialed scan — authoritative data):
+- Total user accounts:      {ad['user_count']}  (enabled: {ad['enabled_users']})
+- Domain Admin accounts:    {ad['domain_admins']}
+- Stale enabled users:      {ad['stale_users']} (inactive >90 days)
+- Service accounts (SPNs):  {ad['service_accounts']}
+- Pwd never expires:        {ad['pwd_never_expires']}
+- Stale computers:          {ad['stale_computers']}
+- Group Policy objects:     {ad['gpo_count']}
+- Password min length:      {pp.get('min_password_length', 'Unknown')} chars
+- Lockout threshold:        {pp.get('lockout_threshold', 'Unknown')} attempts
+- Complexity enforced:      {'Yes' if pp.get('complexity_enabled') else 'No'}
+"""
+        if ad.get("hardware_summaries"):
+            context += "\nSERVER HARDWARE (from WMI/CIM — use for replacement justification):\n"
+            context += "\n".join(ad["hardware_summaries"]) + "\n"
+
+        if ad.get("security_findings"):
+            context += "\nSECURITY FINDINGS FROM AD:\n"
+            for f in ad["security_findings"]:
+                sev = f.get("severity", "info").upper()
+                context += f"- [{sev}] {f.get('title', '')}: {f.get('detail', '')}\n"
+
+    context += f"""
 RECOMMENDED PRODUCTS:
 - Firewall:   {_spec(fw)}
   UTM throughput: {fw.get('utm_throughput_mbps', 'N/A')} Mbps
@@ -622,13 +700,27 @@ def _static_narratives(env: dict, recommendations: dict) -> dict:
         sv_product = sv.get("product", {})
         sv_count   = sv.get("count", 1)
         sv_model   = f"{sv_product.get('vendor', 'Dell')} PowerEdge {sv_product.get('model', '')}"
-        sv_text = (
-            f"With {sv_count} server(s) identified on the network, "
-            f"the {sv_model} provides the right compute and storage capacity "
-            "for consolidation or replacement of ageing hardware. "
-            "Dell PowerEdge servers include iDRAC remote management and "
-            "OpenManage proactive alerting — reducing on-site support requirements."
-        )
+
+        # Use real hardware data from AD credentialed scan if available
+        ad      = env.get("ad", {})
+        hw_sums = ad.get("hardware_summaries", [])
+        if env.get("ad_available") and hw_sums:
+            hw_line = hw_sums[0].strip() if hw_sums else ""
+            sv_text = (
+                f"The credentialed scan identified {sv_count} server(s) with detailed hardware "
+                f"inventory. Current hardware: {hw_line}. "
+                f"The {sv_model} is the recommended replacement or expansion platform — "
+                "providing current-generation performance, iDRAC remote management, and "
+                "OpenManage proactive alerting."
+            )
+        else:
+            sv_text = (
+                f"With {sv_count} server(s) identified on the network, "
+                f"the {sv_model} provides the right compute and storage capacity "
+                "for consolidation or replacement of ageing hardware. "
+                "Dell PowerEdge servers include iDRAC remote management and "
+                "OpenManage proactive alerting — reducing on-site support requirements."
+            )
         if env["eol_server_count"] > 0:
             sv_text = (
                 f"{env['eol_server_count']} end-of-life server(s) were identified "
