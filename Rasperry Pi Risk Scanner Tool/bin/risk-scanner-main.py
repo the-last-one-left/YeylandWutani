@@ -193,27 +193,23 @@ def manage_disk_space(config: dict):
         free_mb, min_free_mb,
     )
 
-    archives = sorted(
-        history.glob("scan_*.json.gz"),
-        key=lambda f: f.stat().st_mtime,
-    )
-
     removed = 0
-    for archive in archives:
-        try:
-            size_kb = archive.stat().st_size / 1024
-            archive.unlink()
-            removed += 1
-            logger.info("  Pruned: %s (%.0f KB)", archive.name, size_kb)
-        except Exception as e:
-            logger.warning("  Could not remove %s: %s", archive.name, e)
-
-        try:
-            usage = shutil.disk_usage(str(history))
-            if usage.free / (1024 * 1024) >= min_free_mb:
+    try:
+        import scan_history as _sh
+        while True:
+            deleted_path = _sh.delete_oldest_scan()
+            if not deleted_path:
                 break
-        except Exception:
-            break
+            removed += 1
+            logger.info("  Pruned oldest scan (archive: %s)", deleted_path or "no file")
+            try:
+                usage = shutil.disk_usage(str(history))
+                if usage.free / (1024 * 1024) >= min_free_mb:
+                    break
+            except Exception:
+                break
+    except Exception as e:
+        logger.warning("scan_history: disk pruning failed: %s", e)
 
     if removed:
         logger.info("Pruned %d archive(s).", removed)
@@ -318,14 +314,21 @@ def save_scan_results(results: dict, data_dir=str(HISTORY_DIR)) -> Path:
 
 
 def load_latest_scan(data_dir=str(HISTORY_DIR)) -> dict | None:
-    """Return the most recent scan from history/, or None if no scans exist."""
+    """Return the most recent scan from SQLite history, falling back to legacy .json.gz."""
+    try:
+        import scan_history as _sh
+        result = _sh.load_latest_scan()
+        if result is not None:
+            return result
+    except Exception as e:
+        logger.warning("scan_history: SQLite load failed (%s) — trying legacy archives", e)
+
     history = Path(data_dir)
     archives = sorted(history.glob("scan_*.json.gz"), key=lambda f: f.stat().st_mtime)
     if not archives:
         return None
-
     latest = archives[-1]
-    logger.info("Loading scan from %s", latest)
+    logger.info("Loading scan from legacy archive %s", latest)
     with gzip.open(latest, "rb") as gz:
         return json.loads(gz.read().decode("utf-8"))
 
@@ -584,6 +587,13 @@ def main():
             )
 
             archive_path = save_scan_results(results)
+
+            try:
+                import scan_history as _sh
+                _sh.save_scan(results, archive_path=str(archive_path))
+                logger.info("scan_history: scan indexed in SQLite.")
+            except Exception as e:
+                logger.warning("scan_history: SQLite save failed: %s", e)
 
             try:
                 get_ai_insights(results, delta, config)

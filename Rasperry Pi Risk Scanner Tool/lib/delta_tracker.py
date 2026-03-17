@@ -7,8 +7,6 @@ Computes differences between consecutive scan results to track
 new findings, resolved findings, and recurring issues over time.
 """
 
-import gzip
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -20,30 +18,13 @@ HISTORY_DIR = Path("/opt/risk-scanner/data/history")
 
 
 def load_previous_scan(data_dir: Path = HISTORY_DIR) -> Optional[dict]:
-    """
-    Load the most recent scan archive from data/history/ (excluding any
-    scan that might be in-progress). Returns None if no prior scan found.
-    """
-    data_dir = Path(data_dir)
-    if not data_dir.exists():
+    """Load the most recent scan from SQLite scan history."""
+    try:
+        import scan_history
+        return scan_history.load_latest_scan()
+    except Exception as e:
+        logger.warning("Could not load previous scan from history DB: %s", e)
         return None
-
-    scan_files = sorted(data_dir.glob("scan_*.json.gz"))
-    if not scan_files:
-        return None
-
-    # Load the most recent file
-    for path in reversed(scan_files):
-        try:
-            with gzip.open(path, "rt", encoding="utf-8") as f:
-                data = json.load(f)
-            logger.info(f"Loaded previous scan: {path.name}")
-            return data
-        except Exception as e:
-            logger.warning(f"Could not load {path.name}: {e}")
-            continue
-
-    return None
 
 
 def _extract_host_findings(host: dict) -> set:
@@ -246,64 +227,11 @@ def format_delta_summary(delta: dict) -> str:
 def get_trend_data(data_dir: Path = HISTORY_DIR, weeks: int = 12) -> list:
     """
     Return [{date, risk_score, critical_count, high_count, kev_count}, ...]
-    for the last `weeks` weekly scans, for trend chart rendering.
-    Loads the most recent scan file per week.
+    for the last `weeks` weekly scans. Pure SQL via scan_history — no file I/O.
     """
-    data_dir = Path(data_dir)
-    if not data_dir.exists():
+    try:
+        import scan_history
+        return scan_history.get_trend_data(weeks=weeks)
+    except Exception as e:
+        logger.warning("Could not load trend data from history DB: %s", e)
         return []
-
-    scan_files = sorted(data_dir.glob("scan_*.json.gz"), reverse=True)
-    if not scan_files:
-        return []
-
-    trend = []
-    seen_weeks = set()
-    max_files = weeks * 7  # at most 1 scan per day for `weeks` weeks
-
-    for path in scan_files[:max_files]:
-        try:
-            with gzip.open(path, "rt", encoding="utf-8") as f:
-                data = json.load(f)
-
-            scan_start = data.get("scan_start", "")
-            if not scan_start:
-                continue
-
-            dt = datetime.fromisoformat(scan_start.replace("Z", "+00:00"))
-            week_key = dt.strftime("%Y-W%W")
-
-            if week_key in seen_weeks:
-                continue
-            seen_weeks.add(week_key)
-
-            risk = data.get("risk", {})
-            hosts = data.get("hosts", [])
-
-            critical_count = sum(1 for h in hosts if h.get("risk_level") == "CRITICAL")
-            high_count = sum(1 for h in hosts if h.get("risk_level") == "HIGH")
-            kev_count = sum(
-                1 for h in hosts
-                for cve in h.get("cve_matches", [])
-                if cve.get("kev")
-            )
-
-            trend.append({
-                "date": dt.strftime("%Y-%m-%d"),
-                "week": week_key,
-                "risk_score": risk.get("environment_score", 0),
-                "critical_count": critical_count,
-                "high_count": high_count,
-                "kev_count": kev_count,
-            })
-
-        except Exception as e:
-            logger.debug(f"Could not parse trend data from {path.name}: {e}")
-            continue
-
-        if len(trend) >= weeks:
-            break
-
-    # Return chronological order
-    trend.reverse()
-    return trend

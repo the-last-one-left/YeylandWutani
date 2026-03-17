@@ -162,12 +162,10 @@ def _load_config() -> dict:
 
 def _get_last_scan_summary() -> Optional[dict]:
     try:
-        history = sorted(HISTORY_DIR.glob("*.json.gz"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if not history:
+        import scan_history as _sh
+        data = _sh.load_latest_scan()
+        if data is None:
             return None
-        latest = history[0]
-        with gzip.open(latest, "rt", encoding="utf-8") as f:
-            data = json.load(f)
 
         hosts_raw = data.get("hosts", [])
         hosts = []
