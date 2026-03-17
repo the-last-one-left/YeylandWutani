@@ -37,6 +37,18 @@ SYSTEMD_DIR="/etc/systemd/system"
 LOG_FILE="/tmp/risk-scanner-install-$(date +%Y%m%d_%H%M%S).log"
 TMP_CREDS="/tmp/.risk-scanner-creds-tmp.json"
 
+# Install mode: fresh | reconfigure | update
+_INSTALL_MODE="fresh"
+_SKIP_CREDS=false
+
+# Pre-populated values loaded from existing config.json (reconfigure mode)
+_EXISTING_TENANT_ID="" _EXISTING_CLIENT_ID="" _EXISTING_CLIENT_SECRET=""
+_EXISTING_FROM_EMAIL="" _EXISTING_TO_EMAIL="" _EXISTING_CC_EMAIL=""
+_EXISTING_HATZ_KEY="" _EXISTING_HATZ_NARRATIVES="false"
+_EXISTING_COMPANY_NAME="" _EXISTING_CLIENT_NAME=""
+_EXISTING_INCLUDE_EXEC_PDF="true" _EXISTING_INCLUDE_TECH_PDF="true"
+_EXISTING_SCAN_TIME="" _EXISTING_REPORT_DAY="" _EXISTING_REPORT_TIME=""
+
 # Branding
 BRAND="Yeyland Wutani"
 PRODUCT="Risk Scanner Pi"
@@ -316,6 +328,100 @@ LOGROTATE
     print_ok "Directories and permissions configured."
 }
 
+# ── Existing install detection ────────────────────────────────────────────────
+
+load_existing_config() {
+    local cfg="${CONFIG_DIR}/config.json"
+    [[ ! -f "${cfg}" ]] && return
+    command -v jq &>/dev/null || return
+
+    _EXISTING_TENANT_ID="$(jq -r '.graph_api.tenant_id // ""' "${cfg}")"
+    _EXISTING_CLIENT_ID="$(jq -r '.graph_api.client_id // ""' "${cfg}")"
+    _EXISTING_CLIENT_SECRET="$(jq -r '.graph_api.client_secret // ""' "${cfg}")"
+    _EXISTING_FROM_EMAIL="$(jq -r '.graph_api.from_email // ""' "${cfg}")"
+    _EXISTING_TO_EMAIL="$(jq -r '.graph_api.to_email // ""' "${cfg}")"
+    _EXISTING_CC_EMAIL="$(jq -r 'if (.graph_api.cc_emails | length) > 0 then .graph_api.cc_emails[0] else "" end' "${cfg}")"
+    _EXISTING_HATZ_KEY="$(jq -r '.hatz_ai.api_key // ""' "${cfg}")"
+    _EXISTING_HATZ_NARRATIVES="$(jq -r '.hatz_ai.enable_per_host_narrative // "false"' "${cfg}")"
+    _EXISTING_COMPANY_NAME="$(jq -r '.reporting.company_name // ""' "${cfg}")"
+    _EXISTING_CLIENT_NAME="$(jq -r '.reporting.client_name // ""' "${cfg}")"
+    _EXISTING_INCLUDE_EXEC_PDF="$(jq -r '.reporting.include_executive_pdf // "true"' "${cfg}")"
+    _EXISTING_INCLUDE_TECH_PDF="$(jq -r '.reporting.include_detail_pdf // "true"' "${cfg}")"
+    _EXISTING_SCAN_TIME="$(jq -r '.scan_schedule.daily_scan_time // ""' "${cfg}")"
+    _EXISTING_REPORT_DAY="$(jq -r '.scan_schedule.weekly_report_day // ""' "${cfg}")"
+    _EXISTING_REPORT_TIME="$(jq -r '.scan_schedule.weekly_report_time // ""' "${cfg}")"
+    print_ok "Existing configuration loaded."
+}
+
+
+detect_existing_install() {
+    [[ ! -f "${CONFIG_DIR}/config.json" ]] && return
+
+    echo ""
+    echo -e "${BOLD}${YELLOW}══ Existing Installation Detected ══${RESET}"
+    echo ""
+
+    local _device _client _to_email _scan_time _report_day
+    _device="$(jq -r '.system.device_name // "unknown"' "${CONFIG_DIR}/config.json" 2>/dev/null || echo "unknown")"
+    _client="$(jq -r '.reporting.client_name // "unknown"' "${CONFIG_DIR}/config.json" 2>/dev/null || echo "unknown")"
+    _to_email="$(jq -r '.graph_api.to_email // "unknown"' "${CONFIG_DIR}/config.json" 2>/dev/null || echo "unknown")"
+    _scan_time="$(jq -r '.scan_schedule.daily_scan_time // "02:00"' "${CONFIG_DIR}/config.json" 2>/dev/null || echo "02:00")"
+    _report_day="$(jq -r '.scan_schedule.weekly_report_day // "Monday"' "${CONFIG_DIR}/config.json" 2>/dev/null || echo "Monday")"
+
+    echo "  Device:      ${_device}"
+    echo "  Client:      ${_client}"
+    echo "  Reports to:  ${_to_email}"
+    echo "  Scan time:   ${_scan_time} daily"
+    echo "  Report day:  ${_report_day}"
+    echo ""
+    echo "  What would you like to do?"
+    echo ""
+    echo "    [r] Reconfigure  — re-run config wizard with current values pre-filled,"
+    echo "                       credentials preserved"
+    echo "    [u] Update       — pull latest code and update packages, keep all config"
+    echo "    [f] Full reinstall — complete wipe and fresh install"
+    echo "                       ${RED}(destroys all scan history and credentials)${RESET}"
+    echo "    [q] Quit"
+    echo ""
+
+    local _choice
+    while true; do
+        prompt_msg "Choice [r/u/f/q]:"; _choice="$(read_tty)"
+        case "${_choice,,}" in
+            r)
+                _INSTALL_MODE="reconfigure"
+                load_existing_config
+                break
+                ;;
+            u)
+                _INSTALL_MODE="update"
+                break
+                ;;
+            f)
+                echo ""
+                print_warn "This will permanently delete all scan history, credentials, and configuration."
+                prompt_msg "Type 'yes' to confirm a full reinstall (or anything else to go back):"; local _confirm; _confirm="$(read_tty)"
+                if [[ "${_confirm}" == "yes" ]]; then
+                    _INSTALL_MODE="fresh"
+                    break
+                else
+                    echo "  Cancelled — returning to menu."
+                fi
+                ;;
+            q)
+                echo "Aborted."
+                exit 0
+                ;;
+            *)
+                print_error "Please enter r, u, f, or q."
+                ;;
+        esac
+    done
+
+    info "Install mode: ${_INSTALL_MODE}"
+}
+
+
 # ── Step 6 & 7: Configuration wizard and config.json write ───────────────────
 
 # Read from /dev/tty so the wizard works even when piped through: curl | sudo bash
@@ -365,27 +471,41 @@ run_config_wizard() {
     echo -e "  ${BOLD}${CYAN}── Graph API ──────────────────────────────────────────────────────${RESET}"
 
     local TENANT_ID="" CLIENT_ID="" CLIENT_SECRET="" FROM_EMAIL="" TO_EMAIL="" CC_EMAIL=""
+    local _hint=""
     while [[ -z "${TENANT_ID}" ]]; do
-        prompt_msg "Azure Tenant ID (required):"; TENANT_ID="$(read_tty)"
+        _hint=""; [[ -n "${_EXISTING_TENANT_ID}" ]] && _hint=" (current: ${_EXISTING_TENANT_ID}, Enter to keep)"
+        prompt_msg "Azure Tenant ID (required)${_hint}:"; TENANT_ID="$(read_tty)"
+        [[ -z "${TENANT_ID}" && -n "${_EXISTING_TENANT_ID}" ]] && TENANT_ID="${_EXISTING_TENANT_ID}"
         [[ -z "${TENANT_ID}" ]] && print_error "Tenant ID is required."
     done
     while [[ -z "${CLIENT_ID}" ]]; do
-        prompt_msg "Azure Client ID (required):"; CLIENT_ID="$(read_tty)"
+        _hint=""; [[ -n "${_EXISTING_CLIENT_ID}" ]] && _hint=" (current: ${_EXISTING_CLIENT_ID}, Enter to keep)"
+        prompt_msg "Azure Client ID (required)${_hint}:"; CLIENT_ID="$(read_tty)"
+        [[ -z "${CLIENT_ID}" && -n "${_EXISTING_CLIENT_ID}" ]] && CLIENT_ID="${_EXISTING_CLIENT_ID}"
         [[ -z "${CLIENT_ID}" ]] && print_error "Client ID is required."
     done
     while [[ -z "${CLIENT_SECRET}" ]]; do
-        prompt_msg "Azure Client Secret (required, hidden):"; CLIENT_SECRET="$(read_tty_secret)"; echo ""
+        _hint=""; [[ -n "${_EXISTING_CLIENT_SECRET}" ]] && _hint=" (currently set, Enter to keep)"
+        prompt_msg "Azure Client Secret (required, hidden)${_hint}:"; CLIENT_SECRET="$(read_tty_secret)"; echo ""
+        [[ -z "${CLIENT_SECRET}" && -n "${_EXISTING_CLIENT_SECRET}" ]] && CLIENT_SECRET="${_EXISTING_CLIENT_SECRET}"
         [[ -z "${CLIENT_SECRET}" ]] && print_error "Client Secret is required."
     done
     while [[ -z "${FROM_EMAIL}" ]]; do
-        prompt_msg "From email address (required):"; FROM_EMAIL="$(read_tty)"
+        _hint=""; [[ -n "${_EXISTING_FROM_EMAIL}" ]] && _hint=" (current: ${_EXISTING_FROM_EMAIL}, Enter to keep)"
+        prompt_msg "From email address (required)${_hint}:"; FROM_EMAIL="$(read_tty)"
+        [[ -z "${FROM_EMAIL}" && -n "${_EXISTING_FROM_EMAIL}" ]] && FROM_EMAIL="${_EXISTING_FROM_EMAIL}"
         [[ -z "${FROM_EMAIL}" ]] && print_error "From email is required."
     done
     while [[ -z "${TO_EMAIL}" ]]; do
-        prompt_msg "To email address (required):"; TO_EMAIL="$(read_tty)"
+        _hint=""; [[ -n "${_EXISTING_TO_EMAIL}" ]] && _hint=" (current: ${_EXISTING_TO_EMAIL}, Enter to keep)"
+        prompt_msg "To email address (required)${_hint}:"; TO_EMAIL="$(read_tty)"
+        [[ -z "${TO_EMAIL}" && -n "${_EXISTING_TO_EMAIL}" ]] && TO_EMAIL="${_EXISTING_TO_EMAIL}"
         [[ -z "${TO_EMAIL}" ]] && print_error "To email is required."
     done
-    prompt_msg "CC email address (optional, press Enter to skip):"; CC_EMAIL="$(read_tty)"
+    local _cc_hint="optional, press Enter to skip"
+    [[ -n "${_EXISTING_CC_EMAIL}" ]] && _cc_hint="current: ${_EXISTING_CC_EMAIL}, Enter to keep"
+    prompt_msg "CC email address (${_cc_hint}):"; CC_EMAIL="$(read_tty)"
+    [[ -z "${CC_EMAIL}" && -n "${_EXISTING_CC_EMAIL}" ]] && CC_EMAIL="${_EXISTING_CC_EMAIL}"
 
     # ── Hatz AI ────────────────────────────────────────────────────────────
     echo ""
@@ -394,35 +514,57 @@ run_config_wizard() {
     echo "  Leave blank to skip — can be enabled later via update-config.sh"
     echo ""
     local HATZ_AI_KEY="" HATZ_NARRATIVES="false"
-    prompt_msg "Hatz AI API key (press Enter to skip):"; HATZ_AI_KEY="$(read_tty)"
+    local _hatz_hint="press Enter to skip"
+    [[ -n "${_EXISTING_HATZ_KEY}" ]] && _hatz_hint="currently set, Enter to keep"
+    prompt_msg "Hatz AI API key (${_hatz_hint}):"; HATZ_AI_KEY="$(read_tty)"
+    [[ -z "${HATZ_AI_KEY}" && -n "${_EXISTING_HATZ_KEY}" ]] && HATZ_AI_KEY="${_EXISTING_HATZ_KEY}"
     if [[ -n "${HATZ_AI_KEY}" ]]; then
-        prompt_msg "Enable per-host AI risk narratives? (y/N):"; local _yn; _yn="$(read_tty)"
-        [[ "${_yn,,}" == "y" ]] && HATZ_NARRATIVES="true"
+        local _narr_default="N"; [[ "${_EXISTING_HATZ_NARRATIVES}" == "true" ]] && _narr_default="Y"
+        prompt_msg "Enable per-host AI risk narratives? (y/N, current: ${_narr_default}):"; local _yn; _yn="$(read_tty)"
+        if [[ -z "${_yn}" ]]; then
+            HATZ_NARRATIVES="${_EXISTING_HATZ_NARRATIVES:-false}"
+        elif [[ "${_yn,,}" == "y" ]]; then
+            HATZ_NARRATIVES="true"
+        fi
     fi
 
     # ── Reporting ──────────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}${CYAN}── Reporting ──────────────────────────────────────────────────────${RESET}"
     local COMPANY_NAME="" CLIENT_NAME="" INCLUDE_EXEC_PDF="true" INCLUDE_TECH_PDF="true"
-    prompt_msg "Company name (default: Yeyland Wutani LLC):"; COMPANY_NAME="$(read_tty)"
-    [[ -z "${COMPANY_NAME}" ]] && COMPANY_NAME="Yeyland Wutani LLC"
+    local _co_default="${_EXISTING_COMPANY_NAME:-Yeyland Wutani LLC}"
+    prompt_msg "Company name (default: ${_co_default}):"; COMPANY_NAME="$(read_tty)"
+    [[ -z "${COMPANY_NAME}" ]] && COMPANY_NAME="${_co_default}"
     while [[ -z "${CLIENT_NAME}" ]]; do
-        prompt_msg "Client name (required):"; CLIENT_NAME="$(read_tty)"
+        _hint=""; [[ -n "${_EXISTING_CLIENT_NAME}" ]] && _hint=" (current: ${_EXISTING_CLIENT_NAME}, Enter to keep)"
+        prompt_msg "Client name (required)${_hint}:"; CLIENT_NAME="$(read_tty)"
+        [[ -z "${CLIENT_NAME}" && -n "${_EXISTING_CLIENT_NAME}" ]] && CLIENT_NAME="${_EXISTING_CLIENT_NAME}"
         [[ -z "${CLIENT_NAME}" ]] && print_error "Client name is required."
     done
-    prompt_msg "Include Executive Summary PDF? (Y/n, default Y):"; local _exec; _exec="$(read_tty)"
-    [[ "${_exec,,}" == "n" ]] && INCLUDE_EXEC_PDF="false"
-    prompt_msg "Include Technical Detail PDF? (Y/n, default Y):"; local _tech; _tech="$(read_tty)"
-    [[ "${_tech,,}" == "n" ]] && INCLUDE_TECH_PDF="false"
+    local _exec_cur="Y"; [[ "${_EXISTING_INCLUDE_EXEC_PDF}" == "false" ]] && _exec_cur="N"
+    prompt_msg "Include Executive Summary PDF? (Y/n, current: ${_exec_cur}):"; local _exec; _exec="$(read_tty)"
+    if [[ -z "${_exec}" ]]; then
+        INCLUDE_EXEC_PDF="${_EXISTING_INCLUDE_EXEC_PDF:-true}"
+    elif [[ "${_exec,,}" == "n" ]]; then
+        INCLUDE_EXEC_PDF="false"
+    fi
+    local _tech_cur="Y"; [[ "${_EXISTING_INCLUDE_TECH_PDF}" == "false" ]] && _tech_cur="N"
+    prompt_msg "Include Technical Detail PDF? (Y/n, current: ${_tech_cur}):"; local _tech; _tech="$(read_tty)"
+    if [[ -z "${_tech}" ]]; then
+        INCLUDE_TECH_PDF="${_EXISTING_INCLUDE_TECH_PDF:-true}"
+    elif [[ "${_tech,,}" == "n" ]]; then
+        INCLUDE_TECH_PDF="false"
+    fi
 
     # ── Scan schedule ──────────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}${CYAN}── Scan Schedule ──────────────────────────────────────────────────${RESET}"
     SCAN_TIME="" REPORT_DAY="" REPORT_TIME="" RUN_NOW="n"
 
+    local _st_default="${_EXISTING_SCAN_TIME:-02:00}"
     while true; do
-        prompt_msg "Daily scan time in HH:MM 24-hour format (default: 02:00):"; SCAN_TIME="$(read_tty)"
-        [[ -z "${SCAN_TIME}" ]] && SCAN_TIME="02:00"
+        prompt_msg "Daily scan time in HH:MM 24-hour format (default: ${_st_default}):"; SCAN_TIME="$(read_tty)"
+        [[ -z "${SCAN_TIME}" ]] && SCAN_TIME="${_st_default}"
         if validate_time "${SCAN_TIME}"; then
             print_ok "Scan time set to ${SCAN_TIME}"; break
         else
@@ -430,9 +572,10 @@ run_config_wizard() {
         fi
     done
 
+    local _rd_default="${_EXISTING_REPORT_DAY:-Monday}"
     while true; do
-        prompt_msg "Weekly report day (default: Monday):"; REPORT_DAY="$(read_tty)"
-        [[ -z "${REPORT_DAY}" ]] && REPORT_DAY="Monday"
+        prompt_msg "Weekly report day (default: ${_rd_default}):"; REPORT_DAY="$(read_tty)"
+        [[ -z "${REPORT_DAY}" ]] && REPORT_DAY="${_rd_default}"
         if validate_day "${REPORT_DAY}"; then
             REPORT_DAY="$(cap_first "$(echo "${REPORT_DAY}" | tr '[:upper:]' '[:lower:]')")"
             print_ok "Report day set to ${REPORT_DAY}"; break
@@ -441,9 +584,10 @@ run_config_wizard() {
         fi
     done
 
+    local _rt_default="${_EXISTING_REPORT_TIME:-06:00}"
     while true; do
-        prompt_msg "Weekly report time in HH:MM 24-hour format (default: 06:00):"; REPORT_TIME="$(read_tty)"
-        [[ -z "${REPORT_TIME}" ]] && REPORT_TIME="06:00"
+        prompt_msg "Weekly report time in HH:MM 24-hour format (default: ${_rt_default}):"; REPORT_TIME="$(read_tty)"
+        [[ -z "${REPORT_TIME}" ]] && REPORT_TIME="${_rt_default}"
         if validate_time "${REPORT_TIME}"; then
             print_ok "Report time set to ${REPORT_TIME}"; break
         else
@@ -458,6 +602,24 @@ run_config_wizard() {
     # ── Credential profiles ────────────────────────────────────────────────
     echo ""
     echo -e "  ${BOLD}${CYAN}── Credential Profiles ────────────────────────────────────────────${RESET}"
+
+    # In reconfigure mode, offer to keep existing credentials
+    if [[ "${_INSTALL_MODE}" == "reconfigure" ]] && [[ -f "${CONFIG_DIR}/credentials.enc" ]]; then
+        echo "  Existing credential profiles are encrypted and stored on this device."
+        echo "  You can manage them via the web dashboard (port 8080) or add-credential.sh."
+        echo ""
+        prompt_msg "Add new credential profiles now? (y/N):"; local _addmore_now; _addmore_now="$(read_tty)"
+        if [[ "${_addmore_now,,}" != "y" ]]; then
+            _SKIP_CREDS=true
+            info "Preserving existing credentials — skipping credential prompts."
+            # Still need to write config.json — fall through to Step 7
+            print_step "Step 7: Writing configuration"
+            # (wizard variables are all set, jump to config write)
+        fi
+    fi
+
+    if [[ "${_SKIP_CREDS}" == "false" ]]; then
+
     echo "  At least one credential profile is required."
     echo "  Profiles allow the scanner to authenticate to hosts during assessment."
     echo ""
@@ -602,6 +764,8 @@ run_config_wizard() {
     echo "${CREDS_JSON}" > "${TMP_CREDS}"
     chmod 600 "${TMP_CREDS}"
 
+    fi  # end if [[ "${_SKIP_CREDS}" == "false" ]]
+
     # ── Write config.json ──────────────────────────────────────────────────
     print_step "Step 7: Writing configuration"
 
@@ -706,6 +870,11 @@ run_config_wizard() {
 
 encrypt_credentials() {
     print_step "Step 8: Encrypting credential profiles"
+
+    if [[ "${_SKIP_CREDS}" == "true" ]]; then
+        print_ok "Preserving existing encrypted credentials (reconfigure mode)."
+        return
+    fi
 
     if [[ ! -f "${TMP_CREDS}" ]]; then
         print_warn "No temporary credentials file found — skipping encryption step."
@@ -1012,7 +1181,30 @@ main() {
     check_internet
     check_git
 
-    # Installation steps
+    # Detect existing install and ask user what to do
+    detect_existing_install
+
+    if [[ "${_INSTALL_MODE}" == "update" ]]; then
+        # ── Update mode: refresh code/packages, keep all config ──────────────
+        install_packages       # Step 1 — update packages
+        clone_repo             # Step 3 — pull latest code
+        setup_venv             # Step 4 — rebuild venv / update deps
+        install_services       # Step 9 — reload systemd units
+        init_vuln_db           # Step 11 — update vuln DB
+        print_success_banner
+        return
+    fi
+
+    if [[ "${_INSTALL_MODE}" == "reconfigure" ]]; then
+        # ── Reconfigure mode: re-run wizard, reload services ─────────────────
+        run_config_wizard      # Steps 6 & 7 — wizard with pre-filled defaults
+        encrypt_credentials    # Step 8 — skip if keeping existing creds
+        install_services       # Step 9 — reload timers with new schedule
+        print_success_banner
+        return
+    fi
+
+    # ── Fresh install (default) ───────────────────────────────────────────────
     install_packages       # Step 1
     create_service_user    # Step 2
     clone_repo             # Step 3
