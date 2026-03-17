@@ -129,6 +129,16 @@ def gather_system_info() -> dict:
     info["dns_servers"] = get_dns_servers()
     logger.info(f"  DNS servers: {', '.join(info['dns_servers']) or 'none'}")
 
+    # LAN IP (primary non-loopback interface)
+    lan_ip = _get_primary_lan_ip(interfaces)
+    info["lan_ip"] = lan_ip
+    logger.info(f"  LAN IP: {lan_ip or 'unknown'}")
+
+    # Public / WAN IP (outbound as seen by the internet)
+    logger.info("  Fetching public (WAN) IP address...")
+    wan_ip = _get_public_ip()
+    info["wan_ip"] = wan_ip
+    logger.info(f"  WAN IP: {wan_ip or 'unavailable'}")
     elapsed = time.time() - t0
     logger.info(f"System info gathered in {elapsed:.1f}s")
     return info
@@ -156,6 +166,51 @@ def _get_boot_time() -> str:
     except Exception as e:
         logger.debug(f"Could not read boot time from /proc/stat: {e}")
     return "Unknown"
+
+
+def _get_public_ip() -> str:
+    """
+    Fetch the WAN/public IP address of this device by querying a lightweight
+    external service.  Tries three providers in order; returns empty string on
+    total failure so callers can show 'N/A' gracefully.
+    """
+    import urllib.request
+    import urllib.error
+
+    providers = [
+        ("https://api.ipify.org",           "text"),
+        ("https://checkip.amazonaws.com",   "text"),
+        ("https://api4.my-ip.io/ip.json",   "json_ip"),
+    ]
+    for url, fmt in providers:
+        try:
+            with urllib.request.urlopen(url, timeout=8) as resp:
+                raw = resp.read().decode("utf-8").strip()
+            if fmt == "json_ip":
+                import json as _json
+                raw = _json.loads(raw).get("ip", "")
+            if raw:
+                return raw
+        except Exception as exc:
+            logger.debug(f"Public IP lookup failed ({url}): {exc}")
+    return ""
+
+
+def _get_primary_lan_ip(interfaces: list) -> str:
+    """
+    Return the IP of the first non-loopback interface that has a routable
+    address, falling back to socket.gethostbyname if none found.
+    """
+    for iface in interfaces:
+        ip = iface.get("ip", "")
+        name = iface.get("name", "")
+        if ip and not ip.startswith("127.") and name != "lo":
+            return ip
+    # Last-resort fallback
+    try:
+        return socket.gethostbyname(socket.gethostname())
+    except Exception:
+        return ""
 
 
 def _run_self_update() -> bool:
@@ -220,6 +275,8 @@ def build_checkin_email(info: dict, config: dict) -> tuple:
     gateway = _e(info.get("default_gateway"))
     gateway_hostname = _e(info.get("gateway_hostname"))
     dns_servers = html.escape(", ".join(info.get("dns_servers", []))) or "N/A"
+    lan_ip = _e(info.get("lan_ip")) or "N/A"
+    wan_ip = _e(info.get("wan_ip")) or "N/A"
     uptime = _e(info.get("uptime", "N/A"))
     timestamp = _e(info.get("timestamp", datetime.now().isoformat()))
 
@@ -326,8 +383,16 @@ def build_checkin_email(info: dict, config: dict) -> tuple:
               </h2>
               <table width="100%" cellpadding="0" cellspacing="0" style="margin-bottom:24px;">
                 <tr>
-                  <td style="padding:5px 0; color:#555; font-size:13px; width:160px;">Default Gateway</td>
-                  <td style="padding:5px 0; color:#222; font-size:13px; font-weight:bold;">{gateway}</td>
+                  <td style="padding:5px 0; color:#555; font-size:13px; width:160px;">LAN IP Address</td>
+                  <td style="padding:5px 0; color:#222; font-size:13px; font-weight:bold;">{lan_ip}</td>
+                </tr>
+                <tr>
+                  <td style="padding:5px 0; color:#555; font-size:13px;">WAN / Public IP</td>
+                  <td style="padding:5px 0; color:#222; font-size:13px; font-weight:bold;">{wan_ip}</td>
+                </tr>
+                <tr>
+                  <td style="padding:5px 0; color:#555; font-size:13px;">Default Gateway</td>
+                  <td style="padding:5px 0; color:#222; font-size:13px;">{gateway}</td>
                 </tr>
                 <tr>
                   <td style="padding:5px 0; color:#555; font-size:13px;">Gateway Hostname</td>
