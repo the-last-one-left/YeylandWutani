@@ -5991,13 +5991,8 @@ def run_discovery(progress_callback=None) -> dict:
         phase22_kismet, wifi_results, config,
         config_key="enable_kismet")
 
-    delta_results = _run_phase(
-        "23", "Delta reporting",
-        phase23_delta_reporting, hosts, config,
-        config_key="enable_delta_reporting")
-
     topology_diagram = _run_phase(
-        "24", "Network topology diagram",
+        "23", "Network topology diagram",
         phase24_topology_diagram, hosts, topology, recon)
 
     end_time = datetime.now()
@@ -6055,7 +6050,6 @@ def run_discovery(progress_callback=None) -> dict:
         "enum4linux": enum4linux_results,
         "p0f": p0f_results,
         "kismet": kismet_results,
-        "delta": delta_results,
         "topology_diagram": topology_diagram,
         # Operational statistics
         "phase_timings": phase_timings,
