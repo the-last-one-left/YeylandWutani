@@ -5368,125 +5368,16 @@ def phase22_kismet(wifi_results: dict, config: dict) -> dict:
     return result
 
 
-# ── Phase 23: Delta Reporting (New / Removed Devices) ─────────────────────
+# ── Phase 23: Network Topology Diagram ────────────────────────────────────
 
-PREVIOUS_HOSTS_FILE = DATA_DIR / "previous-hosts.json"
-
-
-def phase23_delta_reporting(hosts: list, config: dict) -> dict:
-    """Phase 23: Compare current hosts to previous scan for delta reporting.
-
-    Stores current host list to previous-hosts.json after comparison.
-    Returns new_devices, removed_devices, new_ports, and new_flags dicts.
-    """
-    logger.info("[Phase 23] Delta Reporting...")
-    result = {
-        "has_previous": False,
-        "new_devices": [],
-        "removed_devices": [],
-        "new_ports": {},
-        "new_flags": {},
-        "previous_scan_time": "",
-    }
-
-    # Load previous hosts
-    prev_hosts_by_ip: dict = {}
-    if PREVIOUS_HOSTS_FILE.exists():
-        try:
-            with open(PREVIOUS_HOSTS_FILE) as f:
-                prev_data = json.load(f)
-            result["previous_scan_time"] = prev_data.get("scan_time", "")
-            for h in prev_data.get("hosts", []):
-                prev_hosts_by_ip[h["ip"]] = h
-            result["has_previous"] = bool(prev_hosts_by_ip)
-        except Exception as e:
-            logger.debug(f"  Delta: failed to load previous hosts: {e}")
-
-    current_by_ip = {h["ip"]: h for h in hosts}
-
-    if result["has_previous"]:
-        # New devices (in current but not previous)
-        for ip, host in current_by_ip.items():
-            if ip not in prev_hosts_by_ip:
-                result["new_devices"].append({
-                    "ip": ip,
-                    "hostname": host.get("hostname", "N/A"),
-                    "vendor": host.get("vendor", "Unknown"),
-                    "category": host.get("category", "Unknown"),
-                    "open_ports": host.get("open_ports", []),
-                })
-
-        # Removed devices (in previous but not current)
-        for ip, prev_host in prev_hosts_by_ip.items():
-            if ip not in current_by_ip:
-                result["removed_devices"].append({
-                    "ip": ip,
-                    "hostname": prev_host.get("hostname", "N/A"),
-                    "vendor": prev_host.get("vendor", "Unknown"),
-                })
-
-        # New ports (ports in current but not in previous for same host)
-        for ip, host in current_by_ip.items():
-            if ip in prev_hosts_by_ip:
-                prev_ports = set(prev_hosts_by_ip[ip].get("open_ports", []))
-                curr_ports = set(host.get("open_ports", []))
-                added_ports = sorted(curr_ports - prev_ports)
-                if added_ports:
-                    result["new_ports"][ip] = added_ports
-
-        # New flags (security flags in current but not in previous)
-        for ip, host in current_by_ip.items():
-            if ip in prev_hosts_by_ip:
-                prev_flags = {f["flag"] for f in prev_hosts_by_ip[ip].get("security_flags", [])}
-                curr_flags = host.get("security_flags", [])
-                new_f = [f for f in curr_flags if f["flag"] not in prev_flags]
-                if new_f:
-                    result["new_flags"][ip] = new_f
-
-        logger.info(
-            f"  Delta: {len(result['new_devices'])} new, "
-            f"{len(result['removed_devices'])} removed, "
-            f"{len(result['new_ports'])} hosts with new ports"
-        )
-    else:
-        logger.info("  Delta: no previous scan data found — this is the baseline.")
-
-    # Save current hosts for next scan comparison
-    try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
-        save_data = {
-            "scan_time": datetime.now().isoformat(),
-            "hosts": [
-                {
-                    "ip": h["ip"],
-                    "hostname": h.get("hostname", "N/A"),
-                    "vendor": h.get("vendor", "Unknown"),
-                    "category": h.get("category", "Unknown"),
-                    "open_ports": h.get("open_ports", []),
-                    "security_flags": h.get("security_flags", []),
-                }
-                for h in hosts
-            ],
-        }
-        with open(PREVIOUS_HOSTS_FILE, "w") as f:
-            json.dump(save_data, f, indent=2)
-        logger.debug(f"  Delta: saved {len(hosts)} hosts to {PREVIOUS_HOSTS_FILE}")
-    except Exception as e:
-        logger.warning(f"  Delta: failed to save host snapshot: {e}")
-
-    return result
-
-
-# ── Phase 24: Network Topology Diagram ────────────────────────────────────
-
-def phase24_topology_diagram(hosts: list, topology: dict, recon: dict) -> dict:
-    """Phase 24: Generate an ASCII network topology diagram from traceroute data.
+def phase23_topology_diagram(hosts: list, topology: dict, recon: dict) -> dict:
+    """Phase 23: Generate an ASCII network topology diagram from traceroute data.
 
     Parses the hop data already collected in Phase 5 to build a simple
     hop-graph, then renders an ASCII art network map showing the gateway,
     subnets, and key devices.
     """
-    logger.info("[Phase 24] Network Topology Diagram...")
+    logger.info("[Phase 23] Network Topology Diagram...")
 
     gw_ip = recon.get("default_gateway", "")
     hops_by_target = topology.get("hops_by_target", {})
@@ -5993,7 +5884,7 @@ def run_discovery(progress_callback=None) -> dict:
 
     topology_diagram = _run_phase(
         "23", "Network topology diagram",
-        phase24_topology_diagram, hosts, topology, recon)
+        phase23_topology_diagram, hosts, topology, recon)
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
