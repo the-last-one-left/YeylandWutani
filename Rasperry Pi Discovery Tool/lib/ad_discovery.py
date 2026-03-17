@@ -157,7 +157,7 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
                 for chunk in rdata.strings:
                     txt = chunk.decode("utf-8", errors="ignore")
                     if txt.startswith("ywp-v1|"):
-                        logger.debug(f"[Phase 24]   dnspython targeted: found TXT at {record} via {dc_ip}")
+                        logger.info(f"[Phase 24]   dnspython targeted: found TXT at {record} via {dc_ip}")
                         return txt
         except Exception as e:
             logger.debug(f"[Phase 24]   dnspython targeted {dc_ip} for {record}: {e}")
@@ -168,7 +168,7 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
                 for chunk in rdata.strings:
                     txt = chunk.decode("utf-8", errors="ignore")
                     if txt.startswith("ywp-v1|"):
-                        logger.debug(f"[Phase 24]   dnspython targeted (no dot): found TXT at {record} via {dc_ip}")
+                        logger.info(f"[Phase 24]   dnspython targeted (no dot): found TXT at {record} via {dc_ip}")
                         return txt
         except Exception:
             pass
@@ -186,7 +186,7 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
                 for chunk in rdata.strings:
                     txt = chunk.decode("utf-8", errors="ignore")
                     if txt.startswith("ywp-v1|"):
-                        logger.debug(f"[Phase 24]   dnspython system resolver: found TXT at {record}")
+                        logger.info(f"[Phase 24]   dnspython system resolver: found TXT at {record}")
                         return txt
         except Exception as e:
             logger.debug(f"[Phase 24]   dnspython system resolver for {record}: {e}")
@@ -203,7 +203,7 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
         for line in r.stdout.splitlines():
             m = re.search(r'ywp-v1\|[^\s"]+', line)
             if m:
-                logger.debug(f"[Phase 24]   dig: found TXT at {record} via {dc_ip}")
+                logger.info(f"[Phase 24]   dig: found TXT at {record} via {dc_ip}")
                 return m.group(0)
     except FileNotFoundError:
         pass
@@ -221,11 +221,12 @@ def _query_txt(dc_ip: str, domain: str) -> Optional[str]:
         for line in combined.splitlines():
             m = re.search(r'ywp-v1\|[^\s"]+', line)
             if m:
-                logger.debug(f"[Phase 24]   nslookup: found TXT at {record} via {dc_ip}")
+                logger.info(f"[Phase 24]   nslookup: found TXT at {record} via {dc_ip}")
                 return m.group(0)
     except Exception as e:
         logger.debug(f"[Phase 24]   nslookup fallback failed: {e}")
 
+    logger.info(f"[Phase 24]   TXT not found at {_TXT_LABEL}.{domain} via {dc_ip}")
     return None
 
 
@@ -335,6 +336,7 @@ def find_ad_proxy(
         logger.debug(f"[Phase 24]   {dc_ip}: trying domains {dc_domains}")
 
         for domain in dc_domains:
+            logger.info(f"[Phase 24]   Trying {dc_ip} × domain '{domain}' ...")
             txt = _query_txt(dc_ip, domain)
             if not txt:
                 logger.debug(f"[Phase 24]   {dc_ip}: no TXT at {_TXT_LABEL}.{domain}")
@@ -368,7 +370,7 @@ def find_ad_proxy(
                         f"[Phase 24]   {dc_ip}:{port} ping returned HTTP {resp.status_code}"
                     )
             except Exception as e:
-                logger.debug(f"[Phase 24]   {dc_ip}:{port} ping failed: {e}")
+                logger.info(f"[Phase 24]   {dc_ip}:{port} /ping failed: {e}")
 
     logger.info(
         f"[Phase 24] Exhausted all {len(dc_ips)} DC(s) × domain combinations — "

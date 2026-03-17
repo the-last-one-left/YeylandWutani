@@ -5803,6 +5803,26 @@ def run_discovery(progress_callback=None) -> dict:
         "status": "ok" if config.get("enable_llmnr_capture", True) else "skipped",
     })
 
+    # Phase 24: AD credentialed enrichment via YW Discovery Proxy (optional).
+    # Runs here — right after Phase 4 — so AD hostnames, OS, and DHCP leases
+    # are available to enrich all subsequent phases (5–23).
+    # dhcp_results is not yet populated (Phase 10 runs later), but that is fine:
+    # _domain_candidates() uses it only as a hint; rootDSE is the primary source.
+    dhcp_results = {}
+
+    def _phase24_ad_enrichment():
+        if not _AD_ENRICHMENT_AVAILABLE:
+            logger.debug("[Phase 24] ad_discovery module not available — skipping.")
+            return {"available": False}
+        return _run_ad_enrichment(hosts, recon, dhcp_results, config)
+
+    ad_results = _run_phase(
+        "24", "Active Directory credentialed enrichment",
+        _phase24_ad_enrichment,
+        config_key="enable_ad_enrichment",
+        default={"available": False},
+    )
+
     topology = _run_phase("5", "Topology mapping",
                           phase5_topology, recon, config)
 
@@ -5894,22 +5914,6 @@ def run_discovery(progress_callback=None) -> dict:
     topology_diagram = _run_phase(
         "23", "Network topology diagram",
         phase23_topology_diagram, hosts, topology, recon)
-
-    # Phase 24: AD credentialed enrichment via YW Discovery Proxy (optional).
-    # Mutates hosts in-place (adds hostname, os, ad_computer, hardware fields).
-    # Returns summary dict; empty if proxy not present — scan still completes normally.
-    def _phase24_ad_enrichment():
-        if not _AD_ENRICHMENT_AVAILABLE:
-            logger.debug("[Phase 24] ad_discovery module not available — skipping.")
-            return {"available": False}
-        return _run_ad_enrichment(hosts, recon, dhcp_results, config)
-
-    ad_results = _run_phase(
-        "24", "Active Directory credentialed enrichment",
-        _phase24_ad_enrichment,
-        config_key="enable_ad_enrichment",
-        default={"available": False},
-    )
 
     end_time = datetime.now()
     duration = (end_time - start_time).total_seconds()
