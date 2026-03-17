@@ -114,40 +114,26 @@ $TxtValue   = "ywp-v1|token=$Token|port=$Port"
 $DnsCleanOk = $false
 
 function Register-ProxyTxt {
-    if (-not $DNSAvailable) {
-        Write-KV "DNS TXT" "SKIPPED (DnsServer module unavailable)" "Yellow"
-        return
-    }
-    try {
-        # Remove any stale record silently (record may not exist — suppress all errors)
-        try {
-            Remove-DnsServerResourceRecord -ZoneName $Domain -Name $TxtLabel `
-                -RRType "TXT" -Force -ErrorAction Stop | Out-Null
-        } catch { <# no-op — record simply didn't exist yet #> }
+    # Use dnscmd.exe — always present on DCs, no module version issues
+    $ttlSec = $TimeoutMinutes * 60
 
-        Add-DnsServerResourceRecord `
-            -ZoneName $Domain -Name $TxtLabel -Txt `
-            -DescriptiveText $TxtValue `
-            -TimeToLive (New-TimeSpan -Minutes $TimeoutMinutes) `
-            -ErrorAction Stop | Out-Null
+    # Remove any stale record first (ignore exit code — record may not exist)
+    & dnscmd . /RecordDelete $Domain $TxtLabel TXT /f 2>$null | Out-Null
 
+    $out = & dnscmd . /RecordAdd $Domain $TxtLabel $ttlSec TXT $TxtValue 2>&1
+    if ($LASTEXITCODE -eq 0) {
         Write-KV "DNS TXT" "${TxtLabel}.${Domain}  (auto-discovery)" "Green"
-    }
-    catch {
-        Write-KV "DNS TXT" "FAILED: $_" "Yellow"
+    } else {
+        Write-KV "DNS TXT" "FAILED: $out" "Yellow"
         Write-Host "         Pi will still connect if pointed at this DC directly." `
             -ForegroundColor DarkGray
     }
 }
 
 function Remove-ProxyTxt {
-    if ($script:DnsCleanOk -or -not $DNSAvailable) { return }
-    try {
-        Remove-DnsServerResourceRecord -ZoneName $Domain -Name $TxtLabel `
-            -RRType "TXT" -Force -ErrorAction SilentlyContinue | Out-Null
-        $script:DnsCleanOk = $true
-    }
-    catch { }
+    if ($script:DnsCleanOk) { return }
+    & dnscmd . /RecordDelete $Domain $TxtLabel TXT /f 2>$null | Out-Null
+    $script:DnsCleanOk = ($LASTEXITCODE -eq 0)
 }
 
 # â”€â”€ Windows Firewall management â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
