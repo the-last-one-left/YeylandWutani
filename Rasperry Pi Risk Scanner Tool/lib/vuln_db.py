@@ -8,6 +8,7 @@ Supports incremental NVD updates, CISA KEV catalog, and OSV lookup.
 """
 
 import gzip
+import io
 import json
 import logging
 import os
@@ -15,6 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 import urllib.error
+import zipfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
@@ -43,6 +45,7 @@ KEV_URL = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulner
 
 # ── OSV API ────────────────────────────────────────────────────────────────
 OSV_QUERY_URL = "https://api.osv.dev/v1/query"
+OSV_GCS_BASE  = "https://osv-vulnerabilities.storage.googleapis.com"
 
 # ── Severity thresholds ────────────────────────────────────────────────────
 CVSS_CRITICAL = 9.0
@@ -168,9 +171,10 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
     start_index = 0
 
     while True:
+        # NVD API requires colons to be literal in date strings (not %3A)
         params = (
-            f"?pubStartDate={urllib.parse.quote(start_str)}"
-            f"&pubEndDate={urllib.parse.quote(end_str)}"
+            f"?pubStartDate={urllib.parse.quote(start_str, safe=':.-')}"
+            f"&pubEndDate={urllib.parse.quote(end_str, safe=':.-')}"
             f"&startIndex={start_index}"
             f"&resultsPerPage={NVD_PAGE_SIZE}"
         )
@@ -299,8 +303,8 @@ def _fetch_modified_nvd(api_key, start_date, end_date, delay):
         headers["apiKey"] = api_key
 
     params = (
-        f"?lastModStartDate={urllib.parse.quote(start_str)}"
-        f"&lastModEndDate={urllib.parse.quote(end_str)}"
+        f"?lastModStartDate={urllib.parse.quote(start_str, safe=':.-')}"
+        f"&lastModEndDate={urllib.parse.quote(end_str, safe=':.-')}"
         f"&resultsPerPage={NVD_PAGE_SIZE}"
     )
     try:
@@ -373,12 +377,13 @@ def update_kev_catalog() -> int:
 
 def update_osv_cache(ecosystems: list = None) -> int:
     """
-    Fetch OSV (Open Source Vulnerabilities) for given ecosystems.
+    Fetch OSV (Open Source Vulnerabilities) via GCS bulk download.
+    Uses https://osv-vulnerabilities.storage.googleapis.com/{ecosystem}/all.zip
     Results keyed by 'package:version'.
-    Returns number of OSV packages written.
+    Returns number of OSV package/version entries written.
     """
     if ecosystems is None:
-        ecosystems = ["Linux", "PyPI", "npm"]
+        ecosystems = ["PyPI", "npm"]
 
     _ensure_db_dir()
     global _osv_cache
@@ -391,43 +396,50 @@ def update_osv_cache(ecosystems: list = None) -> int:
 
     new_count = 0
     for ecosystem in ecosystems:
-        logger.info(f"OSV: Querying ecosystem {ecosystem}...")
-        # OSV batch query by ecosystem
-        payload = json.dumps({"package": {"ecosystem": ecosystem}}).encode()
+        url = f"{OSV_GCS_BASE}/{ecosystem}/all.zip"
+        logger.info(f"OSV: Downloading {ecosystem} bulk data from GCS...")
         try:
             req = urllib.request.Request(
-                "https://api.osv.dev/v1/query",
-                data=payload,
-                headers={
-                    "Content-Type": "application/json",
-                    "User-Agent": "YeylandWutani-RiskScanner/1.0",
-                },
-                method="POST",
+                url,
+                headers={"User-Agent": "YeylandWutani-RiskScanner/1.0"},
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-            for vuln in data.get("vulns", []):
-                osv_id = vuln.get("id", "")
-                for pkg_info in vuln.get("affected", []):
-                    pkg = pkg_info.get("package", {})
-                    pkg_name = pkg.get("name", "")
-                    for version_info in pkg_info.get("versions", []):
-                        key = f"{pkg_name}:{version_info}"
-                        if key not in _osv_cache:
-                            _osv_cache[key] = []
-                        _osv_cache[key].append(osv_id)
-                        new_count += 1
+            with urllib.request.urlopen(req, timeout=120) as resp:
+                zip_data = resp.read()
+
+            with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+                for name in zf.namelist():
+                    if not name.endswith(".json"):
+                        continue
+                    try:
+                        vuln = json.loads(zf.read(name))
+                    except Exception:
+                        continue
+                    osv_id = vuln.get("id", "")
+                    for affected in vuln.get("affected", []):
+                        pkg = affected.get("package", {})
+                        pkg_name = pkg.get("name", "")
+                        if not pkg_name:
+                            continue
+                        for version in affected.get("versions", []):
+                            key = f"{pkg_name}:{version}"
+                            if key not in _osv_cache:
+                                _osv_cache[key] = []
+                            if osv_id not in _osv_cache[key]:
+                                _osv_cache[key].append(osv_id)
+                            new_count += 1
+
+            logger.info(f"OSV: {ecosystem} — {new_count} entries so far")
         except Exception as e:
-            logger.warning(f"OSV: {ecosystem} query failed: {e}")
-        time.sleep(0.5)
+            logger.warning(f"OSV: {ecosystem} bulk download failed: {e}")
 
     OSV_CACHE_PATH.write_text(json.dumps(_osv_cache))
 
     stats = _load_stats()
     stats["osv_last_updated"] = datetime.now(timezone.utc).isoformat()
+    stats["osv_entry_count"] = len(_osv_cache)
     _save_stats(stats)
 
-    logger.info(f"OSV: cache updated — {new_count} package/version entries")
+    logger.info(f"OSV: cache updated — {new_count} package/version entries, {len(_osv_cache)} unique keys")
     return new_count
 
 
@@ -583,7 +595,24 @@ def get_db_stats() -> dict:
     """Return DB stats: CVE count, KEV count, last update timestamps."""
     _load_caches()
     stats = _load_stats()
+    nvd_last = stats.get("nvd_last_updated")
+    last_updated_ts = None
+    if nvd_last:
+        try:
+            last_updated_ts = datetime.fromisoformat(nvd_last).timestamp()
+        except Exception:
+            pass
+    stale = is_db_stale()
     return {
+        # Keys used by update-vuln-db.py _print_stats()
+        "cve_count": len(_nvd_cache),
+        "kev_count": len(_kev_cache),
+        "osv_count": len(_osv_cache),
+        "last_updated": last_updated_ts,
+        "stale": stale,
+        "kev_last_modified": stats.get("kev_last_updated", ""),
+        "db_path": str(VULN_DB_DIR),
+        # Full detail keys
         "nvd_cve_count": len(_nvd_cache),
         "kev_cve_count": len(_kev_cache),
         "osv_entry_count": len(_osv_cache),
