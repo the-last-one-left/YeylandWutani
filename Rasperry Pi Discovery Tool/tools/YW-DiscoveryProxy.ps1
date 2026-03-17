@@ -616,11 +616,12 @@ Add-ProxyFirewallRule
 
 $Deadline = (Get-Date).AddMinutes($TimeoutMinutes)
 
-Write-KV "Domain"   $Domain
-Write-KV "DC"       "$DcHostname  ($DcIP)"
-Write-KV "Port"     $Port
-Write-KV "Expires"  ($Deadline.ToString("HH:mm:ss") + "  ($TimeoutMinutes min)") "Yellow"
-Write-KV "Status"   "Waiting for Pi to auto-discover and connect..." "Green"
+Write-KV "Domain"     $Domain
+Write-KV "DC"         "$DcHostname  ($DcIP)"
+Write-KV "Port"       $Port
+Write-KV "Expires"    ($Deadline.ToString("HH:mm:ss") + "  ($TimeoutMinutes min)") "Yellow"
+Write-KV "Inactivity" "$InactivityMinutes min after last Pi request" "DarkGray"
+Write-KV "Status"     "Waiting for Pi to auto-discover and connect..." "Green"
 Write-Host ""
 Write-Host "  (Pi discovers this proxy automatically via DNS TXT -- no manual steps needed.)" `
     -ForegroundColor DarkGray
@@ -640,7 +641,9 @@ catch {
     exit 1
 }
 
-$ShouldExit = $false
+$ShouldExit        = $false
+$InactivityMinutes = 10      # Auto-exit if Pi goes silent for this long after first contact
+$LastRequestTime   = Get-Date
 
 try {
     while (-not $ShouldExit -and (Get-Date) -lt $Deadline) {
@@ -648,8 +651,21 @@ try {
         $async   = $Listener.BeginGetContext($null, $null)
         $arrived = $async.AsyncWaitHandle.WaitOne(2000)
 
-        if (-not $arrived) { continue }
+        if (-not $arrived) {
+            # Once the Pi has locked in, auto-exit after inactivity window expires.
+            # This handles crashes or disconnects where /done was never sent.
+            if ($null -ne $script:LockedToIP) {
+                $idleMin = ((Get-Date) - $LastRequestTime).TotalMinutes
+                if ($idleMin -ge $InactivityMinutes) {
+                    Write-Host ("`n  [INACTIVITY]  No request from Pi for {0} min — auto-exiting." `
+                        -f $InactivityMinutes) -ForegroundColor Yellow
+                    $ShouldExit = $true
+                }
+            }
+            continue
+        }
 
+        $LastRequestTime = Get-Date
         $ctx = $Listener.EndGetContext($async)
         try {
             $ShouldExit = Handle-Request $ctx
