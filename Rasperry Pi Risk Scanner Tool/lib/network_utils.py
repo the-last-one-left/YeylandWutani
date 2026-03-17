@@ -673,6 +673,15 @@ def classify_device(
                                                     "server 2012", "server 2008")):
                     return "Windows Server"
                 return "Windows Server" if "server" in sys_descr else "Windows Device"
+            # Network switch / infrastructure platforms that embed Linux internally.
+            # Check these BEFORE the generic "linux" guard below so that, e.g.,
+            # an Aruba AOS-CX or HP ProCurve whose sysDescr contains
+            # "Linux version 4.x" isn't misclassified as a Linux server.
+            if any(kw in sys_descr for kw in (
+                    "procurve", "arubaos", "aruba-cx", "openswitch", "comware",
+                    "exos", "ironware", "powerswitch", "ftos", "cumulus",
+            )):
+                return "Network Switch"
             # Linux
             if "linux" in sys_descr:
                 return "Linux/Unix Server"

@@ -457,17 +457,51 @@ def lookup_cves(vendor: str, product: str, version: str = None) -> list:
         matched = False
         for cpe in entry.get("affected_cpe", []):
             cpe_l = cpe.lower()
-            if vendor_l and product_l:
-                if vendor_l in cpe_l and product_l in cpe_l:
-                    if version_l:
-                        # Version match: check if version appears in CPE or is wildcard
-                        if version_l in cpe_l or "*" in cpe_l or "-" in cpe_l:
-                            matched = True
-                    else:
-                        matched = True
-            elif product_l:
-                if product_l in cpe_l:
+
+            # Parse individual CPE fields so we match against vendor/product/version
+            # slots rather than doing substring search on the full CPE string.
+            # CPE 2.3: cpe:2.3:<type>:<vendor>:<product>:<version>:...
+            # CPE 2.2: cpe:/<type>:<vendor>:<product>:<version>:...
+            cpe_parts = cpe_l.split(":")
+            if cpe_l.startswith("cpe:2.3:") and len(cpe_parts) >= 6:
+                cpe_vendor_f  = cpe_parts[3]
+                cpe_product_f = cpe_parts[4]
+                cpe_version_f = cpe_parts[5]
+            elif len(cpe_parts) >= 5:
+                cpe_vendor_f  = cpe_parts[2]
+                cpe_product_f = cpe_parts[3]
+                cpe_version_f = cpe_parts[4]
+            else:
+                continue
+
+            # Normalize spaces → underscores to match CPE encoding
+            prod_norm = product_l.replace(" ", "_")
+            vend_norm = vendor_l.replace(" ", "_")
+
+            # Product field: bidirectional substring with a minimum-length guard
+            # to prevent very short CPE product tokens matching long query names.
+            prod_match = (
+                prod_norm in cpe_product_f
+                or (len(cpe_product_f) >= 5 and cpe_product_f in prod_norm)
+            )
+            if not prod_match:
+                continue
+
+            # Vendor match when a vendor was supplied (skip check when empty)
+            if vendor_l and vend_norm not in cpe_vendor_f and vendor_l not in cpe_vendor_f:
+                continue
+
+            # Version: inspect the CPE version *field* only.
+            # "*" or "-" in that field means "all versions affected".
+            # Checking "*" in the full CPE string was wrong — it always matched
+            # because CPE strings end with multiple wildcard components.
+            if version_l:
+                if cpe_version_f in ("*", "-"):
                     matched = True
+                elif version_l in cpe_version_f or cpe_version_f in version_l:
+                    matched = True
+            else:
+                matched = True
         if matched:
             results.append(entry)
             seen.add(cve_id)
