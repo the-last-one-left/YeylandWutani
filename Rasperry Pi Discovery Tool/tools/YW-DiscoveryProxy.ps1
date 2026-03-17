@@ -650,9 +650,14 @@ catch {
 }
 
 try {
+    # Start the first pending slot BEFORE the loop.
+    # BeginGetContext must be called once per request — NOT once per loop iteration.
+    # Re-calling it on every iteration without EndGetContext orphans previous handles,
+    # causing HTTP.sys to signal the wrong one and dropping all incoming requests.
+    $async = $Listener.BeginGetContext($null, $null)
+
     while (-not $ShouldExit -and (Get-Date) -lt $Deadline) {
         # Poll every 2s so we can check the timeout without blocking forever
-        $async   = $Listener.BeginGetContext($null, $null)
         $arrived = $async.AsyncWaitHandle.WaitOne(2000)
 
         if (-not $arrived) {
@@ -677,6 +682,11 @@ try {
         catch {
             Write-Host ("  [ERR]  Request handler: $_") -ForegroundColor Red
             try { $ctx.Response.Abort() } catch { }
+        }
+
+        # Queue the next slot immediately after finishing this request
+        if (-not $ShouldExit -and (Get-Date) -lt $Deadline) {
+            $async = $Listener.BeginGetContext($null, $null)
         }
     }
 
