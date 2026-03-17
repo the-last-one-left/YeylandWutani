@@ -100,7 +100,10 @@ if ($DNSAvailable) {
 
 # â”€â”€ Token generation â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-$TokenBytes = [System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24)
+$TokenBytes = New-Object byte[] 24
+$rng = [System.Security.Cryptography.RNGCryptoServiceProvider]::new()
+$rng.GetBytes($TokenBytes)
+$rng.Dispose()
 $Token      = [Convert]::ToBase64String($TokenBytes) `
               -replace '\+', '-' -replace '/', '_' -replace '=', ''
 
