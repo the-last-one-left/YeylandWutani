@@ -29,8 +29,7 @@ Twenty-five-phase discovery:
   Phase 20:  Deep SMB/Windows Enumeration (enum4linux-ng)
   Phase 21:  Passive OS Fingerprinting (p0f)
   Phase 22:  Kismet Passive Wireless IDS (Pi 4+, opt-in)
-  Phase 23:  Delta Reporting (new/removed devices since last scan)
-  Phase 24:  Network Topology Diagram (ASCII map)
+  Phase 23:  Network Topology Diagram (ASCII map)
 """
 
 import concurrent.futures
@@ -194,8 +193,6 @@ DEFAULT_CONFIG = {
     # ── Kismet passive wireless IDS ───────────────────────────────────────
     "enable_kismet": False,           # opt-in: requires monitor-mode adapter + Pi 4+
     "kismet_duration": 90,
-    # ── Delta reporting (new/removed devices since last scan) ─────────────
-    "enable_delta_reporting": True,
 }
 
 
