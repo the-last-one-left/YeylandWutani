@@ -1,7 +1,7 @@
 {
   "_metadata": {
-    "version": "1.1",
-    "updated": "2025-01",
+    "version": "1.2",
+    "updated": "2026-03",
     "currency": "USD",
     "note": "MSRP hardware estimates only. WatchGuard Firebox requires a Basic Security Suite (BSS) or Total Security Suite (TSS) subscription in addition to hardware. Contact Yeyland Wutani LLC for current partner pricing.",
     "vendors": {
@@ -16,95 +16,75 @@
     {
       "vendor": "WatchGuard",
       "line": "Firebox T-Series",
-      "model": "T45",
-      "sku": "WGT45033",
+      "model": "T145",
+      "sku": "WGT14503",
       "tier": "small",
       "min_devices": 1,
       "max_devices": 30,
-      "stateful_throughput_gbps": 4.4,
-      "utm_throughput_mbps": 940,
-      "vpn_throughput_mbps": 880,
-      "interfaces": "5x 1GbE",
+      "stateful_throughput_gbps": 5.1,
+      "utm_throughput_mbps": 1340,
+      "vpn_throughput_mbps": 680,
+      "interfaces": "1x 2.5GbE + 4x 1GbE + 1x SFP/SFP+",
       "form_factor": "Tabletop",
-      "msrp_usd": 595,
+      "msrp_usd": 795,
       "subscription_required": "Basic or Total Security Suite",
       "key_features": [
         "WatchGuard Cloud management",
+        "2.5 GbE WAN port for fiber/cable ISP links",
         "Integrated IPS, App Control, WebBlocker",
         "SD-WAN and multi-WAN failover",
-        "Built-in PoE port for connected devices"
+        "SFP/SFP+ port for fiber uplink"
       ],
       "best_for": "Small offices and branch locations up to 30 devices"
     },
     {
       "vendor": "WatchGuard",
       "line": "Firebox T-Series",
-      "model": "T45-W",
-      "sku": "WGT45W33",
+      "model": "T145-W",
+      "sku": "WGT145W03",
       "tier": "small",
       "min_devices": 1,
       "max_devices": 30,
-      "stateful_throughput_gbps": 4.4,
-      "utm_throughput_mbps": 940,
-      "vpn_throughput_mbps": 880,
-      "interfaces": "5x 1GbE + WiFi 6 radio",
+      "stateful_throughput_gbps": 5.1,
+      "utm_throughput_mbps": 1340,
+      "vpn_throughput_mbps": 680,
+      "interfaces": "1x 2.5GbE + 4x 1GbE + 1x SFP/SFP+ + Wi-Fi 7 radio",
       "form_factor": "Tabletop",
-      "msrp_usd": 795,
+      "msrp_usd": 995,
       "subscription_required": "Basic or Total Security Suite",
       "key_features": [
-        "Integrated WiFi 6 (802.11ax) radio",
+        "Integrated Wi-Fi 7 (802.11be) tri-band radio",
         "WatchGuard Cloud management",
+        "2.5 GbE WAN + SFP/SFP+ for flexible uplinks",
         "Integrated IPS, App Control, WebBlocker",
         "SD-WAN and multi-WAN failover"
       ],
-      "best_for": "Small offices needing combined firewall and WiFi up to 30 devices"
+      "best_for": "Small offices needing combined firewall and Wi-Fi 7 up to 30 devices"
     },
     {
       "vendor": "WatchGuard",
       "line": "Firebox T-Series",
-      "model": "T85",
-      "sku": "WGT85033",
+      "model": "T85-PoE",
+      "sku": "WGT85P03",
       "tier": "medium_small",
       "min_devices": 31,
       "max_devices": 75,
       "stateful_throughput_gbps": 18.0,
       "utm_throughput_mbps": 2400,
       "vpn_throughput_mbps": 2100,
-      "interfaces": "8x 1GbE + 2x SFP",
-      "form_factor": "Tabletop",
-      "msrp_usd": 1495,
-      "subscription_required": "Basic or Total Security Suite",
-      "key_features": [
-        "WatchGuard Cloud management",
-        "Dual SFP uplinks for fiber or redundancy",
-        "Integrated IPS, App Control, WebBlocker",
-        "SD-WAN, BGP routing, VLAN segmentation",
-        "WatchGuard TDR endpoint threat correlation"
-      ],
-      "best_for": "Growing SMBs and multi-VLAN environments up to 75 devices"
-    },
-    {
-      "vendor": "WatchGuard",
-      "line": "Firebox T-Series",
-      "model": "T85-W",
-      "sku": "WGT85W33",
-      "tier": "medium_small",
-      "min_devices": 31,
-      "max_devices": 75,
-      "stateful_throughput_gbps": 18.0,
-      "utm_throughput_mbps": 2400,
-      "vpn_throughput_mbps": 2100,
-      "interfaces": "8x 1GbE + 2x SFP + WiFi 6 radio",
+      "interfaces": "8x 1GbE (4x PoE+) + 2x SFP",
       "form_factor": "Tabletop",
       "msrp_usd": 1695,
       "subscription_required": "Basic or Total Security Suite",
       "key_features": [
-        "Integrated WiFi 6 (802.11ax) radio",
+        "4x PoE+ ports — directly power APs, cameras, or phones",
         "WatchGuard Cloud management",
         "Dual SFP uplinks for fiber or redundancy",
-        "SD-WAN, BGP routing, VLAN segmentation"
+        "Integrated IPS, App Control, WebBlocker",
+        "SD-WAN, BGP routing, VLAN segmentation",
+        "Optional 4G LTE module bay"
       ],
-      "best_for": "SMBs needing combined firewall and WiFi up to 75 devices"
+      "best_for": "Growing SMBs and multi-VLAN environments up to 75 devices"
     },
     {
       "vendor": "WatchGuard",
@@ -330,46 +310,46 @@
     {
       "vendor": "Aruba",
       "line": "Instant On",
-      "model": "AP22",
-      "sku": "R4W02A",
-      "wifi_standard": "Wi-Fi 6 (802.11ax)",
-      "max_throughput_mbps": 1774,
-      "bands": "Dual-band (2.4 GHz + 5 GHz)",
-      "max_clients": 30,
-      "poe_required": "802.3af (15.4W)",
-      "indoor_outdoor": "Indoor",
-      "management": "Aruba Instant On Cloud App",
-      "msrp_usd": 199,
-      "key_features": [
-        "Wi-Fi 6 (802.11ax) — faster, more efficient than Wi-Fi 5",
-        "Target Wake Time (TWT) for improved IoT battery life",
-        "Aruba Instant On cloud management",
-        "WPA3 encryption for enhanced wireless security",
-        "Band steering and load balancing"
-      ],
-      "best_for": "General-purpose indoor wireless coverage up to 30 concurrent clients"
-    },
-    {
-      "vendor": "Aruba",
-      "line": "Instant On",
       "model": "AP25",
       "sku": "R9B28A",
       "wifi_standard": "Wi-Fi 6 (802.11ax)",
       "max_throughput_mbps": 3900,
       "bands": "Tri-radio (2.4 GHz + 5 GHz + 5 GHz)",
-      "max_clients": 60,
+      "max_clients": 50,
       "poe_required": "802.3at PoE+ (30W)",
       "indoor_outdoor": "Indoor",
       "management": "Aruba Instant On Cloud App",
       "msrp_usd": 349,
       "key_features": [
-        "Tri-radio Wi-Fi 6 for high-density environments",
-        "Dedicated backhaul radio for mesh deployment",
+        "Wi-Fi 6 (802.11ax) tri-radio for concurrent coverage",
+        "2.5 GbE uplink port — no throughput bottleneck",
         "Aruba Instant On cloud management",
-        "WPA3 and OWE (Opportunistic Wireless Encryption)",
-        "Up to 60 concurrent clients per AP"
+        "WPA3 and OWE encryption",
+        "Band steering, load balancing, and Smart Mesh"
       ],
-      "best_for": "High-density environments, conference rooms, and 50+ wireless clients"
+      "best_for": "Standard indoor coverage — recommended for most office deployments"
+    },
+    {
+      "vendor": "Aruba",
+      "line": "Instant On",
+      "model": "AP32",
+      "sku": "R8S06A",
+      "wifi_standard": "Wi-Fi 6E (802.11ax)",
+      "max_throughput_mbps": 3600,
+      "bands": "Tri-radio (2.4 GHz + 5 GHz + 6 GHz)",
+      "max_clients": 100,
+      "poe_required": "802.3at PoE+ (30W)",
+      "indoor_outdoor": "Indoor",
+      "management": "Aruba Instant On Cloud App",
+      "msrp_usd": 299,
+      "key_features": [
+        "Wi-Fi 6E with dedicated 6 GHz band — less congestion",
+        "2.5 GbE uplink for maximum throughput",
+        "Aruba Instant On cloud management",
+        "WPA3 encryption and Enhanced Open (OWE)",
+        "Ideal for dense wireless environments"
+      ],
+      "best_for": "High-density deployments, conference centers, and 50+ concurrent wireless users"
     },
     {
       "vendor": "Aruba",
@@ -385,7 +365,7 @@
       "management": "Aruba Instant On Cloud App",
       "msrp_usd": 249,
       "key_features": [
-        "IP67 weatherproof rating for outdoor use",
+        "IP67 weatherproof rating for outdoor installation",
         "Aruba Instant On cloud management",
         "WPA3 encryption",
         "Wide-coverage antenna for open outdoor spaces",
