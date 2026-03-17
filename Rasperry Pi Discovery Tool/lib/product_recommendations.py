@@ -305,6 +305,178 @@ def size_environment(scan_results: dict) -> dict:
 
     recommend_epdr = not enterprise_av_detected
 
+    # ── Cloud / M365 migration assessment ────────────────────────────────
+    # Determine whether the environment is a good candidate for Microsoft 365
+    # and/or Azure Virtual Desktop. Scored on positive + negative signals.
+
+    # User count: authoritative from AD; estimate from devices otherwise
+    _cloud_user_count = (ad_context.get("user_count", 0)
+                         if ad_available and ad_context.get("user_count")
+                         else max(1, int(device_count * 0.6)))
+
+    # Detect server roles from port banners + AD SPNs
+    _cloud_has_exchange  = False
+    _cloud_has_rds       = False   # confirmed terminal/app server (not just mgmt RDP)
+    _cloud_has_sql       = False
+    _cloud_has_lob       = False
+
+    _kw_exchange = {"exchange", "ews", "autodiscover", "microsoft exchange", "msexchange"}
+    _kw_sql      = {"sql server", "sqlservr", "mssql", "sql native"}
+    _kw_lob      = {"quickbooks", "sage ", "acumatica", "epicor", "dynamics nav",
+                    "dynamics gp", "netsuite", "infor ", "fishbowl", "mas 90",
+                    "mas 200", "great plains", "solomon"}
+
+    for _h in hosts:
+        _title  = ((_h.get("http_info") or {}).get("title") or "").lower()
+        _os_str = ((_h.get("ad_computer") or {}).get("os") or _h.get("os") or "").lower()
+        _open   = {p["port"] for p in _h.get("ports", []) if p.get("state") == "open"}
+        for _p in (_h.get("ports") or []):
+            _banner = ((_p.get("banner") or "") + " "
+                       + (_p.get("service_version") or "")).lower()
+            if any(kw in _banner for kw in _kw_exchange):
+                _cloud_has_exchange = True
+            if any(kw in _banner or kw in _title for kw in _kw_sql):
+                _cloud_has_sql = True
+            if any(kw in _banner or kw in _title for kw in _kw_lob):
+                _cloud_has_lob = True
+        # Terminal server: port 3389 on a Windows Server
+        if 3389 in _open and "server" in _os_str:
+            # Confirmed by TERMSRV SPN in AD
+            if ad_available:
+                for _c in (ad.get("computers") or []):
+                    _spns = _c.get("ServicePrincipalNames") or _c.get("spns") or []
+                    if any("termsrv" in str(s).lower() for s in _spns):
+                        _cloud_has_rds = True
+                        break
+            # Fallback: server with RDP but not DC (no port 389) and not file-only
+            if not _cloud_has_rds and 389 not in _open:
+                _cloud_has_rds = True
+
+    # Internet quality from speed test
+    _cloud_internet = "unknown"
+    if dl_mbps > 0:
+        if dl_mbps >= 100 and ul_mbps >= 20:
+            _cloud_internet = "good"
+        elif dl_mbps >= 25 and ul_mbps >= 5:
+            _cloud_internet = "adequate"
+        else:
+            _cloud_internet = "poor"
+
+    # Scoring
+    _cs = 0   # cloud score
+    cloud_migration_reasons: list = []
+    cloud_onprem_anchors:    list = []
+
+    if _cloud_user_count <= 15:
+        _cs += 3
+        cloud_migration_reasons.append(
+            f"Small team ({_cloud_user_count} users) -- M365 per-user licensing is highly cost-effective at this scale"
+        )
+    elif _cloud_user_count <= 30:
+        _cs += 1
+        cloud_migration_reasons.append(
+            f"Medium-sized team ({_cloud_user_count} users) -- full cloud or hybrid both viable"
+        )
+    elif _cloud_user_count > 100:
+        _cs -= 2
+        cloud_onprem_anchors.append(
+            f"Large user base ({_cloud_user_count} users) -- on-premises may be more cost-effective at scale"
+        )
+
+    _eol_count = eol_server_count  # already computed above
+    if _eol_count > 0:
+        _cs += 2
+        cloud_migration_reasons.append(
+            f"{_eol_count} end-of-life server(s) -- hardware refresh is a natural migration window"
+        )
+
+    if server_count <= 2:
+        _cs += 2
+        cloud_migration_reasons.append(
+            f"Minimal on-premises servers ({server_count}) -- low infrastructure dependency"
+        )
+    elif server_count >= 6:
+        _cs -= 2
+        cloud_onprem_anchors.append(
+            f"Large server footprint ({server_count} servers) -- phased migration recommended"
+        )
+
+    if _cloud_has_exchange:
+        _cs += 2
+        cloud_migration_reasons.append(
+            "On-premises Exchange Server detected -- Exchange Online is a direct, proven replacement"
+        )
+
+    if _cloud_internet == "good":
+        _cs += 1
+        cloud_migration_reasons.append(
+            f"Strong internet connection ({dl_mbps:.0f}/{ul_mbps:.0f} Mbps) -- cloud dependency is low risk"
+        )
+    elif _cloud_internet == "poor":
+        _cs -= 2
+        cloud_onprem_anchors.append(
+            f"Slow internet ({dl_mbps:.0f} Mbps down) -- cloud dependency requires redundant connection"
+        )
+
+    if _cloud_has_sql:
+        _cs -= 1
+        cloud_onprem_anchors.append(
+            "SQL Server detected -- database workloads typically remain on-prem or migrate to Azure SQL"
+        )
+
+    if _cloud_has_lob:
+        _cs -= 2
+        cloud_onprem_anchors.append(
+            "Line-of-business application detected -- may require on-premises or private cloud hosting"
+        )
+
+    # Security gaps push toward Business Premium
+    _security_gaps = len(ad_context.get("security_findings") or []) if ad_available else 0
+
+    # Derive confidence and approach
+    if _cs >= 5:
+        cloud_migration_confidence = "high"
+    elif _cs >= 2:
+        cloud_migration_confidence = "medium"
+    elif _cs >= 0:
+        cloud_migration_confidence = "low"
+    else:
+        cloud_migration_confidence = None   # not recommended
+
+    if cloud_migration_confidence is not None:
+        if cloud_migration_confidence == "high" and not _cloud_has_lob and not _cloud_has_sql:
+            cloud_migration_approach = "full_cloud"
+        elif cloud_migration_confidence in ("high", "medium"):
+            cloud_migration_approach = "hybrid"
+        else:
+            cloud_migration_approach = "cloud_first"   # start with M365 email/Teams, keep servers
+
+        # Pick M365 tier
+        if _security_gaps > 0 or free_av_detected or _cloud_user_count >= 20:
+            cloud_m365_tier = "Business Premium"
+            if _security_gaps > 0:
+                cloud_migration_reasons.append(
+                    "Security findings detected -- Business Premium includes Defender for Business and Intune"
+                )
+        elif _cloud_user_count <= 10:
+            cloud_m365_tier = "Business Basic"
+        else:
+            cloud_m365_tier = "Business Standard"
+
+        recommend_avd = _cloud_has_rds
+        if recommend_avd:
+            cloud_migration_reasons.append(
+                "Remote Desktop / terminal server detected -- Azure Virtual Desktop replaces RDS with cloud-native VDI"
+            )
+    else:
+        cloud_migration_approach = "onprem_preferred"
+        cloud_m365_tier          = None
+        recommend_avd            = False
+        if not cloud_onprem_anchors:
+            cloud_onprem_anchors.append(
+                f"Infrastructure complexity ({server_count} servers, {device_count} devices) favours on-premises"
+            )
+
     # ── Server storage total (for Datto sizing) ───────────────────────────
     # Pull actual disk totals from AD WMI data when available;
     # fall back to a conservative 1 TB-per-server estimate.
@@ -383,6 +555,18 @@ def size_environment(scan_results: dict) -> dict:
         "epdr_reasons":         epdr_reasons,
         "enterprise_av_name":   enterprise_av_name,
         "free_av_name":         free_av_name,
+        # Cloud / M365 migration assessment
+        "cloud_migration_confidence":  cloud_migration_confidence,
+        "cloud_migration_approach":    cloud_migration_approach,
+        "cloud_m365_tier":             cloud_m365_tier,
+        "recommend_avd":               recommend_avd,
+        "cloud_migration_reasons":     cloud_migration_reasons,
+        "cloud_onprem_anchors":        cloud_onprem_anchors,
+        "cloud_user_count":            _cloud_user_count,
+        "cloud_has_exchange":          _cloud_has_exchange,
+        "cloud_has_rds":               _cloud_has_rds,
+        "cloud_has_sql":               _cloud_has_sql,
+        "cloud_internet_quality":      _cloud_internet,
     }
 
 
@@ -498,6 +682,34 @@ def _select_security_software(env: dict, catalog: dict) -> dict:
     return result
 
 
+def _select_cloud_migration(env: dict, catalog: dict) -> dict:
+    """
+    Return M365 tier and optionally AVD based on the cloud migration assessment
+    computed in size_environment().
+
+    Returns dict with optional keys:
+        "m365"  -> product dict for the recommended M365 Business tier
+        "avd"   -> product dict for Azure Virtual Desktop (when RDS detected)
+    Returns empty dict when cloud migration is not recommended.
+    """
+    confidence = env.get("cloud_migration_confidence")
+    if confidence is None:
+        return {}
+
+    services  = catalog.get("cloud_services", [])
+    by_model  = {s.get("model", ""): s for s in services}
+    tier      = env.get("cloud_m365_tier", "Business Standard")
+
+    result = {}
+    if tier and tier in by_model:
+        result["m365"] = by_model[tier]
+
+    if env.get("recommend_avd") and "AVD" in by_model:
+        result["avd"] = by_model["AVD"]
+
+    return result
+
+
 def _select_datto(env: dict, catalog: dict) -> Optional[dict]:
     """
     Select the appropriate Datto BCDR appliance based on server storage.
@@ -554,7 +766,8 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     ap_result = _select_aps(env, catalog)
     sv_result = _select_servers(env, catalog)
     datto_product = _select_datto(env, catalog)
-    sec_sw = _select_security_software(env, catalog)
+    sec_sw        = _select_security_software(env, catalog)
+    cloud_sw      = _select_cloud_migration(env, catalog)
 
     # Build reason signals for each recommendation
     fw_signals = [
@@ -668,6 +881,23 @@ def select_all_products(env: dict, catalog: dict) -> dict:
     else:
         result["epdr"] = None
 
+    # Cloud / M365 migration assessment
+    m365_prod = cloud_sw.get("m365")
+    avd_prod  = cloud_sw.get("avd")
+    if m365_prod:
+        cloud_signals = list(env.get("cloud_migration_reasons", []))
+        result["cloud"] = {
+            "product":          m365_prod,
+            "avd_product":      avd_prod,           # optional AVD pairing
+            "confidence":       env.get("cloud_migration_confidence", "low"),
+            "approach":         env.get("cloud_migration_approach", "cloud_first"),
+            "onprem_anchors":   env.get("cloud_onprem_anchors", []),
+            "recommend_avd":    env.get("recommend_avd", False),
+            "reason_signals":   cloud_signals,
+        }
+    else:
+        result["cloud"] = None
+
     return result
 
 
@@ -687,7 +917,7 @@ _NARRATIVE_SYSTEM = (
 )
 
 _NARRATIVE_SECTION_KEYS = ["FIREWALL", "SWITCHING", "WIRELESS", "SERVERS", "BACKUP",
-                           "AUTHPOINT", "EPDR"]
+                           "AUTHPOINT", "EPDR", "CLOUD"]
 
 
 def get_recommendation_narratives(
@@ -792,11 +1022,31 @@ RECOMMENDED PRODUCTS:
             f"  Current state: {('Replace ' + free_av) if free_av else 'No enterprise AV detected'}\n"
         )
 
+    cloud_rec = recommendations.get("cloud") or {}
+    if cloud_rec:
+        _conf     = cloud_rec.get("confidence", "low").upper()
+        _approach = cloud_rec.get("approach", "cloud_first").replace("_", " ")
+        _tier     = (cloud_rec.get("product") or {}).get("model", "Business Standard")
+        _anchors  = "; ".join(cloud_rec.get("onprem_anchors", []))[:160]
+        _reasons  = "; ".join(cloud_rec.get("reason_signals", []))[:200]
+        context += (
+            f"\nCLOUD / M365 MIGRATION ASSESSMENT:\n"
+            f"- Confidence:       {_conf}\n"
+            f"- Approach:         {_approach}\n"
+            f"- Recommended tier: Microsoft 365 {_tier}\n"
+            f"- Azure Virtual Desktop: {'Yes -- replace RDS' if cloud_rec.get('recommend_avd') else 'No'}\n"
+            f"- Migration drivers: {_reasons}\n"
+        )
+        if _anchors:
+            context += f"- On-prem anchors:  {_anchors}\n"
+
     sections = "FIREWALL:\nSWITCHING:\nWIRELESS:\nSERVERS:\nBACKUP:\n"
     if aup:
         sections += "AUTHPOINT:\n"
     if epdr:
         sections += "EPDR:\n"
+    if cloud_rec:
+        sections += "CLOUD:\n"
 
     user_msg = (
         "Based on the environment data and recommended products below, write a "
@@ -1054,6 +1304,54 @@ def _static_narratives(env: dict, recommendations: dict, brand_name: str = "") -
     else:
         epdr_text = ""
 
+    # Cloud / M365 migration narrative
+    cloud_rec = recommendations.get("cloud") or {}
+    if cloud_rec:
+        _tier     = (cloud_rec.get("product") or {}).get("model", "Business Standard")
+        _conf     = cloud_rec.get("confidence", "low")
+        _approach = cloud_rec.get("approach", "cloud_first")
+        _anchors  = cloud_rec.get("onprem_anchors", [])
+        _avd      = cloud_rec.get("recommend_avd", False)
+
+        if _approach == "full_cloud":
+            cloud_text = (
+                f"With {env.get('cloud_user_count', env['device_count'])} users and minimal "
+                f"on-premises dependency, this environment is an excellent candidate for a full "
+                f"Microsoft 365 {_tier} migration. "
+                "Moving email, identity, file storage, and collaboration to the Microsoft cloud "
+                "eliminates the cost and complexity of maintaining local server infrastructure, "
+                "while delivering enterprise-grade security and compliance tools out of the box."
+            )
+        elif _approach == "hybrid":
+            anchor_note = (f" {_anchors[0].split('--')[0].strip()} will remain on-premises."
+                           if _anchors else "")
+            cloud_text = (
+                f"A hybrid approach is recommended for this environment: migrate email, identity, "
+                f"and collaboration workloads to Microsoft 365 {_tier} while retaining on-premises "
+                f"servers for specialised workloads.{anchor_note} "
+                "This staged strategy reduces risk, delivers immediate productivity gains from "
+                "Teams and Exchange Online, and lays the foundation for a full cloud transition "
+                "at the organisation's own pace."
+            )
+        else:   # cloud_first
+            cloud_text = (
+                f"Even without a full server migration, adopting Microsoft 365 {_tier} for email, "
+                "Teams, and OneDrive is a low-risk first step that delivers immediate value. "
+                "Collaboration moves to the cloud while existing on-premises servers continue to "
+                "support workloads that are not yet cloud-ready -- a practical starting point for "
+                "any modernisation journey."
+            )
+
+        if _avd:
+            cloud_text += (
+                " An on-premises Remote Desktop server was detected in this environment. "
+                "Azure Virtual Desktop (AVD) is a direct replacement that streams Windows "
+                "desktops and applications from Azure, eliminating the need to maintain "
+                "terminal server hardware while improving security through modern conditional access."
+            )
+    else:
+        cloud_text = ""
+
     return {
         "firewall":   fw_text,
         "switching":  sw_text,
@@ -1062,6 +1360,7 @@ def _static_narratives(env: dict, recommendations: dict, brand_name: str = "") -
         "backup":     bk_text,
         "authpoint":  aup_text,
         "epdr":       epdr_text,
+        "cloud":      cloud_text,
     }
 
 
@@ -1404,6 +1703,206 @@ def _draw_cover(c, client_name: str, scan_date: str,
     c.drawCentredString(PAGE_W / 2, FOOTER_H - 28, f"Prepared {scan_date}")
 
 
+# ── Cloud assessment page ─────────────────────────────────────────────────────
+
+def _draw_cloud_page(c, cloud_rec: dict, narrative: str,
+                     scan_date: str, brand_name: str,
+                     company_color: str) -> None:
+    """
+    Render a cloud / Microsoft 365 migration assessment page.
+
+    Unlike hardware spec pages this page shows a strategic assessment card:
+      - Confidence badge (HIGH / MEDIUM / LOW)
+      - Recommended M365 tier with key features
+      - Migration drivers (why cloud makes sense)
+      - On-premises anchors (what stays on-prem, if any)
+      - AVD callout if an RDS server was detected
+      - Narrative text at the bottom
+    """
+    _MS_BLUE   = "#0078d4"    # Microsoft brand blue
+    _AVD_TEAL  = "#00a0d9"    # Azure colour accent
+    _CONF_COL  = {"high": "#28a745", "medium": "#fd7e14", "low": "#6c757d"}
+
+    confidence  = cloud_rec.get("confidence", "low")
+    approach    = (cloud_rec.get("approach") or "cloud_first").replace("_", " ").title()
+    product     = cloud_rec.get("product") or {}
+    avd_product = cloud_rec.get("avd_product")
+    anchors     = cloud_rec.get("onprem_anchors", [])
+    reasons     = cloud_rec.get("reason_signals", [])
+    recommend_avd = cloud_rec.get("recommend_avd", False)
+
+    tier_name   = product.get("model", "Business Standard")
+    features    = product.get("key_features", [])
+    best_for    = product.get("best_for", "")
+
+    conf_color  = _CONF_COL.get(confidence, "#6c757d")
+    conf_label  = confidence.upper()
+
+    # ── Page header ──────────────────────────────────────────────────────
+    y = _draw_page_header(
+        c,
+        title     = "CLOUD & INFRASTRUCTURE STRATEGY",
+        subtitle  = f"Microsoft 365 Migration Assessment  --  {approach}",
+        scan_date = scan_date,
+        brand_name     = brand_name,
+        company_color  = company_color,
+    )
+    y -= 6
+
+    # ── Confidence badge ─────────────────────────────────────────────────
+    badge_w, badge_h = 140, 28
+    c.setFillColor(_hex(conf_color))
+    c.roundRect(MARGIN, y - badge_h, badge_w, badge_h, 4, fill=1, stroke=0)
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(MARGIN + 10, y - 18, f"MIGRATION FIT:  {conf_label}")
+
+    # Approach label beside badge
+    c.setFillColor(_hex("#343a40"))
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(MARGIN + badge_w + 12, y - 10, approach)
+    c.setFont("Helvetica", 8)
+    c.setFillColor(_hex("#666666"))
+    approach_desc = {
+        "Full Cloud":   "Migrate all workloads and identity to Microsoft 365 -- eliminate on-prem servers",
+        "Hybrid":       "Move email, identity and collaboration to M365 -- retain servers for specialised workloads",
+        "Cloud First":  "Start with M365 email and Teams -- plan server migration in future phases",
+    }.get(approach, "Evaluate Microsoft 365 for collaboration and productivity workloads")
+    c.drawString(MARGIN + badge_w + 12, y - 21, approach_desc[:90])
+
+    y -= badge_h + 14
+
+    # ── Two-column layout ─────────────────────────────────────────────────
+    col_gap    = 14
+    left_w     = (CONTENT_W - col_gap) * 0.46
+    right_w    = CONTENT_W - left_w - col_gap
+    left_x     = MARGIN
+    right_x    = MARGIN + left_w + col_gap
+
+    col_top_y  = y
+
+    # LEFT: Migration drivers
+    c.setFillColor(_hex("#343a40"))
+    c.setFont("Helvetica-Bold", 9)
+    c.drawString(left_x, y, "WHY MIGRATE TO CLOUD")
+    y -= 12
+
+    for reason in reasons[:6]:
+        # Bullet + word-wrap within left column
+        c.setFillColor(_hex(conf_color))
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(left_x, y, "\u2022")
+        c.setFont("Helvetica", 8)
+        c.setFillColor(_hex("#333333"))
+        # Wrap reason text
+        words    = reason.replace(" -- ", ": ").split()
+        line     = ""
+        first    = True
+        line_x   = left_x + 12
+        line_w   = left_w - 14
+        for word in words:
+            test = (line + " " + word).strip()
+            if c.stringWidth(test, "Helvetica", 8) <= line_w:
+                line = test
+            else:
+                if line:
+                    c.drawString(line_x, y, line)
+                    y -= 11
+                    first = False
+                line = word
+        if line:
+            c.drawString(line_x, y, line)
+            y -= 11
+        y -= 3
+
+    # On-prem anchors (what stays behind)
+    if anchors:
+        y -= 4
+        c.setFillColor(_hex("#343a40"))
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(left_x, y, "WHAT STAYS ON-PREMISES")
+        y -= 12
+        for anchor in anchors[:4]:
+            c.setFillColor(_hex("#888888"))
+            c.setFont("Helvetica-Bold", 10)
+            c.drawString(left_x, y, "\u2013")
+            c.setFont("Helvetica", 8)
+            c.setFillColor(_hex("#555555"))
+            short = anchor.split(" -- ")[0][:80]
+            c.drawString(left_x + 12, y, short)
+            y -= 12
+
+    # RIGHT: M365 tier recommendation card
+    ry = col_top_y
+    card_h = 170
+    c.setFillColor(_hex(_MS_BLUE))
+    c.roundRect(right_x, ry - card_h, right_w, card_h, 6, fill=1, stroke=0)
+
+    # Microsoft logo text + tier
+    c.setFillColor(white)
+    c.setFont("Helvetica-Bold", 10)
+    c.drawString(right_x + 10, ry - 20, "Microsoft 365")
+    c.setFont("Helvetica-Bold", 13)
+    c.drawString(right_x + 10, ry - 36, tier_name)
+
+    # Divider
+    c.setStrokeColor(_hex("#ffffff55"))
+    c.setLineWidth(0.5)
+    c.line(right_x + 10, ry - 44, right_x + right_w - 10, ry - 44)
+
+    # Features list
+    feat_y = ry - 56
+    for feat in features[:5]:
+        c.setFillColor(_hex("#ffffffcc"))
+        c.setFont("Helvetica", 7.5)
+        short_feat = feat[:62] if len(feat) > 62 else feat
+        c.drawString(right_x + 10, feat_y, f"\u2713  {short_feat}")
+        feat_y -= 14
+
+    # Best for note
+    if best_for:
+        c.setFillColor(_hex("#ffffff88"))
+        c.setFont("Helvetica-Oblique", 7)
+        c.drawString(right_x + 10, ry - card_h + 10, best_for[:72])
+
+    # AVD callout below the M365 card
+    if recommend_avd and avd_product:
+        avd_card_y = ry - card_h - 8
+        avd_h      = 60
+        c.setFillColor(_hex(_AVD_TEAL))
+        c.roundRect(right_x, avd_card_y - avd_h, right_w, avd_h, 6, fill=1, stroke=0)
+        c.setFillColor(white)
+        c.setFont("Helvetica-Bold", 9)
+        c.drawString(right_x + 10, avd_card_y - 14, "Azure Virtual Desktop")
+        c.setFont("Helvetica", 7.5)
+        c.setFillColor(_hex("#ffffffcc"))
+        avd_feats = (avd_product.get("key_features") or [])[:2]
+        avd_fy = avd_card_y - 27
+        for af in avd_feats:
+            c.drawString(right_x + 10, avd_fy, f"\u2713  {af[:58]}")
+            avd_fy -= 13
+        c.setFont("Helvetica-Oblique", 7)
+        c.setFillColor(_hex("#ffffff88"))
+        c.drawString(right_x + 10, avd_card_y - avd_h + 8,
+                     "Replaces on-premises Remote Desktop Services")
+
+    # ── Narrative ────────────────────────────────────────────────────────
+    narrative_y = min(y - 14,
+                      col_top_y - card_h - (68 if recommend_avd else 0) - 14)
+    narrative_y = max(narrative_y, FOOTER_H + 90)
+
+    c.setFillColor(_hex("#f0f4f8"))
+    c.roundRect(MARGIN, narrative_y - 70, CONTENT_W, 70, 4, fill=1, stroke=0)
+    c.setFillColor(_hex("#0078d4"))
+    c.setFont("Helvetica-Bold", 8)
+    c.drawString(MARGIN + 10, narrative_y - 14, "ASSESSMENT SUMMARY")
+    if narrative:
+        _draw_wrapped(c, narrative, MARGIN + 10, narrative_y - 26,
+                      CONTENT_W - 20, size=8, color="#333333", line_h=12)
+
+    _draw_page_footer(c, scan_date, brand_name)
+
+
 # ── Product category pages ────────────────────────────────────────────────────
 
 def _draw_category_page(c, title: str, subtitle: str,
@@ -1591,6 +2090,15 @@ def _draw_next_steps(c, scan_date: str, brand_name: str,
             rows.append(("Endpoint Security",
                           f"{p.get('vendor','')} {p.get('model','')}",
                           p.get("best_for", "")))
+
+        cloud_rec = recommendations.get("cloud") or {}
+        if cloud_rec and cloud_rec.get("product"):
+            p    = cloud_rec["product"]
+            conf = cloud_rec.get("confidence", "low").title()
+            avd  = " + AVD" if cloud_rec.get("recommend_avd") else ""
+            rows.append(("Cloud Strategy",
+                          f"Microsoft 365 {p.get('model','')}{avd}",
+                          f"[{conf} fit] {p.get('best_for', '')}"))
 
         col_ws = [90, 130, CONTENT_W - 90 - 130]
         hdr_y  = y
@@ -1809,6 +2317,19 @@ def build_product_recommendations_pdf(scan_results: dict, config: dict) -> bytes
             count     = 1,
             narrative = narratives.get("epdr", ""),
             scan_date = scan_date, brand_name = brand_name,
+            company_color = company_color,
+        )
+        c.showPage()
+
+    # Cloud & M365 Migration Assessment page (optional)
+    cloud_rec = recs.get("cloud")
+    if cloud_rec:
+        _draw_cloud_page(
+            c,
+            cloud_rec     = cloud_rec,
+            narrative     = narratives.get("cloud", ""),
+            scan_date     = scan_date,
+            brand_name    = brand_name,
             company_color = company_color,
         )
         c.showPage()

@@ -1,6 +1,6 @@
 {
   "_metadata": {
-    "version": "1.4",
+    "version": "1.5",
     "updated": "2026-03",
     "currency": "USD",
     "note": "MSRP hardware estimates only. WatchGuard Firebox requires a Basic Security Suite (BSS) or Total Security Suite (TSS) subscription. Datto requires a cloud backup subscription. Contact Yeyland Wutani LLC for current partner pricing.",
@@ -9,7 +9,8 @@
       "switching":     "Aruba (HPE)",
       "wireless":      "Aruba (HPE)",
       "servers":       "Dell Technologies",
-      "backup":        "Datto (Kaseya)"
+      "backup":        "Datto (Kaseya)",
+      "cloud":         "Microsoft"
     }
   },
 
@@ -533,6 +534,75 @@
         "Unified WatchGuard Cloud console alongside Firebox management"
       ],
       "best_for": "Replacing consumer or free AV with enterprise EDR across all endpoints"
+    }
+  ],
+
+  "cloud_services": [
+    {
+      "vendor": "Microsoft",
+      "line": "Microsoft 365",
+      "model": "Business Basic",
+      "category": "cloud_productivity",
+      "users_min": 1,
+      "users_max": 15,
+      "deployment": "Cloud (SaaS)",
+      "key_features": [
+        "Exchange Online — hosted email, no on-prem mail server needed",
+        "Microsoft Teams — chat, video, file sharing and collaboration",
+        "SharePoint & OneDrive — replaces on-premises file server",
+        "Entra ID (Azure AD) — cloud identity, replaces on-prem domain controller",
+        "Web-only Office apps (Word, Excel, PowerPoint)"
+      ],
+      "best_for": "Small offices (under 15 users) needing cloud email, Teams, and storage without desktop Office apps"
+    },
+    {
+      "vendor": "Microsoft",
+      "line": "Microsoft 365",
+      "model": "Business Standard",
+      "category": "cloud_productivity",
+      "users_min": 10,
+      "users_max": 50,
+      "deployment": "Cloud (SaaS)",
+      "key_features": [
+        "Full desktop Office suite (Word, Excel, PowerPoint, Outlook)",
+        "Exchange Online — 50 GB hosted mailbox per user",
+        "Teams with meeting recordings and webinar hosting",
+        "SharePoint & OneDrive — 1 TB cloud storage per user",
+        "Entra ID — cloud identity replaces on-premises Active Directory"
+      ],
+      "best_for": "Growing SMBs needing full Office desktop apps, cloud email, and Teams collaboration"
+    },
+    {
+      "vendor": "Microsoft",
+      "line": "Microsoft 365",
+      "model": "Business Premium",
+      "category": "cloud_productivity",
+      "users_min": 15,
+      "users_max": 300,
+      "deployment": "Cloud (SaaS) + endpoint management",
+      "key_features": [
+        "All Business Standard features included",
+        "Microsoft Defender for Business — enterprise-grade EDR for all endpoints",
+        "Intune — cloud device management (MDM/MAM), replaces on-prem GPO management",
+        "Entra ID P1 — Conditional Access, MFA, self-service password reset",
+        "Microsoft Purview — data loss prevention and compliance tools"
+      ],
+      "best_for": "Security-conscious SMBs or those with compliance needs — the most complete SMB cloud platform"
+    },
+    {
+      "vendor": "Microsoft",
+      "line": "Azure Virtual Desktop",
+      "model": "AVD",
+      "category": "cloud_vdi",
+      "deployment": "Azure-hosted (per-user or per-session pooled)",
+      "key_features": [
+        "Replaces on-premises Remote Desktop Services (RDS/terminal server)",
+        "Windows 11 multi-session — multiple users per VM at fraction of RDS cost",
+        "Apps and desktops stream from Azure — no thick client compute required",
+        "Microsoft 365 Apps included with eligible M365 Business/Enterprise licenses",
+        "Scales automatically — provision or deprovision VMs in minutes"
+      ],
+      "best_for": "Environments with an aging RDS or terminal server — migrate remote access to Azure for better security, scale, and cost control"
     }
   ],
 
