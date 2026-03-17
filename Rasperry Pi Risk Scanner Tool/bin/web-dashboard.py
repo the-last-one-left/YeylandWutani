@@ -41,9 +41,21 @@ except ImportError:
 BASE_DIR = Path("/opt/risk-scanner")
 CONFIG_PATH = BASE_DIR / "config" / "config.json"
 DASHBOARD_CONFIG_PATH = BASE_DIR / "config" / "dashboard.json"
+CREDS_PATH = BASE_DIR / "config" / "credentials.enc"
 LOG_FILE = BASE_DIR / "logs" / "risk-scanner-web.log"
 SCANNER_LOG_FILE = BASE_DIR / "logs" / "risk-scanner.log"
 HISTORY_DIR = BASE_DIR / "data" / "history"
+
+# ── credential_store import (optional — may not be available before first install) ──
+sys.path.insert(0, str(BASE_DIR / "lib"))
+try:
+    from credential_store import (
+        load_credentials, save_credentials, add_credential,
+        validate_profile, _mask_sensitive, CRED_TYPES, SCOPE_TYPES,
+    )
+    _CRED_STORE_AVAILABLE = True
+except ImportError:
+    _CRED_STORE_AVAILABLE = False
 
 logger = logging.getLogger("risk-scanner-web")
 
@@ -304,6 +316,49 @@ def _get_log_lines(n: int = 100) -> list[str]:
         return []
 
 
+# ── Credential helpers ────────────────────────────────────────────────────────
+
+def _list_credentials() -> list:
+    """Return masked credential profiles, or [] if unavailable."""
+    if not _CRED_STORE_AVAILABLE:
+        return []
+    try:
+        profiles = load_credentials(CREDS_PATH)
+        return [_mask_sensitive(p) for p in profiles]
+    except Exception as e:
+        logger.warning("Could not load credentials: %s", e)
+        return []
+
+
+def _save_credential(profile: dict) -> dict:
+    """Validate and upsert a single credential profile."""
+    if not _CRED_STORE_AVAILABLE:
+        return {"success": False, "message": "credential_store library not available"}
+    errors = validate_profile(profile)
+    if errors:
+        return {"success": False, "message": "; ".join(errors)}
+    try:
+        add_credential(profile, CREDS_PATH)
+        return {"success": True, "message": f"Profile '{profile.get('profile_name')}' saved."}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+def _delete_credential(profile_name: str) -> dict:
+    """Remove a credential profile by name."""
+    if not _CRED_STORE_AVAILABLE:
+        return {"success": False, "message": "credential_store library not available"}
+    try:
+        profiles = load_credentials(CREDS_PATH)
+        new_profiles = [p for p in profiles if p.get("profile_name") != profile_name]
+        if len(new_profiles) == len(profiles):
+            return {"success": False, "message": f"Profile '{profile_name}' not found"}
+        save_credentials(new_profiles, CREDS_PATH)
+        return {"success": True, "message": f"Profile '{profile_name}' deleted."}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
 # ── HTML pages ────────────────────────────────────────────────────────────────
 
 _CSS = """
@@ -433,6 +488,32 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 .expand-content { background: #F8F8F8; border-radius: 6px; padding: 12px;
                    font-size: 12px; color: #555; }
 .expand-content strong { display: block; margin-bottom: 6px; color: #333; }
+
+/* Form inputs */
+.form-group { margin-bottom: 14px; }
+.form-group label { display: block; font-size: 12px; font-weight: 600;
+                     text-transform: uppercase; letter-spacing: 0.6px;
+                     color: #888; margin-bottom: 5px; }
+.form-group input[type=text], .form-group input[type=password],
+.form-group select {
+    width: 100%; padding: 9px 12px; border: 1px solid #DDD; border-radius: 6px;
+    font-size: 14px; outline: none; transition: border-color 0.2s;
+    background: #FAFAFA; }
+.form-group input:focus, .form-group select:focus { border-color: #FF6600; background:#FFF; }
+.form-row { display: flex; gap: 16px; }
+.form-row .form-group { flex: 1; }
+.cred-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cred-table th { text-align: left; padding: 8px 12px; background: #F0F0F0;
+                  font-size: 11px; text-transform: uppercase; letter-spacing: 0.6px;
+                  color: #666; border-bottom: 1px solid #DDD; }
+.cred-table td { padding: 9px 12px; border-bottom: 1px solid #F0F0F0; vertical-align: middle; }
+.cred-table tr:last-child td { border-bottom: none; }
+.cred-table tr:hover td { background: #FAFAFA; }
+.btn-sm { padding: 5px 12px; font-size: 12px; border: none; border-radius: 4px;
+          font-weight: 600; cursor: pointer; transition: opacity 0.15s; }
+.btn-sm:hover { opacity: 0.8; }
+.btn-sm-red { background: #FDECEA; color: #C0392B; }
+.btn-sm-blue { background: #EBF5FB; color: #1A5276; }
 
 /* Login page */
 .login-wrap { display: flex; align-items: center; justify-content: center;
@@ -639,6 +720,11 @@ _SIDEBAR_HTML = """
         <path d="M1 2h14v1H1V2zm0 3h14v1H1V5zm0 3h10v1H1V8zm0 3h12v1H1v-1z"/>
       </svg><span>Logs</span>
     </a>
+    <a class="nav-item {cls_creds}" href="/dashboard?view=credentials">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M10 1a4 4 0 0 1 4 4c0 1.5-.83 2.8-2.05 3.49L12 13H9l-.5-1H8l-.5 1H4l.05-4.51A4 4 0 1 1 10 1zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>
+      </svg><span>Credentials</span>
+    </a>
     <a class="nav-item {cls_settings}" href="/dashboard?view=settings">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M7.5 10a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zm5.6-2.25-.9-.52a4.98 4.98 0 0 0 0-1.46l.9-.52-.75-1.3-.9.52A4.97 4.97 0 0 0 10.2 4V3h-1.5v1a4.97 4.97 0 0 0-1.26.47l-.9-.52-.75 1.3.9.52a4.98 4.98 0 0 0 0 1.46l-.9.52.75 1.3.9-.52c.38.21.8.37 1.26.47v1h1.5v-1c.46-.1.88-.26 1.26-.47l.9.52.75-1.3z"/>
@@ -650,11 +736,13 @@ _SIDEBAR_HTML = """
 
 
 def _dashboard_page(view: str = "main") -> str:
-    cls = {"main": "", "detail": "", "logs": "", "settings": ""}
+    cls = {"main": "", "detail": "", "logs": "", "creds": "", "settings": ""}
     if view == "detail":
         cls["detail"] = "active"
     elif view == "logs":
         cls["logs"] = "active"
+    elif view == "credentials":
+        cls["creds"] = "active"
     elif view == "settings":
         cls["settings"] = "active"
     else:
@@ -664,6 +752,7 @@ def _dashboard_page(view: str = "main") -> str:
         cls_dashboard=cls["main"],
         cls_detail=cls["detail"],
         cls_logs=cls["logs"],
+        cls_creds=cls["creds"],
         cls_settings=cls["settings"],
     )
 
@@ -671,6 +760,8 @@ def _dashboard_page(view: str = "main") -> str:
         content = _detail_content()
     elif view == "logs":
         content = _logs_content()
+    elif view == "credentials":
+        content = _credentials_content()
     elif view == "settings":
         content = _settings_content()
     else:
@@ -771,6 +862,180 @@ document.addEventListener('DOMContentLoaded', loadDetail);
 document.addEventListener('DOMContentLoaded', () => {
     refreshLogs();
     setInterval(refreshLogs, 15000);
+});
+"""
+    elif view == "credentials":
+        return r"""
+async function loadCredentials() {
+    const tbody = document.getElementById('cred-tbody');
+    try {
+        const r = await fetch('/api/credentials');
+        if (!r.ok) { tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#C0392B">Failed to load credentials</td></tr>'; return; }
+        const d = await r.json();
+        const profiles = d.profiles || [];
+        if (!profiles.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:20px">No credential profiles configured. Click <strong>+ Add Profile</strong> to add one.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = '';
+        profiles.forEach(p => {
+            const targets = (p.targets || []).join(', ') || '—';
+            const username = p.username || '—';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${esc(p.profile_name||'')}</strong></td>
+                <td><span class="badge badge-blue">${esc(p.type||'')}</span></td>
+                <td>${esc(p.scope||'')}</td>
+                <td style="font-size:12px;color:#666">${esc(targets)}</td>
+                <td>${esc(username)}</td>
+                <td>
+                  <button class="btn-sm btn-sm-blue" onclick='editCred(${JSON.stringify(p)})'>Edit</button>
+                  &nbsp;
+                  <button class="btn-sm btn-sm-red" onclick="deleteCred('${esc(p.profile_name||'')}')">Delete</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="6" style="text-align:center;color:#C0392B">Error: ${e.message}</td></tr>`;
+    }
+}
+
+function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showCredForm() {
+    document.getElementById('cred-form-card').style.display = '';
+    document.getElementById('cred-form-title').textContent = 'Add Credential Profile';
+    document.getElementById('cred-form').reset();
+    onTypeChange();
+    onScopeChange();
+    window.scrollTo(0, document.getElementById('cred-form-card').offsetTop - 20);
+}
+
+function hideCredForm() {
+    document.getElementById('cred-form-card').style.display = 'none';
+}
+
+function editCred(p) {
+    showCredForm();
+    document.getElementById('cred-form-title').textContent = 'Edit Credential Profile';
+    document.getElementById('f-name').value = p.profile_name || '';
+    document.getElementById('f-type').value = p.type || 'ssh';
+    document.getElementById('f-scope').value = p.scope || 'global';
+    document.getElementById('f-targets').value = (p.targets||[]).join(', ');
+    onTypeChange();
+    onScopeChange();
+    if (p.type === 'ssh' || p.type === 'wmi') {
+        document.getElementById('f-username').value = p.username || '';
+        if (p.type === 'ssh') document.getElementById('f-sshkey').value = p.ssh_key_path || '';
+    } else if (p.type === 'snmp_v3') {
+        document.getElementById('f-snmpuser').value = p.username || '';
+    }
+    // Passwords/keys are never pre-filled — user must re-enter to change
+}
+
+function onTypeChange() {
+    const t = document.getElementById('f-type').value;
+    const ssh  = t === 'ssh';
+    const wmi  = t === 'wmi';
+    const v2c  = t === 'snmp_v2c';
+    const v3   = t === 'snmp_v3';
+    document.getElementById('fg-userpass').style.display    = (ssh||wmi) ? '' : 'none';
+    document.getElementById('fg-sshkey').style.display      = ssh ? '' : 'none';
+    document.getElementById('fg-community').style.display   = v2c ? '' : 'none';
+    document.getElementById('fg-snmpv3').style.display      = v3  ? '' : 'none';
+}
+
+function onScopeChange() {
+    const s = document.getElementById('f-scope').value;
+    document.getElementById('fg-targets').style.display = (s === 'global') ? 'none' : '';
+}
+
+async function submitCredForm(e) {
+    e.preventDefault();
+    const btn  = document.getElementById('btn-cred-save');
+    const spin = document.getElementById('spin-cred');
+    btn.disabled = true;
+    spin.style.display = 'inline-block';
+
+    const type  = document.getElementById('f-type').value;
+    const scope = document.getElementById('f-scope').value;
+    const targRaw = document.getElementById('f-targets').value.trim();
+
+    const profile = {
+        profile_name: document.getElementById('f-name').value.trim(),
+        type: type,
+        scope: scope,
+    };
+    if (scope !== 'global' && targRaw) {
+        profile.targets = targRaw.split(',').map(s => s.trim()).filter(Boolean);
+    }
+    if (type === 'ssh' || type === 'wmi') {
+        profile.username = document.getElementById('f-username').value.trim();
+        const pw = document.getElementById('f-password').value;
+        if (pw) profile.password = pw;
+        if (type === 'ssh') {
+            const sk = document.getElementById('f-sshkey').value.trim();
+            if (sk) profile.ssh_key_path = sk;
+        }
+    } else if (type === 'snmp_v2c') {
+        const comm = document.getElementById('f-community').value;
+        if (comm) profile.snmp_community = comm;
+    } else if (type === 'snmp_v3') {
+        profile.username = document.getElementById('f-snmpuser').value.trim();
+        const ak = document.getElementById('f-authkey').value;
+        const pk = document.getElementById('f-privkey').value;
+        if (ak) profile.snmp_auth_key = ak;
+        if (pk) profile.snmp_priv_key = pk;
+    }
+
+    try {
+        const r = await fetch('/api/credentials/add', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(profile),
+        });
+        const d = await r.json();
+        if (d.success) {
+            showToast(d.message, 'success');
+            hideCredForm();
+            loadCredentials();
+        } else {
+            showToast(d.message || 'Save failed', 'error');
+        }
+    } catch(err) {
+        showToast('Request failed: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false;
+        spin.style.display = 'none';
+    }
+}
+
+async function deleteCred(name) {
+    if (!confirm(`Delete credential profile "${name}"?`)) return;
+    try {
+        const r = await fetch('/api/credentials/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({profile_name: name}),
+        });
+        const d = await r.json();
+        if (d.success) {
+            showToast(d.message, 'success');
+            loadCredentials();
+        } else {
+            showToast(d.message || 'Delete failed', 'error');
+        }
+    } catch(err) {
+        showToast('Request failed: ' + err.message, 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    loadCredentials();
+    onTypeChange();
+    onScopeChange();
 });
 """
     elif view == "settings":
@@ -887,6 +1152,114 @@ def _logs_content() -> str:
     </span>
   </div>
   <div class="log-box" style="max-height:600px" id="log-box">Loading…</div>
+</div>
+"""
+
+
+def _credentials_content() -> str:
+    return """
+<div class="card">
+  <div class="card-title">Credential Profiles
+    <button class="btn btn-orange btn-sm" style="float:right;padding:5px 14px;font-size:12px"
+            onclick="showCredForm()">+ Add Profile</button>
+  </div>
+  <div style="overflow-x:auto">
+  <table class="cred-table" id="cred-table">
+    <thead>
+      <tr>
+        <th>Profile Name</th><th>Type</th><th>Scope</th><th>Targets</th><th>Username</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="cred-tbody">
+      <tr><td colspan="6" style="text-align:center;color:#888;padding:20px">Loading…</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card" id="cred-form-card" style="display:none">
+  <div class="card-title" id="cred-form-title">Add Credential Profile</div>
+  <form id="cred-form" onsubmit="submitCredForm(event)">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Profile Name</label>
+        <input type="text" id="f-name" placeholder="e.g. ssh-admin" required>
+      </div>
+      <div class="form-group">
+        <label>Type</label>
+        <select id="f-type" onchange="onTypeChange()">
+          <option value="ssh">SSH</option>
+          <option value="wmi">WMI / Windows</option>
+          <option value="snmp_v2c">SNMP v2c</option>
+          <option value="snmp_v3">SNMP v3</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Scope</label>
+        <select id="f-scope" onchange="onScopeChange()">
+          <option value="global">Global (all hosts)</option>
+          <option value="subnet">Subnet</option>
+          <option value="host">Specific Host</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group" id="fg-targets" style="display:none">
+      <label>Targets (comma-separated IPs or CIDRs)</label>
+      <input type="text" id="f-targets" placeholder="e.g. 192.168.1.0/24, 10.0.0.5">
+    </div>
+
+    <div id="fg-userpass">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="f-username" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Password</label>
+          <input type="password" id="f-password" autocomplete="new-password"
+                 placeholder="Leave blank to keep existing">
+        </div>
+      </div>
+      <div class="form-group" id="fg-sshkey">
+        <label>SSH Key Path (optional, overrides password)</label>
+        <input type="text" id="f-sshkey" placeholder="/home/user/.ssh/id_rsa">
+      </div>
+    </div>
+
+    <div class="form-group" id="fg-community" style="display:none">
+      <label>SNMP Community String</label>
+      <input type="password" id="f-community" autocomplete="new-password"
+             placeholder="Leave blank to keep existing">
+    </div>
+
+    <div id="fg-snmpv3" style="display:none">
+      <div class="form-row">
+        <div class="form-group">
+          <label>Username</label>
+          <input type="text" id="f-snmpuser" autocomplete="off">
+        </div>
+        <div class="form-group">
+          <label>Auth Key</label>
+          <input type="password" id="f-authkey" autocomplete="new-password"
+                 placeholder="Leave blank to keep existing">
+        </div>
+        <div class="form-group">
+          <label>Priv Key</label>
+          <input type="password" id="f-privkey" autocomplete="new-password"
+                 placeholder="Leave blank to keep existing">
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <button type="submit" class="btn btn-orange" id="btn-cred-save">
+        <span class="spinner" id="spin-cred" style="display:none"></span>
+        Save Profile
+      </button>
+      <button type="button" class="btn btn-grey" onclick="hideCredForm()">Cancel</button>
+    </div>
+  </form>
 </div>
 """
 
@@ -1083,6 +1456,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {"lines": lines})
             return
 
+        if path == "/api/credentials":
+            if not self._require_auth_json():
+                return
+            self._send_json(200, {"profiles": _list_credentials()})
+            return
+
         self._send_html(404, "<h1>404 Not Found</h1>")
 
     # ── POST ─────────────────────────────────────────────────────────────────
@@ -1133,6 +1512,26 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                                       "message": "Reconfigure triggered (check Pi console)."})
             except Exception as e:
                 self._send_json(200, {"success": False, "message": str(e)})
+            return
+
+        if path == "/api/credentials/add":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            result = _save_credential(body)
+            self._send_json(200, result)
+            return
+
+        if path == "/api/credentials/delete":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            name = body.get("profile_name", "")
+            if not name:
+                self._send_json(400, {"success": False, "message": "profile_name required"})
+                return
+            result = _delete_credential(name)
+            self._send_json(200, result)
             return
 
         self._send_json(404, {"error": "Not found"})

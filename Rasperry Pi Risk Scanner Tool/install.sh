@@ -716,11 +716,12 @@ encrypt_credentials() {
 import sys
 sys.path.insert(0, '/opt/risk-scanner/lib')
 try:
+    from pathlib import Path
     from credential_store import save_credentials
     import json
     with open('/tmp/.risk-scanner-creds-tmp.json') as f:
         profiles = json.load(f)
-    save_credentials(profiles, '/opt/risk-scanner/config/config.json')
+    save_credentials(profiles, Path('/opt/risk-scanner/config/credentials.enc'))
     print("Credentials encrypted and stored successfully.")
 except ImportError:
     # credential_store not yet present (first-time install before full clone)

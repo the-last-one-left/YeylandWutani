@@ -260,13 +260,14 @@ echo "Saving to credential store..."
 
 sudo -u "$SERVICE_USER" "$VENV_PYTHON" - <<'PYEOF'
 import sys, json
+from pathlib import Path
 sys.path.insert(0, '/opt/risk-scanner/lib')
 from credential_store import add_credential
 import os
 
 with open('/tmp/.new-cred-profile.json') as f:
     profile = json.load(f)
-add_credential(profile, '/opt/risk-scanner/config/config.json')
+add_credential(profile, Path('/opt/risk-scanner/config/credentials.enc'))
 print("Credential profile added successfully.")
 PYEOF
 
