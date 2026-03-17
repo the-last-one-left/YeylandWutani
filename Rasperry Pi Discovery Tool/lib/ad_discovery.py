@@ -105,6 +105,27 @@ def _find_dc_ips(hosts: list) -> list[str]:
             ip = host.get("ip")
             if ip:
                 dcs.append(ip)
+
+    # Fallback: Phase 4 may have probed LDAP outside the nmap port list,
+    # so 389 never appears in the ports array.  Quick TCP probe on all
+    # remaining hosts to catch DCs the port list missed.
+    if not dcs:
+        checked = set()
+        for host in hosts:
+            ip = host.get("ip", "")
+            if not ip or ip in checked:
+                continue
+            checked.add(ip)
+            try:
+                s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                s.settimeout(2)
+                if s.connect_ex((ip, 389)) == 0:
+                    logger.debug(f"[Phase 24] TCP fallback: port 389 open on {ip}")
+                    dcs.append(ip)
+                s.close()
+            except Exception:
+                pass
+
     return dcs
 
 
