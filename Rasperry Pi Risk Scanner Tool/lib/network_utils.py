@@ -837,6 +837,13 @@ def classify_device(
     if "vmware" in vendor:
         return "Virtual Machine"
 
+    # ── Microsoft MAC vendor — almost certainly a Hyper-V VM or Windows host ─
+    # 00:15:5D is the Hyper-V OUI; all Microsoft MAC prefixes imply Windows.
+    # Classify as Windows Device so the WMI scanner will attempt credentialed
+    # interrogation even when Windows Firewall blocks the initial port scan.
+    if "microsoft" in vendor:
+        return "Windows Device"
+
     # ── Generic ────────────────────────────────────────────────────────────
     return "Unknown Device"
 

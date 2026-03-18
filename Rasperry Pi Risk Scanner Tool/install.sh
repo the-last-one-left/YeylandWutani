@@ -279,14 +279,16 @@ setup_directories() {
         "${DATA_DIR}/reports" \
         "${LOG_DIR}"
 
-    # Root owns everything; service user owns runtime-writable dirs
+    # Root owns everything except dirs the service user must write to
     chown -R root:root "${INSTALL_DIR}"
     chown -R "${SERVICE_USER}:${SERVICE_USER}" "${LOG_DIR}" "${DATA_DIR}"
 
-    # Config dir: root-owned, traversable by service user
-    chown root:"${SERVICE_USER}" "${CONFIG_DIR}"
-    chmod 750 "${CONFIG_DIR}"
+    # Config dir: service-user-owned so the web dashboard can write config.json,
+    # credentials.enc, and dashboard.json without requiring root or sudo.
+    chown -R "${SERVICE_USER}:${SERVICE_USER}" "${CONFIG_DIR}"
+    chmod 700 "${CONFIG_DIR}"
 
+    # Config files: only the service user can read/write them
     # Config files: readable by service user (the blanket root:root above would
     # have reset these — re-apply group ownership so the service user can read them)
     for _cfg_file in \
@@ -296,8 +298,8 @@ setup_directories() {
         "${CONFIG_DIR}/.cred_key" \
         "${CONFIG_DIR}/.credentials.enc"; do
         [[ -f "${_cfg_file}" ]] || continue
-        chown root:"${SERVICE_USER}" "${_cfg_file}"
-        chmod 640 "${_cfg_file}"
+        chown "${SERVICE_USER}:${SERVICE_USER}" "${_cfg_file}"
+        chmod 600 "${_cfg_file}"
     done
     chmod 750 "${LOG_DIR}"
     chmod 750 "${DATA_DIR}"

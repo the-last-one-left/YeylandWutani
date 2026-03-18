@@ -25,6 +25,8 @@ echo ""
 echo "Checking for updates..."
 cd "$INSTALL_DIR"
 
+REPO_SUBFOLDER="Rasperry Pi Risk Scanner Tool"
+
 BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 
 if ! git pull --ff-only origin main 2>&1; then
@@ -34,6 +36,14 @@ fi
 
 # Pull any updated LFS objects (vuln-db.sqlite etc.)
 git lfs pull 2>/dev/null || true
+
+# git pull recreates the sparse-checkout subfolder in the working tree —
+# flatten it back to the install root so the running code stays up to date.
+if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}" ]]; then
+    echo "Flattening updated subfolder to install root..."
+    cp -a "${INSTALL_DIR}/${REPO_SUBFOLDER}/." "${INSTALL_DIR}/"
+    rm -rf "${INSTALL_DIR:?}/${REPO_SUBFOLDER}"
+fi
 
 AFTER=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 

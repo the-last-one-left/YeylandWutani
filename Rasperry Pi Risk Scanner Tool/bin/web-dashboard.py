@@ -349,9 +349,14 @@ def _get_last_scan_summary() -> Optional[dict]:
             hosts.append({
                 "ip":                   h.get("ip", ""),
                 "hostname":             h.get("hostname", ""),
+                "mac":                  h.get("mac", ""),
                 "vendor":               h.get("vendor", ""),
                 "category":             h.get("category", ""),
                 "os_guess":             h.get("os_guess") or h.get("os_version", ""),
+                "domain":               h.get("domain", ""),
+                "manufacturer":         h.get("manufacturer", ""),
+                "model":                h.get("model", ""),
+                "last_boot":            h.get("last_boot", ""),
                 "risk_score":           int(h.get("risk_score") or 0),
                 "risk_level":           h.get("risk_level", "LOW"),
                 "kev_cves":             kev_count,
@@ -1125,9 +1130,27 @@ async function loadDetail() {
                     + Add Credential for this host</a>`;
             }
 
+            // ── Identity info panel ───────────────────────────────────────────
+            const identParts = [];
+            if (h.mac)          identParts.push(`<span><b>MAC</b> ${escHtml(h.mac)}</span>`);
+            if (h.hostname)     identParts.push(`<span><b>Hostname</b> ${escHtml(h.hostname)}</span>`);
+            if (h.domain)       identParts.push(`<span><b>Domain</b> ${escHtml(h.domain)}</span>`);
+            if (h.os_guess)     identParts.push(`<span><b>OS</b> ${escHtml(h.os_guess)}</span>`);
+            if (h.manufacturer) identParts.push(`<span><b>Make</b> ${escHtml(h.manufacturer)}</span>`);
+            if (h.model)        identParts.push(`<span><b>Model</b> ${escHtml(h.model)}</span>`);
+            if (h.last_boot)    identParts.push(`<span><b>Last Boot</b> ${escHtml(h.last_boot)}</span>`);
+            if (h.vendor)       identParts.push(`<span><b>NIC Vendor</b> ${escHtml(h.vendor)}</span>`);
+            const identHtml = identParts.length
+                ? identParts.join('<span style="color:#CCC;margin:0 4px">|</span>')
+                : '<span style="color:#AAA;font-size:12px">No identity data available</span>';
+
             const expTr = document.createElement('tr');
             expTr.className = 'expand-row';
             expTr.innerHTML = `<td colspan="9"><div class="expand-content">
+
+                <div style="background:#F9F9F9;border-radius:6px;padding:8px 14px;margin-bottom:10px;font-size:12px;color:#444;flex-wrap:wrap;display:flex;gap:6px;align-items:center">
+                  ${identHtml}
+                </div>
 
                 <div style="background:#F0F4FF;border-radius:6px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;flex-wrap:wrap;gap:16px">
                   <div>

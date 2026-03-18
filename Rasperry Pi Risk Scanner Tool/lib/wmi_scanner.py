@@ -104,15 +104,29 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
             connection_timeout=_CMD_TIMEOUT,
         )
 
+        _ps_empty_count = [0]
+
         def ps(cmd: str) -> Optional[str]:
             try:
-                stdout, stderr, rc = client.execute_ps(cmd)
+                # pypsrp returns (stdout_str, PSDataStreams, had_errors) — not a plain stderr string
+                stdout, streams, had_errors = client.execute_ps(cmd)
                 out = (stdout or "").strip()
-                if not out and stderr:
-                    logger.debug(f"WinRM PS cmd stderr: {cmd[:60]}... — {stderr[:200]}")
+                if not out:
+                    _ps_empty_count[0] += 1
+                    # Extract error text from PSDataStreams safely
+                    err_text = ""
+                    try:
+                        if streams and hasattr(streams, "error") and streams.error:
+                            err_text = str(streams.error[0])[:300]
+                    except Exception:
+                        pass
+                    if err_text:
+                        logger.warning(f"WinRM empty result for {ip}: {err_text}")
+                    else:
+                        logger.debug(f"WinRM cmd returned empty stdout for {ip}: {cmd[:80]}")
                 return out or None
             except Exception as e:
-                logger.debug(f"WinRM PS cmd failed: {cmd[:60]}... — {e}")
+                logger.warning(f"WinRM PS cmd exception for {ip}: {e} — cmd: {cmd[:80]}")
                 return None
 
         # OS info
@@ -311,6 +325,12 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
         if uac_out is not None:
             result["uac_enabled"] = uac_out.strip() == "1"
 
+        if _ps_empty_count[0] >= 4 and not result.get("os_version"):
+            logger.warning(
+                f"WinRM connected to {ip} but all queries returned empty — "
+                "likely UAC token filtering (local account over network). "
+                "Fix: use a domain account, or set LocalAccountTokenFilterPolicy=1 on the target."
+            )
         logger.info(f"WinRM scan complete: {ip} — OS: {result['os_version'] or 'unknown'}")
         return True
 

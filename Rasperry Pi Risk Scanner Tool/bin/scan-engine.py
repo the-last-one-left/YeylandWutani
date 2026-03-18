@@ -789,7 +789,7 @@ def _run_ssh_scans(
 # Phase 6 — WMI / WinRM Scan
 # ══════════════════════════════════════════════════════════════════════════
 
-_WMI_PORTS = {445, 3389, 5985}
+_WMI_PORTS = {135, 445, 3389, 5985, 5986}
 _WMI_CATEGORIES = {"Windows Workstation", "Windows Server", "Windows Device",
                    "Domain Controller"}
 
