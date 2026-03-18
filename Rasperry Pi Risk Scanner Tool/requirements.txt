@@ -15,7 +15,12 @@ cryptography>=42.0.0
 paramiko>=3.4.0
 
 # SNMP scanning
-pysnmp>=4.4.12
+# pysnmp-lextudio is the maintained fork compatible with Python 3.12+
+# (the original pysnmp package does not support Python 3.12+)
+pysnmp-lextudio>=1.1.12
+
+# Network interface enumeration (MAC, gateway, subnet detection)
+netifaces>=0.11.0
 
 # Windows WMI/DCOM scanning (fallback when WinRM unavailable)
 impacket>=0.12.0

@@ -325,12 +325,24 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
         if uac_out is not None:
             result["uac_enabled"] = uac_out.strip() == "1"
 
-        if _ps_empty_count[0] >= 4 and not result.get("os_version"):
+        # If we got no useful data at all, treat as a failed scan so the
+        # caller can try DCOM fallback and so the host isn't counted as a
+        # credentialed success.  This happens with UAC token filtering when
+        # a local admin account connects over WinRM on a domain-joined host.
+        got_data = any([
+            result.get("os_version"),
+            result.get("running_services"),
+            result.get("wmi_software"),
+            result.get("local_users"),
+            result.get("installed_kbs"),
+        ])
+        if not got_data:
             logger.warning(
                 f"WinRM connected to {ip} but all queries returned empty — "
                 "likely UAC token filtering (local account over network). "
                 "Fix: use a domain account, or set LocalAccountTokenFilterPolicy=1 on the target."
             )
+            return False
         logger.info(f"WinRM scan complete: {ip} — OS: {result['os_version'] or 'unknown'}")
         return True
 

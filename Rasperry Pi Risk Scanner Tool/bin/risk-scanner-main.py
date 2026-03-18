@@ -283,8 +283,8 @@ def run_scan(config: dict) -> dict:
     elapsed = time.time() - t0
 
     host_count = len(results.get("hosts", []))
-    vuln_count = results.get("summary", {}).get("total_vulnerabilities", 0)
-    risk_score = results.get("summary", {}).get("risk_score", "N/A")
+    vuln_count = results.get("summary", {}).get("total_cves", 0)
+    risk_score = results.get("risk", {}).get("score", "N/A")
     logger.info(
         "Scan completed in %.1fs — %d host(s), %d vulnerability/ies, risk score: %s",
         elapsed, host_count, vuln_count, risk_score,
@@ -641,7 +641,7 @@ def main():
         logger.info("  Hosts scanned:         %d", len(all_hosts))
         logger.info("  Total vulnerabilities: %d", summary.get("total_cves", 0))
         logger.info("  Critical/High hosts:   %d", crit_high)
-        logger.info("  Risk score:            %s", results.get("env_risk_score", "N/A"))
+        logger.info("  Risk score:            %s", results.get("risk", {}).get("score", "N/A"))
         logger.info("  AI insights:           %s", "yes" if results.get("ai_insights") else "no")
         logger.info("  PDF reports sent:      %d", len(report_paths))
         if archive_path:

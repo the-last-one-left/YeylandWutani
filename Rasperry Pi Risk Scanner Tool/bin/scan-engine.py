@@ -627,6 +627,12 @@ def _run_port_scan(hosts: list, config: dict) -> list:
     target_ips = [h["ip"] for h in hosts]
     hosts_by_ip = {h["ip"]: h for h in hosts}
 
+    logger.info(
+        f"Phase 3: Scanning {len(target_ips)} hosts — "
+        f"TCP {'full -p-' if full_scan else f'top-{top_ports} + {len(_SUPPLEMENTAL_TCP_PORTS)} supplemental'}, "
+        f"UDP {'enabled' if enable_udp else 'disabled'}"
+    )
+
     # ── Pass 1: TCP scan ───────────────────────────────────────────────────
     if full_scan:
         tcp_port_arg = ["-p-"]
@@ -930,7 +936,11 @@ def _run_wmi_scans(
     candidates = [
         h for h in hosts
         if bool(set(h.get("open_ports", [])) & _WMI_PORTS)
-        or h.get("category") in _WMI_CATEGORIES
+        # If the port scan found ports but none are WMI ports, skip — don't
+        # waste a 30-second timeout on a host that is definitely not running
+        # WinRM/WMI.  Only fall back to category-based selection when the
+        # port scan found *nothing* (host may be filtering scans).
+        or (h.get("category") in _WMI_CATEGORIES and not h.get("open_ports"))
     ]
 
     if not candidates:
@@ -1022,7 +1032,7 @@ def _run_snmp_scans(
         profile = resolve_credential_profile(ip, snmp_creds) or None
         try:
             result = scan_host_snmp(ip, profile)
-            if result:
+            if result and result.get("snmp_success"):
                 _merge_dict(hosts_by_ip[ip], result)
                 if hosts_by_ip[ip].get("credential_type") == "none":
                     hosts_by_ip[ip]["credential_type"] = "snmp"
