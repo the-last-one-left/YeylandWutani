@@ -311,32 +311,72 @@ def _get_last_scan_summary() -> Optional[dict]:
         hosts_raw = data.get("hosts", [])
         hosts = []
         for h in hosts_raw:
-            kev_list = h.get("kev_cves", []) or []
+            cve_matches = h.get("cve_matches", []) or []
+            kev_count   = sum(1 for c in cve_matches if c.get("kev"))
+
+            # Flatten CVE matches to summary dicts the dashboard JS can render
+            cve_list = [
+                {
+                    "cve_id":      c.get("cve_id", ""),
+                    "cvss":        c.get("cvss_v3_score") or c.get("cvss_score") or 0,
+                    "severity":    c.get("severity", ""),
+                    "kev":         bool(c.get("kev")),
+                    "description": (c.get("description") or "")[:120],
+                }
+                for c in cve_matches[:20]
+            ]
+
+            # security_flags is a list of {severity, description} dicts
+            flags = [
+                {
+                    "severity":    f.get("severity", ""),
+                    "description": f.get("description", ""),
+                }
+                for f in (h.get("security_flags") or [])
+            ]
+
+            # Services: {port, name, product, version}
+            services = [
+                {
+                    "port":    s.get("port", ""),
+                    "name":    s.get("name", ""),
+                    "product": s.get("product", ""),
+                    "version": s.get("version", ""),
+                }
+                for s in (h.get("services") or [])
+            ]
+
             hosts.append({
-                "ip": h.get("ip", ""),
-                "hostname": h.get("hostname", ""),
-                "os_guess": h.get("os_guess", "Unknown"),
-                "risk_score": h.get("risk_score", 0),
-                "risk_level": h.get("risk_level", "LOW"),
-                "kev_cves": len(kev_list) if isinstance(kev_list, list) else kev_list,
-                "credentialed": bool(h.get("credentialed", False)),
-                "open_ports": len(h.get("open_ports", [])),
-                "cves": h.get("cves", []),
-                "security_findings": h.get("security_findings", []),
+                "ip":              h.get("ip", ""),
+                "hostname":        h.get("hostname", ""),
+                "vendor":          h.get("vendor", ""),
+                "category":        h.get("category", ""),
+                "os_guess":        h.get("os_guess") or h.get("os_version", ""),
+                "risk_score":      int(h.get("risk_score") or 0),
+                "risk_level":      h.get("risk_level", "LOW"),
+                "kev_cves":        kev_count,
+                "total_cves":      len(cve_matches),
+                "credentialed":    bool(h.get("credentialed", False)),
+                "open_ports":      len(h.get("open_ports", [])),
+                "cve_matches":     cve_list,
+                "security_flags":  flags,
+                "services":        services,
             })
 
         hosts.sort(key=lambda x: x["risk_score"], reverse=True)
 
         return {
-            "hosts": hosts,
-            "env_score": data.get("env_risk_score", 0),
-            "env_level": data.get("env_risk_level", "LOW"),
-            "scan_time": data.get("scan_time", ""),
-            "delta": data.get("delta", {}),
-            "credentialed_count": sum(1 for h in hosts if h["credentialed"]),
-            "kev_cve_count": sum(h["kev_cves"] for h in hosts),
-            "critical_hosts": sum(1 for h in hosts if h["risk_level"] == "CRITICAL"),
-            "high_hosts": sum(1 for h in hosts if h["risk_level"] == "HIGH"),
+            "hosts":             hosts,
+            "env_score":         data.get("env_risk_score", 0),
+            "env_level":         data.get("env_risk_level", "LOW"),
+            "scan_time":         data.get("scan_time", ""),
+            "total_cves":        sum(h["total_cves"] for h in hosts),
+            "delta":             data.get("_delta") or data.get("delta", {}),
+            "credentialed_count":sum(1 for h in hosts if h["credentialed"]),
+            "kev_cve_count":     sum(h["kev_cves"] for h in hosts),
+            "critical_hosts":    sum(1 for h in hosts if h["risk_level"] == "CRITICAL"),
+            "high_hosts":        sum(1 for h in hosts if h["risk_level"] == "HIGH"),
+            "ai_insights":       data.get("ai_insights") or "",
         }
     except Exception as e:
         logger.warning("Could not load last scan summary: %s", e)
@@ -948,50 +988,147 @@ document.addEventListener('DOMContentLoaded', () => {
 """
     elif view == "detail":
         return r"""
+function escHtml(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+function cvssClass(score) {
+    if (score >= 9) return 'badge-critical';
+    if (score >= 7) return 'badge-high';
+    if (score >= 4) return 'badge-medium';
+    return 'badge-low';
+}
+function flagClass(sev) {
+    const s = (sev||'').toUpperCase();
+    if (s === 'CRITICAL') return 'badge-critical';
+    if (s === 'HIGH')     return 'badge-high';
+    if (s === 'MEDIUM')   return 'badge-medium';
+    return 'badge-low';
+}
+
 async function loadDetail() {
     const tbody = document.getElementById('host-tbody');
     if (!tbody) return;
     try {
         const r = await fetch('/api/scan-detail');
-        if (!r.ok) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#888">No scan data available</td></tr>'; return; }
+        if (!r.ok) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888;padding:24px">No scan data available yet — run a scan first.</td></tr>';
+            return;
+        }
         const d = await r.json();
+
+        // AI insights card
+        if (d.ai_insights) {
+            const card = document.getElementById('ai-insights-card');
+            const body = document.getElementById('ai-insights-body');
+            if (card && body) { body.textContent = d.ai_insights; card.style.display = ''; }
+        }
+
         const hosts = d.hosts || [];
-        if (!hosts.length) { tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#888">No hosts found</td></tr>'; return; }
+        if (!hosts.length) {
+            tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#888;padding:24px">No hosts found in last scan.</td></tr>';
+            return;
+        }
         tbody.innerHTML = '';
-        hosts.forEach((h, i) => {
-            const rc = rowClass(h.risk_level);
-            const bc = badgeClass(h.risk_level);
-            const cred = h.credentialed ? '<span class="badge badge-ok">YES</span>' : '<span class="badge badge-err">NO</span>';
-            const kevBadge = h.kev_cves > 0 ? `<span class="badge badge-critical">${h.kev_cves}</span>` : '0';
-            const scoreClass = riskClass(h.risk_level);
+
+        hosts.forEach((h) => {
+            const rc  = rowClass(h.risk_level);
+            const bc  = badgeClass(h.risk_level);
+            const sc  = riskClass(h.risk_level);
+            const cred = h.credentialed
+                ? '<span class="badge badge-ok">YES</span>'
+                : '<span class="badge badge-warn">NO</span>';
+            const kevBadge = h.kev_cves > 0
+                ? `<span class="badge badge-critical">${h.kev_cves} KEV</span>`
+                : '<span style="color:#AAA">—</span>';
+            const hn   = escHtml(h.hostname || h.vendor || '');
+            const cat  = escHtml(h.category || '');
+            const os   = escHtml(h.os_guess || '');
+
             const tr = document.createElement('tr');
             tr.className = rc + ' expandable';
             tr.innerHTML = `
-                <td><strong>${h.ip||''}</strong></td>
-                <td>${h.hostname||''}</td>
-                <td>${h.os_guess||''}</td>
-                <td><span class="${scoreClass}" style="font-weight:700">${h.risk_score||0}</span></td>
+                <td><strong>${escHtml(h.ip||'')}</strong></td>
+                <td>${hn}</td>
+                <td><span style="color:#888;font-size:11px">${cat}</span>${cat&&os?' · ':''}${os}</td>
+                <td><span class="${sc}" style="font-weight:700;font-size:18px">${h.risk_score||0}</span></td>
                 <td><span class="badge ${bc}">${h.risk_level||''}</span></td>
+                <td style="font-weight:600">${h.total_cves||0}</td>
                 <td>${kevBadge}</td>
                 <td>${cred}</td>
                 <td>${h.open_ports||0}</td>
             `;
             tbody.appendChild(tr);
 
-            // Expand row
+            // ── Expand row ────────────────────────────────────────────────────
+            // Services
+            const svcRows = (h.services||[]).map(s =>
+                `<tr><td style="font-weight:600;color:#333">${escHtml(String(s.port))}</td>
+                     <td>${escHtml(s.name||'')}</td>
+                     <td>${escHtml((s.product||'') + (s.version ? ' ' + s.version : ''))}</td></tr>`
+            ).join('') || '<tr><td colspan="3" style="color:#AAA">No open ports detected</td></tr>';
+
+            // CVEs
+            const cveRows = (h.cve_matches||[]).map(c => {
+                const kev = c.kev ? '<span class="badge badge-critical" style="margin-right:4px">KEV</span>' : '';
+                const cvssScore = parseFloat(c.cvss||0).toFixed(1);
+                return `<tr>
+                    <td style="white-space:nowrap">${kev}<strong>${escHtml(c.cve_id||'')}</strong></td>
+                    <td><span class="badge ${cvssClass(c.cvss)}">${escHtml(c.severity||'')}</span></td>
+                    <td style="font-weight:600">${cvssScore}</td>
+                    <td style="font-size:12px;color:#555">${escHtml(c.description||'')}</td>
+                </tr>`;
+            }).join('') || '<tr><td colspan="4" style="color:#AAA">No CVEs detected</td></tr>';
+
+            // Security flags
+            const flagRows = (h.security_flags||[]).map(f =>
+                `<tr><td><span class="badge ${flagClass(f.severity)}">${escHtml(f.severity||'')}</span></td>
+                     <td style="font-size:12px">${escHtml(f.description||'')}</td></tr>`
+            ).join('') || '<tr><td colspan="2" style="color:#AAA">None</td></tr>';
+
             const expTr = document.createElement('tr');
             expTr.className = 'expand-row';
-            const cves = (h.cves||[]).slice(0,10).join(', ') || 'None';
-            const findings = (h.security_findings||[]).slice(0,5).join('; ') || 'None';
-            expTr.innerHTML = `<td colspan="8"><div class="expand-content">
-                <strong>CVEs (top 10):</strong> ${cves}
-                <strong style="margin-top:8px">Security Findings:</strong> ${findings}
+            expTr.innerHTML = `<td colspan="9"><div class="expand-content">
+                <div style="display:flex;gap:24px;flex-wrap:wrap">
+                  <div style="flex:1;min-width:220px">
+                    <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#888;margin-bottom:6px">Services</div>
+                    <table style="width:100%;font-size:12px;border-collapse:collapse">
+                      <thead><tr>
+                        <th style="text-align:left;color:#888;padding:2px 8px 4px 0">Port</th>
+                        <th style="text-align:left;color:#888;padding:2px 8px 4px 0">Service</th>
+                        <th style="text-align:left;color:#888;padding:2px 0 4px 0">Product / Version</th>
+                      </tr></thead>
+                      <tbody>${svcRows}</tbody>
+                    </table>
+                  </div>
+                  <div style="flex:1;min-width:220px">
+                    <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#888;margin-bottom:6px">Security Findings</div>
+                    <table style="width:100%;font-size:12px;border-collapse:collapse">
+                      <tbody>${flagRows}</tbody>
+                    </table>
+                  </div>
+                </div>
+                <div style="margin-top:14px">
+                  <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#888;margin-bottom:6px">
+                    CVEs (${(h.cve_matches||[]).length} shown${h.total_cves > (h.cve_matches||[]).length ? ' of ' + h.total_cves : ''})
+                  </div>
+                  <table style="width:100%;font-size:12px;border-collapse:collapse">
+                    <thead><tr>
+                      <th style="text-align:left;color:#888;padding:2px 8px 4px 0;white-space:nowrap">CVE ID</th>
+                      <th style="text-align:left;color:#888;padding:2px 8px 4px 0">Severity</th>
+                      <th style="text-align:left;color:#888;padding:2px 8px 4px 0">CVSS</th>
+                      <th style="text-align:left;color:#888;padding:2px 0 4px 0">Description</th>
+                    </tr></thead>
+                    <tbody>${cveRows}</tbody>
+                  </table>
+                </div>
             </div></td>`;
             tbody.appendChild(expTr);
         });
+
         initExpandRows();
     } catch(e) {
-        tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#C0392B">Error loading data</td></tr>';
+        const tbody = document.getElementById('host-tbody');
+        if (tbody) tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:#C0392B;padding:24px">Error loading scan detail: ${escHtml(e.message)}</td></tr>`;
     }
 }
 document.addEventListener('DOMContentLoaded', loadDetail);
@@ -1368,6 +1505,16 @@ def _main_content() -> str:
 
 def _detail_content() -> str:
     return """
+<div class="card" id="ai-insights-card" style="display:none">
+  <div class="card-title" style="display:flex;align-items:center;gap:8px">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#FF6600" stroke-width="2">
+      <circle cx="12" cy="12" r="10"/><path d="M12 8v4m0 4h.01"/>
+    </svg>
+    AI Risk Insights
+  </div>
+  <div id="ai-insights-body" style="font-size:13px;line-height:1.7;color:#444;white-space:pre-wrap"></div>
+</div>
+
 <div class="card">
   <div class="card-title">Host Risk Detail — click a row to expand</div>
   <div style="overflow-x:auto">
@@ -1375,17 +1522,18 @@ def _detail_content() -> str:
     <thead>
       <tr>
         <th>IP</th>
-        <th>Hostname</th>
-        <th>OS</th>
+        <th>Hostname / Vendor</th>
+        <th>OS / Category</th>
         <th>Score</th>
         <th>Level</th>
-        <th>KEV CVEs</th>
-        <th>Credentialed</th>
-        <th>Open Ports</th>
+        <th>CVEs</th>
+        <th>KEV</th>
+        <th>Cred</th>
+        <th>Ports</th>
       </tr>
     </thead>
     <tbody id="host-tbody">
-      <tr><td colspan="8" style="text-align:center;color:#888;padding:24px">Loading…</td></tr>
+      <tr><td colspan="9" style="text-align:center;color:#888;padding:24px">Loading…</td></tr>
     </tbody>
   </table>
   </div>

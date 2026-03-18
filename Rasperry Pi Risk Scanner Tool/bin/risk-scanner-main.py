@@ -586,6 +586,13 @@ def main():
                 delta.get("risk_score_delta", "N/A"),
             )
 
+            # AI insights run before saving so they are persisted in the archive
+            # and scan_history SQLite blob.
+            try:
+                get_ai_insights(results, delta, config)
+            except Exception as e:
+                logger.error("AI insights raised unhandled exception: %s", e, exc_info=True)
+
             archive_path = save_scan_results(results)
 
             try:
@@ -594,11 +601,6 @@ def main():
                 logger.info("scan_history: scan indexed in SQLite.")
             except Exception as e:
                 logger.warning("scan_history: SQLite save failed: %s", e)
-
-            try:
-                get_ai_insights(results, delta, config)
-            except Exception as e:
-                logger.error("AI insights raised unhandled exception: %s", e, exc_info=True)
         else:
             # ── Report-only branch ───────────────────────────────────────────
             logger.info("--report-only: loading latest saved scan...")
@@ -631,13 +633,16 @@ def main():
             logger.info("--scan-only: skipping report generation and email.")
 
         # Final summary
-        summary = results.get("summary", {})
+        summary   = results.get("summary", {})
+        all_hosts = results.get("hosts", [])
+        crit_high = sum(1 for h in all_hosts if h.get("risk_level") in ("CRITICAL", "HIGH"))
         logger.info("-" * 50)
         logger.info("RUN SUMMARY")
-        logger.info("  Hosts scanned:         %d", len(results.get("hosts", [])))
-        logger.info("  Total vulnerabilities: %d", summary.get("total_vulnerabilities", 0))
-        logger.info("  Critical/High:         %d", summary.get("critical_high_count", 0))
-        logger.info("  Risk score:            %s", summary.get("risk_score", "N/A"))
+        logger.info("  Hosts scanned:         %d", len(all_hosts))
+        logger.info("  Total vulnerabilities: %d", summary.get("total_cves", 0))
+        logger.info("  Critical/High hosts:   %d", crit_high)
+        logger.info("  Risk score:            %s", results.get("env_risk_score", "N/A"))
+        logger.info("  AI insights:           %s", "yes" if results.get("ai_insights") else "no")
         logger.info("  PDF reports sent:      %d", len(report_paths))
         if archive_path:
             logger.info("  Archive:               %s", archive_path.name)
