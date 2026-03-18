@@ -2020,11 +2020,33 @@ def _run_nse_scripts(ip: str, open_ports: list, config: dict) -> dict:
                                 pass  # leave as "unverified"
 
                 results["vulners_cves"] = cves
-                # Surface high/critical CVEs as nse_vulns — skip NVD-confirmed false positives
+                # Surface high/critical CVEs as nse_vulns.
+                # Filtering logic:
+                #   "likely_patched" → NVD confirms version is outside affected range → skip
+                #   "unverified" + version known → NVD has no data for this CVE (too old /
+                #       not seeded); cannot confirm either way → skip unless KEV-listed
+                #   "unverified" + no version info → vulners fired with no version context,
+                #       keep as weak signal
+                #   "confirmed" → NVD confirms version is in affected range → report
+                has_version_info = bool(port_versions)
                 nse_vulns = results.setdefault("nse_vulns", [])
                 for cve in cves:
-                    if cve.get("confidence") == "likely_patched":
+                    confidence = cve.get("confidence", "unverified")
+                    if confidence == "likely_patched":
                         continue  # NVD confirms this version is not in the affected range
+                    if confidence == "unverified" and has_version_info:
+                        # We detected a specific version but NVD has no CPE data to
+                        # verify this CVE (DB too old / not seeded for this CVE age).
+                        # Don't report as a confirmed finding — only surface if CISA KEV.
+                        is_kev_entry = False
+                        if _VULN_DB_AVAILABLE:
+                            try:
+                                from vuln_db import is_kev
+                                is_kev_entry = is_kev(cve["cve"])
+                            except Exception:
+                                pass
+                        if not is_kev_entry:
+                            continue
                     if cve["cvss"] >= 9.0:
                         nse_vulns.append({
                             "name": f"{cve['cve']} (CVSS {cve['cvss']}) on port {cve['port']}",
