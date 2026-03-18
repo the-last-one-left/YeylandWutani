@@ -522,8 +522,19 @@ def _parse_nmap_service_xml(xml_str: str, hosts_by_ip: dict) -> dict:
                     "banner": banner,
                 })
 
-        host["open_ports"] = sorted(set(open_ports))
-        host["services"] = services
+        # Merge with any ports already found by a previous scan pass so that
+        # supplemental and UDP passes add to — rather than replace — the
+        # results from the main TCP top-N scan.
+        existing_ports = set(host.get("open_ports", []))
+        existing_services = host.get("services", [])
+        existing_port_keys = {(s["port"], s.get("protocol", "tcp")) for s in existing_services}
+        for svc in services:
+            key = (svc["port"], svc.get("protocol", "tcp"))
+            if key not in existing_port_keys:
+                existing_services.append(svc)
+                existing_port_keys.add(key)
+        host["open_ports"] = sorted(existing_ports | set(open_ports))
+        host["services"] = existing_services
 
     return hosts_by_ip
 
