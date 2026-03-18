@@ -34,6 +34,7 @@
     "max_threads": 30,
     "port_scan_top_ports": 1000,
     "port_scan_full": false,
+    "port_scan_udp": true,
     "subnet_labels": {
       "10.0.1.0/24": "Servers",
       "10.0.2.0/24": "Workstations",

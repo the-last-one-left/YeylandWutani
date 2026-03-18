@@ -94,7 +94,7 @@ if [[ "$BEFORE" != "$AFTER" ]]; then
         fi
         if [[ "$POLKIT_CHANGED" == true ]]; then
             systemctl reload polkit 2>/dev/null || systemctl restart polkit 2>/dev/null || true
-            echo -e "${GREEN}Polkit reloaded.${NC}"
+            echo -e "${GREEN}Polkit rules reloaded.${NC}"
         fi
 
         # If any timer files changed, re-apply schedule from config so the
@@ -122,4 +122,13 @@ if [[ "$BEFORE" != "$AFTER" ]]; then
     echo -e "${GREEN}${BOLD}Update complete.${NC}"
 else
     echo -e "${GREEN}Already up to date.${NC}"
+fi
+
+# Always ensure polkit is running — the web dashboard scan button depends on it.
+# polkit uses D-Bus activation so 'enable' is not needed; just ensure it's started.
+if ! systemctl is-active --quiet polkit 2>/dev/null; then
+    echo -e "${YELLOW}polkit is not running — starting it now...${NC}"
+    systemctl start polkit 2>/dev/null && \
+        echo -e "${GREEN}polkit started.${NC}" || \
+        echo -e "${RED}Warning: could not start polkit — web scan button may not work.${NC}"
 fi

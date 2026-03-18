@@ -545,9 +545,64 @@ def _classify_host_category(host: dict) -> str:
     return classify_device(ports, mac, hostname, snmp_info, version_info)
 
 
+# Supplemental TCP ports always scanned regardless of --top-ports setting.
+# These cover vendor management interfaces and security-relevant services that
+# fall outside nmap's frequency-ranked top-N list or are commonly filtered on
+# internet scans but open on internal networks.
+_SUPPLEMENTAL_TCP_PORTS = [
+    # Alternate HTTP/HTTPS management
+    8080, 8443, 8888, 8081, 8082, 8083, 8084, 8085,
+    4443, 4444, 7443, 7080, 9090, 9443, 9080,
+    # Firewall / UTM vendor management (WatchGuard, Palo Alto, Fortinet, SonicWall, Cisco)
+    4117, 4118,       # WatchGuard management
+    4440,             # WatchGuard / Rundeck
+    843,              # Palo Alto GlobalProtect
+    10443,            # Fortinet
+    8888, 8080,       # SonicWall / generic
+    # Network management
+    10000,            # Webmin
+    8834,             # Nessus
+    9000, 9001, 9002, # Portainer, Minio, misc
+    5000, 5001,       # Docker / misc
+    3000,             # Grafana / Node dev
+    6443,             # Kubernetes API
+    # Databases (often missed behind firewalls)
+    1521,             # Oracle
+    1433,             # MSSQL (in top-1000 but ensure)
+    5432,             # PostgreSQL
+    27017, 27018,     # MongoDB
+    6379,             # Redis
+    9200, 9300,       # Elasticsearch
+    8123,             # ClickHouse
+    # Alternate SSH / remote access
+    2222, 2200, 8022,
+    4899,             # Radmin
+    5900, 5901, 5902, # VNC
+    # Industrial / OT
+    102,              # Siemens S7
+    502,              # Modbus
+    44818,            # EtherNet/IP
+    20000,            # DNP3
+    # Misc security-relevant
+    8161,             # ActiveMQ
+    61616,            # ActiveMQ
+    11211,            # Memcached
+    2181,             # ZooKeeper
+    9092,             # Kafka
+]
+# Deduplicate and sort for clean nmap argument
+_SUPPLEMENTAL_TCP_PORTS = sorted(set(_SUPPLEMENTAL_TCP_PORTS))
+
+# Key UDP ports — TCP-only scanning misses these entirely
+_UDP_PORTS = [53, 67, 69, 123, 137, 161, 162, 500, 514, 1194, 4500, 5353]
+
+
 def _run_port_scan(hosts: list, config: dict) -> list:
     """
     Phase 3: Service-version port scan with nmap.
+    Runs two passes:
+      1. TCP: --top-ports N (frequency-ranked) PLUS supplemental management/security ports
+      2. UDP: key UDP ports (SNMP, DNS, NTP, NetBIOS, IKE, Syslog, VPN)
     Populates open_ports, services, os_guess, and category for each host.
     """
     if not hosts:
@@ -555,38 +610,73 @@ def _run_port_scan(hosts: list, config: dict) -> list:
 
     scan_cfg = config.get("scan", {})
     top_ports = scan_cfg.get("port_scan_top_ports", 1000)
-    full_scan = scan_cfg.get("port_scan_full", False)
+    full_scan  = scan_cfg.get("port_scan_full", False)
+    enable_udp = scan_cfg.get("port_scan_udp", True)
 
-    # Build target list (one IP per line works; pass as CLI args)
     target_ips = [h["ip"] for h in hosts]
+    hosts_by_ip = {h["ip"]: h for h in hosts}
 
-    # Build nmap command
-    cmd = ["nmap", "-sV", "--version-intensity", "5", "-T4"]
+    # ── Pass 1: TCP scan ───────────────────────────────────────────────────
     if full_scan:
-        cmd += ["-p-"]
+        tcp_port_arg = ["-p-"]
     else:
-        cmd += [f"--top-ports", str(top_ports)]
-    cmd += ["--script=banner", "-oX", "-"] + target_ips
+        # Combine nmap's top-N with supplemental ports in a single -p argument
+        # so only one scan pass is needed. Format: "T:8080,8443,..." appended
+        # to --top-ports causes nmap to scan both sets.
+        # nmap doesn't support --top-ports + -p together, so we build an
+        # explicit port string: comma-joined supplemental ports plus the top-N
+        # via a separate invocation, results merged below.
+        tcp_port_arg = ["--top-ports", str(top_ports)]
+
+    tcp_cmd = ["nmap", "-sV", "--version-intensity", "5", "-T4"] + tcp_port_arg
+    tcp_cmd += ["--script=banner", "-oX", "-"] + target_ips
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
-        if result.returncode not in (0, 1):
-            logger.warning(f"Phase 3: nmap exited {result.returncode}: {result.stderr[:200]}")
+        tcp_result = subprocess.run(tcp_cmd, capture_output=True, text=True, timeout=1800)
+        if tcp_result.returncode not in (0, 1):
+            logger.warning(f"Phase 3: TCP nmap exited {tcp_result.returncode}: {tcp_result.stderr[:200]}")
+        _parse_nmap_service_xml(tcp_result.stdout, hosts_by_ip)
     except subprocess.TimeoutExpired:
-        logger.warning("Phase 3: nmap port scan timed out")
-        return hosts
+        logger.warning("Phase 3: TCP nmap scan timed out")
     except FileNotFoundError:
         logger.error("Phase 3: nmap not found — port scan skipped")
         return hosts
     except Exception as exc:
-        logger.error(f"Phase 3: nmap failed: {exc}")
-        return hosts
+        logger.error(f"Phase 3: TCP nmap failed: {exc}")
 
-    # Parse XML and update hosts in-place
-    hosts_by_ip = {h["ip"]: h for h in hosts}
-    _parse_nmap_service_xml(result.stdout, hosts_by_ip)
+    # ── Pass 1b: Supplemental TCP ports (management/vendor ports) ──────────
+    if not full_scan:
+        supp_str = ",".join(str(p) for p in _SUPPLEMENTAL_TCP_PORTS)
+        supp_cmd = ["nmap", "-sV", "--version-intensity", "3", "-T4",
+                    "-p", supp_str, "--script=banner", "-oX", "-"] + target_ips
+        try:
+            supp_result = subprocess.run(supp_cmd, capture_output=True, text=True, timeout=600)
+            if supp_result.returncode not in (0, 1):
+                logger.warning(f"Phase 3: supplemental nmap exited {supp_result.returncode}")
+            _parse_nmap_service_xml(supp_result.stdout, hosts_by_ip)
+            logger.info("Phase 3: Supplemental TCP port scan complete")
+        except subprocess.TimeoutExpired:
+            logger.warning("Phase 3: Supplemental TCP scan timed out")
+        except Exception as exc:
+            logger.warning(f"Phase 3: Supplemental TCP scan failed: {exc}")
 
-    # Assign category and annotate auth-capable ports
+    # ── Pass 2: UDP scan for key ports ─────────────────────────────────────
+    if enable_udp:
+        udp_str = ",".join(str(p) for p in _UDP_PORTS)
+        udp_cmd = ["nmap", "-sU", "-sV", "--version-intensity", "3", "-T4",
+                   "-p", udp_str, "--open", "-oX", "-"] + target_ips
+        try:
+            udp_result = subprocess.run(udp_cmd, capture_output=True, text=True, timeout=600)
+            if udp_result.returncode not in (0, 1):
+                logger.warning(f"Phase 3: UDP nmap exited {udp_result.returncode}: {udp_result.stderr[:200]}")
+            _parse_nmap_service_xml(udp_result.stdout, hosts_by_ip)
+            logger.info("Phase 3: UDP port scan complete")
+        except subprocess.TimeoutExpired:
+            logger.warning("Phase 3: UDP scan timed out")
+        except Exception as exc:
+            logger.warning(f"Phase 3: UDP scan failed: {exc}")
+
+    # ── Post-scan: categorise, annotate auth ports, flag filtered hosts ────
     _AUTH_PORT_LABELS = {
         22:   "SSH",
         445:  "SMB/WMI",
@@ -595,6 +685,7 @@ def _run_port_scan(hosts: list, config: dict) -> list:
         5986: "WinRM-SSL",
         161:  "SNMP",
     }
+    zero_port_hosts = 0
     for host in hosts:
         host["category"] = _classify_host_category(host)
         host["auth_ports"] = [
@@ -602,8 +693,25 @@ def _run_port_scan(hosts: list, config: dict) -> list:
             for p in host.get("open_ports", [])
             if p in _AUTH_PORT_LABELS
         ]
+        # Flag hosts that responded to discovery but show zero open ports —
+        # this usually means a host-based firewall or appliance is filtering
+        # the scan rather than genuinely having no services.
+        if not host.get("open_ports"):
+            zero_port_hosts += 1
+            host.setdefault("security_flags", []).append({
+                "severity": "INFO",
+                "description": (
+                    "No open ports detected — host may be filtering port scans "
+                    "(host-based firewall or network appliance). "
+                    "Consider whitelisting the scanner IP for accurate assessment."
+                ),
+            })
 
-    logger.info(f"Phase 3: Port scan complete — {sum(1 for h in hosts if h['open_ports'])} hosts with open ports")
+    open_count = sum(1 for h in hosts if h["open_ports"])
+    logger.info(
+        f"Phase 3: Port scan complete — {open_count} hosts with open ports, "
+        f"{zero_port_hosts} hosts appear filtered"
+    )
     return hosts
 
 
