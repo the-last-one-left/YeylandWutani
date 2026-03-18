@@ -1299,7 +1299,7 @@ if (-not $SkipComputerAudit -and $auditResults['LegacyOS']) {
     $healthDeductions += [Math]::Min(15, $auditResults['LegacyOS'].Count * 3)
 }
 
-# Deduct for unlinked GPOs (up to 5 points — GPO hygiene)
+# Deduct for unlinked GPOs (up to 5 points - GPO hygiene)
 if (-not $SkipGPOAudit -and $auditResults['UnlinkedGPOs']) {
     $healthDeductions += [Math]::Min(5, $auditResults['UnlinkedGPOs'].Count)
 }
@@ -1653,7 +1653,7 @@ $htmlReport += ConvertTo-HTMLReport -Title "Unclassified Accounts" `
 
 if (-not $SkipGPOAudit) {
     $htmlReport += ConvertTo-HTMLReport -Title "Group Policy Objects (All)" `
-        -Description "All GPOs in the domain. Unlinked GPOs are highlighted — they have no effect on any users or computers and may be safe to remove after review." `
+        -Description "All GPOs in the domain. Unlinked GPOs are highlighted - they have no effect on any users or computers and may be safe to remove after review." `
         -Data ($auditResults['GPOSummary'] | Sort-Object IsLinked, Name) `
         -Columns @('Name', 'Status', 'IsLinked', 'LinkCount', 'Enforced', 'Modified', 'WMIFilter', 'Description') `
         -SectionId "sec-gposummary" `
