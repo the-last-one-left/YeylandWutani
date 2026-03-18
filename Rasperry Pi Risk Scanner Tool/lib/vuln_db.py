@@ -192,6 +192,13 @@ def _migrate_legacy_json():
             data = json.loads(_LEGACY_NVD.read_text())
             _bulk_insert_nvd_dicts(data.values())
             logger.info(f"vuln_db: migrated {len(data):,} NVD entries from JSON")
+            # Stamp nvd_last_updated so --update doesn't trigger a full re-seed.
+            # Use INSERT OR IGNORE so a real timestamp from db-stats.json takes precedence.
+            with _conn() as c:
+                c.execute(
+                    "INSERT OR IGNORE INTO db_stats (key, value) VALUES (?, ?)",
+                    ("nvd_last_updated", datetime.now(timezone.utc).isoformat()),
+                )
         except Exception as e:
             logger.warning(f"vuln_db: NVD migration failed: {e}")
 
@@ -394,6 +401,23 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
     delay = NVD_RATE_LIMIT_KEY_DELAY if api_key else NVD_RATE_LIMIT_ANON_DELAY
 
     # ── Determine date range ───────────────────────────────────────────────
+    # Safety net: if nvd_last_updated is missing but the table already has rows
+    # (e.g. after a JSON→SQLite migration where db-stats.json was absent or used
+    # different keys), treat the DB as current and go incremental rather than
+    # triggering a multi-hour full re-seed.
+    if not force_full and not stats.get("nvd_last_updated"):
+        with _conn() as c:
+            existing_rows = c.execute("SELECT COUNT(*) FROM nvd_cves").fetchone()[0]
+        if existing_rows > 0:
+            logger.warning(
+                "NVD: nvd_last_updated missing but DB has %d CVEs — "
+                "treating as current and running incremental update.",
+                existing_rows,
+            )
+            ts = now_utc.isoformat()
+            _save_stats({"nvd_last_updated": ts})
+            stats["nvd_last_updated"] = ts
+
     if force_full or not stats.get("nvd_last_updated"):
         full_start = now_utc - timedelta(days=365 * max_age_years)
         resume_from = stats.get("nvd_init_window_start")
