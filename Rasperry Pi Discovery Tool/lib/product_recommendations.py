@@ -283,40 +283,29 @@ def size_environment(scan_results: dict) -> dict:
         physical_host_count = phys_detected if phys_detected > 0 else server_count
 
     # ── Security software signals ─────────────────────────────────────────
-    # AuthPoint (MFA): recommend when VPN, RDS, or WatchGuard detected
+    # AuthPoint (MFA): recommend only when VPN or RDS is confirmed.
+    # Generic RDP presence and firewall brand alone are not reliable signals —
+    # require a confirmed VPN AD group or a TERMSRV SPN (Remote Desktop Services).
     _vpn_keywords = {"vpn", "remote access", "remote users", "ssl-vpn",
                      "sslvpn", "anyconnect", "remote desktop users"}
     authpoint_reasons: list = []
 
-    # RDS/RDP: any Windows Server with port 3389 open warrants MFA on admin access
-    for _h in hosts:
-        _op = {p["port"] for p in _h.get("ports", []) if p.get("state") == "open"}
-        if 3389 in _op:
-            _os = (_h.get("ad_computer", {}).get("os") or _h.get("os") or "").lower()
-            if "server" in _os:
-                authpoint_reasons.append(
-                    "Windows Server with RDP (port 3389) detected -- MFA protects admin access"
-                )
-                break
-
-    # VPN/RDS from AD groups and SPNs
+    # Confirmed VPN / RDS evidence from credentialed AD scan only
     if ad_available:
         for _grp in list((ad.get("privileged_groups") or {}).keys()):
             if any(kw in _grp.lower() for kw in _vpn_keywords):
-                authpoint_reasons.append(f"AD group suggests VPN/remote access in use: '{_grp}'")
+                authpoint_reasons.append(
+                    f"Active Directory VPN/remote-access group detected: '{_grp}'"
+                )
                 break
         for _c in (ad.get("computers") or []):
             _spns = _c.get("ServicePrincipalNames") or _c.get("spns") or []
             if any("termsrv" in str(s).lower() for s in _spns):
                 if not any("RDS" in r for r in authpoint_reasons):
-                    authpoint_reasons.append("RDS (TERMSRV SPN) confirmed in Active Directory")
+                    authpoint_reasons.append(
+                        "Remote Desktop Services (TERMSRV SPN) confirmed in Active Directory"
+                    )
                 break
-
-    # WatchGuard already on network = VPN almost certainly in use
-    if has_watchguard and not authpoint_reasons:
-        authpoint_reasons.append(
-            "WatchGuard firewall detected -- native AuthPoint integration available for VPN MFA"
-        )
 
     recommend_authpoint = bool(authpoint_reasons)
 
@@ -707,6 +696,10 @@ def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
     When virtualisation is detected the recommended count is physical hosts
     (1 per 5 VMs by default), not the raw VM count, and the product is
     selected for a hypervisor workload (highest RAM/core density available).
+
+    For small environments (< 75 devices), recommends SMB-class hardware
+    (max_ram_gb <= 128) regardless of server count to avoid over-specifying
+    datacenter-grade equipment for simple DC / file-server / app-server roles.
     """
     server_count = env.get("server_count", 0)
     if server_count == 0:
@@ -717,18 +710,32 @@ def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
         return None
 
     is_virtualized = env.get("is_virtualized", False)
+    device_count   = env.get("device_count", 0)
 
     if is_virtualized:
         # Recommend physical hosts to consolidate VMs
         host_count = env.get("physical_host_count", max(1, math.ceil(server_count / 5)))
-        # Prefer the highest-RAM rack server — it will run the VMs
         rack_servers = [s for s in all_servers
                         if "rack" in (s.get("form_factor") or "").lower()]
         pool = rack_servers if rack_servers else all_servers
+        # For small VM footprints stay within SMB-class hardware (max_ram_gb <= 128)
+        vm_count = env.get("vm_count", server_count)
+        if vm_count <= 8:
+            smb_rack = [s for s in pool if s.get("max_ram_gb", 0) <= 128]
+            if smb_rack:
+                pool = smb_rack
         product = max(pool, key=lambda s: s.get("max_ram_gb", 0))
         return product, host_count
 
-    # Non-virtualised: size by raw server count as before
+    # Non-virtualised: for small environments scope to SMB-class hardware
+    # to avoid recommending datacenter-grade servers for simple office roles.
+    if device_count < 75:
+        smb_servers = [s for s in all_servers if s.get("max_ram_gb", 0) <= 128]
+        if smb_servers:
+            product = max(smb_servers, key=lambda s: s.get("max_ram_gb", 0))
+            return product, server_count
+
+    # Larger environments: select by raw server count
     candidates = [s for s in all_servers
                   if s.get("min_servers", 1) <= server_count <= s.get("max_servers", 99)]
     if not candidates:

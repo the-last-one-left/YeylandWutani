@@ -653,6 +653,177 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600",
           {anon_warning}
         </div>"""
 
+    # ── AD Security Findings ──────────────────────────────────────────────
+    sec_findings_html = ""
+    sec_findings = ad_enr.get("security_findings", [])
+    if sec_findings:
+        sev_colors = {
+            "high":     ("#dc3545", "#fff"),
+            "medium":   ("#ffc107", "#333"),
+            "low":      ("#6c757d", "#fff"),
+            "info":     ("#17a2b8", "#fff"),
+        }
+        rows = ""
+        for f in sec_findings:
+            sev = (f.get("severity") or "info").lower()
+            bg, fg = sev_colors.get(sev, ("#888", "#fff"))
+            badge = (f'<span style="background:{bg}; color:{fg}; font-size:10px; font-weight:bold; '
+                     f'padding:2px 6px; border-radius:3px; white-space:nowrap;">'
+                     f'{sev.upper()}</span>')
+            rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:5px 10px; width:70px; vertical-align:top;">{badge}</td>
+              <td style="padding:5px 10px; font-size:12px; font-weight:bold; color:#333; vertical-align:top;">{f.get('title','')}</td>
+              <td style="padding:5px 10px; font-size:11px; color:#666; vertical-align:top;">{f.get('detail','')}</td>
+            </tr>"""
+        sec_findings_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#c0392b; margin:12px 0 6px 0;">
+        &#9888; AD Security Findings
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; background:#fafafa; border:1px solid #f0d0d0; border-radius:4px; margin-bottom:10px;">
+        {rows}
+      </table>"""
+
+    # ── Stale Accounts ────────────────────────────────────────────────────
+    stale_html = ""
+    stale_users     = ad_enr.get("stale_users", [])
+    stale_computers = ad_enr.get("stale_computers", [])
+    never_logged_in = ad_enr.get("never_logged_in", [])
+    if stale_users or stale_computers or never_logged_in:
+        def _pill_list(items, bg, fg):
+            if not items:
+                return '<span style="color:#888; font-size:11px; font-style:italic;">None</span>'
+            pills = "".join(
+                f'<span style="display:inline-block; background:{bg}; color:{fg}; '
+                f'border-radius:3px; padding:2px 7px; margin:2px; font-size:11px;">{html.escape(str(n))}</span>'
+                for n in items[:12]
+            )
+            if len(items) > 12:
+                pills += f'<span style="font-size:11px; color:#888;"> +{len(items)-12} more</span>'
+            return pills
+
+        stale_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        Stale &amp; Dormant Accounts
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; margin-bottom:10px;">"""
+        if stale_users:
+            stale_html += f"""
+        <tr style="border-bottom:1px solid #dee2e6;">
+          <td style="padding:6px 10px; font-size:11px; font-weight:bold; color:#555; width:200px; white-space:nowrap;">
+            Stale Users ({len(stale_users)}) &nbsp;
+            <span style="font-weight:normal; color:#888;">inactive &gt;90 days</span>
+          </td>
+          <td style="padding:6px 10px;">{_pill_list(stale_users, '#fff3cd', '#856404')}</td>
+        </tr>"""
+        if never_logged_in:
+            stale_html += f"""
+        <tr style="border-bottom:1px solid #dee2e6;">
+          <td style="padding:6px 10px; font-size:11px; font-weight:bold; color:#555; white-space:nowrap;">
+            Never Logged In ({len(never_logged_in)})
+          </td>
+          <td style="padding:6px 10px;">{_pill_list(never_logged_in, '#e2e3e5', '#383d41')}</td>
+        </tr>"""
+        if stale_computers:
+            stale_html += f"""
+        <tr>
+          <td style="padding:6px 10px; font-size:11px; font-weight:bold; color:#555; white-space:nowrap;">
+            Stale Computers ({len(stale_computers)}) &nbsp;
+            <span style="font-weight:normal; color:#888;">inactive &gt;90 days</span>
+          </td>
+          <td style="padding:6px 10px;">{_pill_list(stale_computers, '#d1ecf1', '#0c5460')}</td>
+        </tr>"""
+        stale_html += "</table>"
+
+    # ── Password Policy ───────────────────────────────────────────────────
+    pwd_policy_html = ""
+    pp = ad_enr.get("password_policy", {})
+    if pp:
+        min_len     = pp.get("min_password_length")
+        complexity  = pp.get("complexity_enabled")
+        lockout     = pp.get("lockout_threshold")
+        max_age     = pp.get("max_password_age_days")
+        pp_rows = ""
+        if min_len is not None:
+            ok = int(min_len) >= 12
+            color = "#28a745" if ok else "#dc3545"
+            pp_rows += f'<tr><td style="padding:3px 8px; font-size:11px; color:#555; width:200px;">Min Password Length</td><td style="padding:3px 8px; font-size:11px; font-weight:bold; color:{color};">{int(min_len)} characters</td></tr>'
+        if complexity is not None:
+            ok = bool(complexity)
+            color = "#28a745" if ok else "#dc3545"
+            pp_rows += f'<tr><td style="padding:3px 8px; font-size:11px; color:#555;">Complexity Required</td><td style="padding:3px 8px; font-size:11px; font-weight:bold; color:{color};">{"Yes" if ok else "No"}</td></tr>'
+        if lockout is not None:
+            ok = int(lockout) > 0
+            color = "#28a745" if ok else "#dc3545"
+            lock_str = f"{int(lockout)} attempts" if ok else "Disabled"
+            pp_rows += f'<tr><td style="padding:3px 8px; font-size:11px; color:#555;">Account Lockout</td><td style="padding:3px 8px; font-size:11px; font-weight:bold; color:{color};">{lock_str}</td></tr>'
+        if max_age is not None and int(max_age) > 0:
+            pp_rows += f'<tr><td style="padding:3px 8px; font-size:11px; color:#555;">Max Password Age</td><td style="padding:3px 8px; font-size:11px;">{int(max_age)} days</td></tr>'
+        if pp_rows:
+            pwd_policy_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        Password Policy
+      </div>
+      <table cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; margin-bottom:10px;">
+        {pp_rows}
+      </table>"""
+
+    # ── Server Hardware ───────────────────────────────────────────────────
+    hw_html = ""
+    hardware = ad_enr.get("hardware", {})
+    if hardware:
+        hw_rows = ""
+        for cname, h in sorted(hardware.items()):
+            if not h.get("wmi_accessible"):
+                continue
+            mfr   = h.get("manufacturer", "")
+            model = h.get("model", "")
+            cpu   = h.get("cpu_name", "")
+            cores = h.get("cpu_cores_total", "")
+            ram   = h.get("total_ram_gb", "")
+            sn    = h.get("serial_number", "")
+            uptime = h.get("uptime_days")
+
+            disks = h.get("disks", [])
+            disk_total_gb = sum(d.get("size_gb", 0) for d in disks)
+            disk_used_gb  = h.get("total_used_gb")
+            if disk_used_gb:
+                disk_str = f"{disk_used_gb} GB used / {disk_total_gb} GB total ({len(disks)} disk{'s' if len(disks) != 1 else ''})"
+            elif disk_total_gb:
+                disk_str = f"{disk_total_gb} GB total ({len(disks)} disk{'s' if len(disks) != 1 else ''})"
+            else:
+                disk_str = "—"
+
+            hw_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:5px 8px; font-size:12px; font-weight:bold; color:#333; width:120px; vertical-align:top;">{html.escape(cname)}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#555; vertical-align:top;">{html.escape(f"{mfr} {model}".strip()) or "—"}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#555; vertical-align:top;">{html.escape(f"{cpu} ({cores} cores)".strip()) if cpu else "—"}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#555; vertical-align:top; white-space:nowrap;">{f"{ram} GB RAM" if ram else "—"}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#555; vertical-align:top;">{disk_str}</td>
+              <td style="padding:5px 8px; font-size:11px; color:#888; vertical-align:top; white-space:nowrap;">{f"S/N: {sn}" if sn else ""}{f" &bull; Up {uptime}d" if uptime is not None else ""}</td>
+            </tr>"""
+        if hw_rows:
+            hw_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        Server Hardware Inventory
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; font-size:11px; margin-bottom:10px;">
+        <tr style="background:#e8f4fb; color:#00628a;">
+          <th style="padding:5px 8px; text-align:left;">Server</th>
+          <th style="padding:5px 8px; text-align:left;">Model</th>
+          <th style="padding:5px 8px; text-align:left;">CPU</th>
+          <th style="padding:5px 8px; text-align:left;">RAM</th>
+          <th style="padding:5px 8px; text-align:left;">Disk</th>
+          <th style="padding:5px 8px; text-align:left;">Details</th>
+        </tr>
+        {hw_rows}
+      </table>"""
+
     return f"""
   <!-- ═══ ACTIVE DIRECTORY ENVIRONMENT ═══ -->
   <tr>
@@ -661,6 +832,10 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600",
         &#9672; Active Directory Environment
       </h2>
       {cards_html}
+      {sec_findings_html}
+      {stale_html}
+      {pwd_policy_html}
+      {hw_html}
     </td>
   </tr>
 """
@@ -2765,6 +2940,8 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
 
   {msp_summary}
 
+  {ai_insights_section}
+
   <!-- ═══ EXECUTIVE SUMMARY ═══ -->
   <tr>
     <td style="padding:28px 36px 0 36px;">
@@ -2802,8 +2979,6 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
     </td>
   </tr>
 
-  {ai_insights_section}
-
   <!-- ═══ NETWORK OVERVIEW ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2839,35 +3014,49 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
     </td>
   </tr>
 
-  <!-- Network Infrastructure group: DHCP + NTP/NAC -->
+  <!-- ─── GROUP DIVIDER: NETWORK INFRASTRUCTURE ─── -->
+  <tr>
+    <td style="padding:20px 36px 0 36px;">
+      <div style="background:#f0f4fa; border-left:4px solid {company_color}; border-radius:3px;
+                  padding:6px 14px; font-size:11px; font-weight:bold; color:{company_color};
+                  text-transform:uppercase; letter-spacing:0.8px;">
+        &#9654; Network Infrastructure
+      </div>
+    </td>
+  </tr>
+
   {dhcp_section}
 
   {infra_section}
 
-  <!-- WAN bandwidth baseline -->
   {speedtest_section}
 
-  <!-- ═══ DEVICE CATEGORIES ═══ -->
+  <!-- ─── GROUP DIVIDER: IDENTITY & DIRECTORY ─── -->
   <tr>
-    <td style="padding:24px 36px 0 36px;">
-      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
-        Device Breakdown
-      </h2>
-      {category_cards}
+    <td style="padding:20px 36px 0 36px;">
+      <div style="background:#f0f4fa; border-left:4px solid {company_color}; border-radius:3px;
+                  padding:6px 14px; font-size:11px; font-weight:bold; color:{company_color};
+                  text-transform:uppercase; letter-spacing:0.8px;">
+        &#9672; Identity &amp; Directory Services
+      </div>
     </td>
   </tr>
 
-  <!-- ═══ TOP SERVICES ═══ -->
+  {ad_section}
+
+  {windows_env_section}
+
+  <!-- ─── GROUP DIVIDER: SECURITY ─── -->
   <tr>
-    <td style="padding:24px 36px 0 36px;">
-      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
-        Services Summary (Top 10)
-      </h2>
-      {services_table}
+    <td style="padding:20px 36px 0 36px;">
+      <div style="background:#fff0f0; border-left:4px solid #c0392b; border-radius:3px;
+                  padding:6px 14px; font-size:11px; font-weight:bold; color:#c0392b;
+                  text-transform:uppercase; letter-spacing:0.8px;">
+        &#9888; Security Intelligence
+      </div>
     </td>
   </tr>
 
-  <!-- Security group: Observations + EOL + SSL Audit -->
   <!-- ═══ SECURITY OBSERVATIONS ═══ -->
   <tr>
     <td style="padding:24px 36px 0 36px;">
@@ -2875,7 +3064,6 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
         Security Observations
       </h2>
 
-      <!-- Rolled-up by issue type -->
       {"" if not summary.get("security_gaps") else f"""
       <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:6px;">By Issue Type</div>
       <table width="100%" cellpadding="0" cellspacing="0"
@@ -2901,7 +3089,7 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
       """}
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
-        <tr style="background:{company_color}; color:#fff;">
+        <tr style="background:#c0392b; color:#fff;">
           <th style="padding:8px 10px; text-align:left; font-size:12px; width:120px;">IP Address</th>
           <th style="padding:8px 10px; text-align:left; font-size:12px; width:160px;">Hostname</th>
           <th style="padding:8px 10px; text-align:left; font-size:12px;">Observation</th>
@@ -2919,28 +3107,38 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
 
   {ssl_audit_section}
 
-  <!-- External reconnaissance -->
   {osint_section}
 
-  <!-- Identity infrastructure -->
-  {ad_section}
+  <!-- ─── GROUP DIVIDER: DEVICE INVENTORY ─── -->
+  <tr>
+    <td style="padding:20px 36px 0 36px;">
+      <div style="background:#f0f4fa; border-left:4px solid {company_color}; border-radius:3px;
+                  padding:6px 14px; font-size:11px; font-weight:bold; color:{company_color};
+                  text-transform:uppercase; letter-spacing:0.8px;">
+        &#9636; Device Inventory
+      </div>
+    </td>
+  </tr>
 
-  <!-- Windows environment (enum4linux-ng) -->
-  {windows_env_section}
+  <!-- ═══ DEVICE CATEGORIES ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        Device Breakdown
+      </h2>
+      {category_cards}
+    </td>
+  </tr>
 
-  <!-- Wireless & protocol discovery -->
-  {wifi_section}
-
-  {protocol_section}
-
-  <!-- Business continuity -->
-  {backup_section}
-
-  <!-- Topology diagram -->
-  {topology_diagram_section}
-
-  <!-- Delta reporting (changes since last scan) -->
-  {delta_section}
+  <!-- ═══ TOP SERVICES ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        Services Summary (Top 10)
+      </h2>
+      {services_table}
+    </td>
+  </tr>
 
   <!-- ═══ ALL DISCOVERED DEVICES ═══ -->
   <tr>
@@ -2968,12 +3166,30 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
     </td>
   </tr>
 
-  <!-- ═══ CVE DETECTIONS (long lists) ═══ -->
+  <!-- ─── GROUP DIVIDER: NETWORK DISCOVERY ─── -->
+  <tr>
+    <td style="padding:20px 36px 0 36px;">
+      <div style="background:#f0f4fa; border-left:4px solid {company_color}; border-radius:3px;
+                  padding:6px 14px; font-size:11px; font-weight:bold; color:{company_color};
+                  text-transform:uppercase; letter-spacing:0.8px;">
+        &#9926; Wireless &amp; Network Discovery
+      </div>
+    </td>
+  </tr>
 
-  <!-- Deep TLS analysis (testssl.sh) -->
+  {wifi_section}
+
+  {protocol_section}
+
+  {backup_section}
+
+  {topology_diagram_section}
+
+  {delta_section}
+
+  <!-- ─── GROUP DIVIDER: DEEP ANALYSIS ─── -->
   {testssl_section}
 
-  <!-- Nikto web vulnerability scanning -->
   {nikto_section}
 
   <!-- ═══ OPERATIONAL STATISTICS (always last) ═══ -->
