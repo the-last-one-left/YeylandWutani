@@ -993,14 +993,22 @@ install_services() {
 
     # Install polkit rule so the web dashboard (NoNewPrivileges=yes) can
     # trigger scans via systemctl start without requiring sudo.
-    local POLKIT_DIR="/etc/polkit-1/rules.d"
-    local POLKIT_RULE="${SRC_SYSTEMD}/50-risk-scanner.rules"
-    if [[ -f "${POLKIT_RULE}" && -d "${POLKIT_DIR}" ]]; then
-        cp "${POLKIT_RULE}" "${POLKIT_DIR}/50-risk-scanner.rules"
-        chmod 0644 "${POLKIT_DIR}/50-risk-scanner.rules"
-        print_ok "polkit rule installed (web dashboard can trigger scans)."
-    elif [[ -f "${POLKIT_RULE}" ]]; then
-        print_warn "polkit rules.d not found at ${POLKIT_DIR} — web 'Run Scan' button may be denied."
+    #
+    # Bookworm (polkit ≥ 0.116): JavaScript rules in /etc/polkit-1/rules.d/
+    # Bullseye  (polkit   0.105): .pkla files in /etc/polkit-1/localauthority/
+    local RULES_DIR="/etc/polkit-1/rules.d"
+    local PKLA_DIR="/etc/polkit-1/localauthority/50-local.d"
+    if [[ -d "${RULES_DIR}" ]]; then
+        cp "${SRC_SYSTEMD}/50-risk-scanner.rules" "${RULES_DIR}/50-risk-scanner.rules"
+        chmod 0644 "${RULES_DIR}/50-risk-scanner.rules"
+        print_ok "polkit rule installed (Bookworm — web dashboard can trigger scans)."
+    elif [[ -d "/etc/polkit-1/localauthority" ]]; then
+        mkdir -p "${PKLA_DIR}"
+        cp "${SRC_SYSTEMD}/risk-scanner.pkla" "${PKLA_DIR}/risk-scanner.pkla"
+        chmod 0644 "${PKLA_DIR}/risk-scanner.pkla"
+        print_ok "polkit rule installed (Bullseye — web dashboard can trigger scans)."
+    else
+        print_warn "polkit not found — web 'Run Scan' button may be denied. Install polkit: apt-get install -y polkit"
     fi
 
     # Substitute schedule placeholders in timer unit files

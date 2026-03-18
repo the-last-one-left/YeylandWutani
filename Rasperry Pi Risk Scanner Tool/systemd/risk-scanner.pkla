@@ -1,0 +1,16 @@
+# polkit local authority rule — Yeyland Wutani Risk Scanner
+# Used on Raspberry Pi OS Bullseye (polkit 0.105) which uses .pkla files
+# instead of the JavaScript rules.d format used by Bookworm (polkit 0.116+).
+#
+# Grants the risk-scanner service account permission to manage systemd units
+# via D-Bus so the web dashboard (NoNewPrivileges=yes) can trigger scans.
+# risk-scanner is a locked service account (no shell, no login) so the broad
+# manage-units grant is acceptable — the .rules version on Bookworm narrows
+# this to only the two scan services.
+
+[Risk Scanner - Allow web dashboard to start scan services]
+Identity=unix-user:risk-scanner
+Action=org.freedesktop.systemd1.manage-units
+ResultAny=no
+ResultInactive=no
+ResultActive=yes
