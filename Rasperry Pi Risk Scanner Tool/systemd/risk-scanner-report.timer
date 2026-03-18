@@ -4,7 +4,6 @@ Requires=risk-scanner-report.service
 
 [Timer]
 OnCalendar=__REPORT_DAY__ __REPORT_TIME__:00
-Persistent=true
 
 [Install]
 WantedBy=timers.target

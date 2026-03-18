@@ -11,6 +11,6 @@
 [Risk Scanner - Allow web dashboard to start scan services]
 Identity=unix-user:risk-scanner
 Action=org.freedesktop.systemd1.manage-units
-ResultAny=no
-ResultInactive=no
+ResultAny=yes
+ResultInactive=yes
 ResultActive=yes
