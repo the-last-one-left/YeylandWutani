@@ -760,6 +760,38 @@ download_oui_db() {
     fi
 }
 
+# ── Vulnerability database ────────────────────────────────────────────────────
+
+init_vuln_db() {
+    step "Initializing vulnerability database"
+
+    local VULN_SCRIPT="${INSTALL_DIR}/bin/update-vuln-db.py"
+    local VULN_DB="${INSTALL_DIR}/data/vuln-db/vuln-db.sqlite"
+
+    if [[ ! -f "${VULN_SCRIPT}" ]]; then
+        warn "update-vuln-db.py not found at ${VULN_SCRIPT} — skipping."
+        return
+    fi
+
+    if [[ -f "${VULN_DB}" ]]; then
+        info "Pre-seeded vulnerability database found — running incremental update..."
+        if "${VENV_DIR}/bin/python3" "${VULN_SCRIPT}" --update; then
+            success "Vulnerability database updated."
+        else
+            warn "Incremental update failed (pre-seeded DB still usable). Run manually:"
+            warn "  sudo ${VENV_DIR}/bin/python3 ${VULN_SCRIPT} --update"
+        fi
+    else
+        info "No database found — running full initial seed (may take 30-60 min without API key)..."
+        if "${VENV_DIR}/bin/python3" "${VULN_SCRIPT}" --init; then
+            success "Vulnerability database initialized."
+        else
+            warn "Vulnerability database initialization failed. Run manually:"
+            warn "  sudo ${VENV_DIR}/bin/python3 ${VULN_SCRIPT} --init"
+        fi
+    fi
+}
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 main() {
@@ -776,6 +808,7 @@ main() {
     install_security_tools
     setup_directories
     download_oui_db
+    init_vuln_db
     install_services
     setup_logrotate
     run_config_wizard

@@ -1102,19 +1102,32 @@ PYEOF
 
 init_vuln_db() {
     print_step "Step 11: Initializing vulnerability database"
-    echo "  This may take several minutes on first run..."
 
     local VULN_SCRIPT="${INSTALL_DIR}/bin/update-vuln-db.py"
+    local VULN_DB="${DATA_DIR}/vuln-db/vuln-db.sqlite"
+
     if [[ ! -f "${VULN_SCRIPT}" ]]; then
         print_warn "update-vuln-db.py not found at ${VULN_SCRIPT} — skipping."
         return
     fi
 
-    if sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" "${VULN_SCRIPT}" --init; then
-        print_ok "Vulnerability database initialized."
+    if [[ -f "${VULN_DB}" ]]; then
+        # Pre-seeded DB shipped with the repo — just catch up incrementally.
+        echo "  Pre-seeded vulnerability database found — running incremental update..."
+        if sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" "${VULN_SCRIPT}" --update; then
+            print_ok "Vulnerability database updated."
+        else
+            print_warn "Incremental update failed (pre-seeded DB still usable). Run manually:"
+            print_warn "  sudo -u ${SERVICE_USER} ${VENV_DIR}/bin/python ${VULN_SCRIPT} --update"
+        fi
     else
-        print_warn "Vulnerability database initialization failed. Run manually:"
-        print_warn "  sudo -u ${SERVICE_USER} ${VENV_DIR}/bin/python ${VULN_SCRIPT} --init"
+        echo "  No database found — running full initial seed (may take 30-60 min without API key)..."
+        if sudo -u "${SERVICE_USER}" "${VENV_DIR}/bin/python" "${VULN_SCRIPT}" --init; then
+            print_ok "Vulnerability database initialized."
+        else
+            print_warn "Vulnerability database initialization failed. Run manually:"
+            print_warn "  sudo -u ${SERVICE_USER} ${VENV_DIR}/bin/python ${VULN_SCRIPT} --init"
+        fi
     fi
 }
 
