@@ -1553,9 +1553,8 @@ def _main_content() -> str:
     Send Report
   </button>
   <button class="btn btn-grey" id="btn-reconfig"
-          onclick="apiPost('/api/reconfigure','btn-reconfig','spin-reconfig')">
-    <span class="spinner" id="spin-reconfig" style="display:none"></span>
-    Reconfigure
+          onclick="window.location.href='/dashboard?view=settings'">
+    Settings
   </button>
   <span id="scan-progress" style="display:none;font-size:13px;color:#E67E22;
         align-self:center;font-weight:600">&#9654; Scan in progress…</span>
@@ -2129,16 +2128,11 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
         if path == "/api/reconfigure":
             if not self._require_auth_json():
                 return
-            try:
-                subprocess.Popen(
-                    ["sudo", "/opt/risk-scanner/bin/update-config.sh"],
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                )
-                self._send_json(200, {"success": True,
-                                      "message": "Reconfigure triggered (check Pi console)."})
-            except Exception as e:
-                self._send_json(200, {"success": False, "message": str(e)})
+            self._send_json(200, {
+                "success": False,
+                "message": "Use the Settings tab in the dashboard, or SSH to the Pi and run: "
+                           "sudo /opt/risk-scanner/bin/update-config.sh",
+            })
             return
 
         if path == "/api/credentials/add":

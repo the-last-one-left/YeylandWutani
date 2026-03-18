@@ -991,9 +991,34 @@ install_services() {
         info "Installed ${dest_name}"
     done
 
-    # Install polkit rule so the web dashboard (NoNewPrivileges=yes) can
-    # trigger scans via systemctl start without requiring sudo.
-    #
+    # Install polkit so the web dashboard (NoNewPrivileges=yes) can trigger
+    # scans via systemctl start over D-Bus without requiring sudo.
+    # The package name varies by Debian/Raspberry Pi OS release:
+    #   polkitd      — Debian 12 Bookworm
+    #   policykit-1  — Debian 11 Bullseye (transitional, pulls in polkitd)
+    #   polkit       — older releases
+    if ! systemctl is-active --quiet polkit.service 2>/dev/null && \
+       ! systemctl is-active --quiet polkitd.service 2>/dev/null; then
+        info "polkit not running — attempting to install..."
+        POLKIT_PKG=""
+        for pkg in polkitd policykit-1 polkit; do
+            if apt-cache show "$pkg" &>/dev/null 2>&1; then
+                POLKIT_PKG="$pkg"
+                break
+            fi
+        done
+        if [[ -n "$POLKIT_PKG" ]]; then
+            apt-get install -y --no-install-recommends "$POLKIT_PKG" && \
+                print_ok "polkit installed ($POLKIT_PKG)." || \
+                print_warn "polkit install failed — web 'Run Scan' button may not work."
+        else
+            print_warn "polkit package not found in apt — web 'Run Scan' button may not work. Try: apt-get install polkitd"
+        fi
+    else
+        print_ok "polkit already running."
+    fi
+
+    # Deploy polkit rule so the risk-scanner service account can start scan units.
     # Bookworm (polkit ≥ 0.116): JavaScript rules in /etc/polkit-1/rules.d/
     # Bullseye  (polkit   0.105): .pkla files in /etc/polkit-1/localauthority/
     local RULES_DIR="/etc/polkit-1/rules.d"
@@ -1008,7 +1033,7 @@ install_services() {
         chmod 0644 "${PKLA_DIR}/risk-scanner.pkla"
         print_ok "polkit rule installed (Bullseye — web dashboard can trigger scans)."
     else
-        print_warn "polkit not found — web 'Run Scan' button may be denied. Install polkit: apt-get install -y polkit"
+        print_warn "polkit config directory not found — web 'Run Scan' button may be denied."
     fi
 
     # Substitute schedule placeholders in timer unit files
