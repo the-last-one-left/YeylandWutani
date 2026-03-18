@@ -409,8 +409,8 @@ def generate_reports(results: dict, config: dict) -> list:
     if rep_cfg.get("enable_executive_report", True):
         logger.info("Generating executive PDF report...")
         try:
-            from executive_report import build_executive_pdf
-            pdf_bytes = build_executive_pdf(results, config)
+            from executive_report import generate_executive_pdf
+            pdf_bytes = generate_executive_pdf(results, config)
             out = HISTORY_DIR / f"exec_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
             out.write_bytes(pdf_bytes)
             report_paths.append(out)
@@ -422,16 +422,16 @@ def generate_reports(results: dict, config: dict) -> list:
     else:
         logger.info("Executive PDF disabled in config.")
 
-    # Detail PDF
+    # Detail PDF  (build_detail_pdf writes the file itself and returns the path)
     if rep_cfg.get("enable_detail_report", True):
         logger.info("Generating detail PDF report...")
         try:
             from detail_report import build_detail_pdf
-            pdf_bytes = build_detail_pdf(results, config)
             out = HISTORY_DIR / f"detail_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
-            out.write_bytes(pdf_bytes)
-            report_paths.append(out)
-            logger.info("Detail PDF: %s (%.0f KB)", out.name, len(pdf_bytes) / 1024)
+            HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+            result_path = build_detail_pdf(results, config, str(out))
+            report_paths.append(Path(result_path))
+            logger.info("Detail PDF: %s (%.0f KB)", out.name, out.stat().st_size / 1024)
         except ImportError:
             logger.warning("detail_report module not found — skipping detail PDF.")
         except Exception as e:

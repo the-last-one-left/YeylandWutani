@@ -92,10 +92,10 @@ def _find_latest_scan(history_dir: Path) -> Path | None:
 def _generate_executive(results: dict, config: dict, output_dir: Path) -> Path | None:
     """Generate executive PDF. Return output path or None on failure."""
     try:
-        from executive_report import build_executive_pdf
+        from executive_report import generate_executive_pdf
         logger.info("Generating executive PDF...")
         t0 = time.time()
-        pdf_bytes = build_executive_pdf(results, config)
+        pdf_bytes = generate_executive_pdf(results, config)
         out_path = output_dir / _report_filename(results, "executive_report")
         out_path.write_bytes(pdf_bytes)
         logger.info(
@@ -117,12 +117,13 @@ def _generate_detail(results: dict, config: dict, output_dir: Path) -> Path | No
         from detail_report import build_detail_pdf
         logger.info("Generating detail PDF...")
         t0 = time.time()
-        pdf_bytes = build_detail_pdf(results, config)
+        output_dir.mkdir(parents=True, exist_ok=True)
         out_path = output_dir / _report_filename(results, "detail_report")
-        out_path.write_bytes(pdf_bytes)
+        result_path = build_detail_pdf(results, config, str(out_path))
+        out_path = Path(result_path)
         logger.info(
             "Detail PDF: %s (%.0f KB, %.1fs)",
-            out_path.name, len(pdf_bytes) / 1024, time.time() - t0,
+            out_path.name, out_path.stat().st_size / 1024, time.time() - t0,
         )
         return out_path
     except ImportError:
