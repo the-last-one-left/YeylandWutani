@@ -1,5 +1,0 @@
-[ ] The recommendations for servers are too heavy, we need to dial it back and scope appropriately for smaller environments
-[ ] The recommendation for authpoint in every deployment is off base, only for rds or vpn existence
-[ ] We need to gather and use more data from the AD proxy, if it is discovered I want to get, and include in the email and reports important information for SEs such as users, stale users, computers, stale computers, disk sizing, any hardware specs or model information we can find, and this all should be reported on and included in AI enrichment
-[ ] Reorganize and improve the visual appeal of the HTML email, given it is html in email we cant have "active content" but lets make it look nicer and organize the content in a manner that makes more sense
-[ ] 

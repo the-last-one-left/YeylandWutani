@@ -383,13 +383,18 @@ def find_ad_proxy(
 
 def _get(dc_ip: str, port: int, token: str,
          endpoint: str, timeout: int = 120) -> Optional[dict | list]:
-    """Authenticated GET to a proxy endpoint."""
+    """Authenticated GET to a proxy endpoint.
+
+    Uses a 5-second connect timeout separate from the per-endpoint read
+    timeout so a hung proxy doesn't block the full timeout on each of the
+    8 sequential queries (which could total 11+ minutes).
+    """
     try:
         import requests as _req  # type: ignore
         resp = _req.get(
             f"http://{dc_ip}:{port}{endpoint}",
             headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
+            timeout=(5, timeout),   # (connect_timeout, read_timeout)
         )
         if resp.status_code == 200:
             return resp.json()
@@ -446,10 +451,26 @@ def _identify_server_names(computers: list, hosts: list) -> list[str]:
 # ── Data collection orchestration ─────────────────────────────────────────────
 
 def collect_ad_data(dc_ip: str, port: int, token: str, hosts: list) -> dict:
-    """Run all proxy endpoints and return the full collected data dict."""
+    """Run all proxy endpoints and return the full collected data dict.
+
+    Fail-fast: if /computers returns nothing the proxy has likely stalled or
+    died after the initial /ping health-check.  Skip remaining queries rather
+    than blocking for minutes on endpoints that will never respond.
+    """
 
     logger.info("[Phase 24] /computers ...")
-    computers   = _get(dc_ip, port, token, "/computers",       timeout=90)  or []
+    computers_raw = _get(dc_ip, port, token, "/computers", timeout=90)
+    if computers_raw is None:
+        logger.warning(
+            "[Phase 24] /computers returned no data — proxy appears to have stalled. "
+            "Skipping remaining AD queries and signalling /done."
+        )
+        _signal_done(dc_ip, port, token)
+        return {
+            "computers": [], "users": [], "groups": {},
+            "password_policy": {}, "dhcp": {}, "dns": {}, "gpos": {}, "hardware": {},
+        }
+    computers = computers_raw or []
 
     logger.info("[Phase 24] /users ...")
     users       = _get(dc_ip, port, token, "/users",           timeout=120) or []

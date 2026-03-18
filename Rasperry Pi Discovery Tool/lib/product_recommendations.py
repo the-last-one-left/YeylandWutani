@@ -718,12 +718,23 @@ def _select_servers(env: dict, catalog: dict) -> Optional[tuple]:
         rack_servers = [s for s in all_servers
                         if "rack" in (s.get("form_factor") or "").lower()]
         pool = rack_servers if rack_servers else all_servers
-        # For small VM footprints stay within SMB-class hardware (max_ram_gb <= 128)
+
         vm_count = env.get("vm_count", server_count)
-        if vm_count <= 8:
+
+        # Scale hardware class by VM count AND overall environment size.
+        # SMB environments (< 75 devices or ≤ 20 VMs) → SMB-class rack
+        # servers (max_ram_gb ≤ 128 GB, e.g. R360) are sufficient and avoid
+        # recommending enterprise-datacenter hardware for a small office.
+        if device_count < 75 or vm_count <= 20:
             smb_rack = [s for s in pool if s.get("max_ram_gb", 0) <= 128]
             if smb_rack:
                 pool = smb_rack
+        elif vm_count <= 50:
+            # Mid-range: R470 tier (skip dual-socket R670)
+            mid_rack = [s for s in pool if s.get("max_ram_gb", 0) <= 4096]
+            if mid_rack:
+                pool = mid_rack
+
         product = max(pool, key=lambda s: s.get("max_ram_gb", 0))
         return product, host_count
 
