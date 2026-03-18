@@ -126,6 +126,7 @@ install_packages() {
         net-tools \
         curl \
         git \
+        git-lfs \
         jq \
         logrotate \
         snmp \
@@ -163,6 +164,8 @@ clone_repo() {
     step "Cloning ${BRAND} ${PRODUCT} from GitHub"
 
     # Clone (or update) into SRC_DIR so the .git metadata is kept for self-update.
+    git lfs install --system 2>/dev/null || git lfs install 2>/dev/null || true
+
     if [[ -d "${SRC_DIR}/.git" ]]; then
         info "Existing source repo found at ${SRC_DIR} — updating..."
         git -C "${SRC_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}" || true
@@ -174,6 +177,7 @@ clone_repo() {
             git -C "${SRC_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}" || \
                 warn "git reset failed; installing from existing source."
         fi
+        git -C "${SRC_DIR}" lfs pull 2>>"${LOG_FILE}" || true
     else
         info "Sparse-cloning '${REPO_SUBFOLDER}' from ${REPO_URL}..."
         mkdir -p "${SRC_DIR}"
@@ -182,6 +186,7 @@ clone_repo() {
         git -C "${SRC_DIR}" config core.sparseCheckout true
         echo "${REPO_SUBFOLDER}/" >> "${SRC_DIR}/.git/info/sparse-checkout"
         git -C "${SRC_DIR}" pull --depth=1 origin main
+        git -C "${SRC_DIR}" lfs pull 2>>"${LOG_FILE}" || true
     fi
 
     if [[ ! -d "${SRC_DIR}/${REPO_SUBFOLDER}" ]]; then

@@ -32,6 +32,9 @@ if ! git pull --ff-only origin main 2>&1; then
     exit 0
 fi
 
+# Pull any updated LFS objects (vuln-db.sqlite etc.)
+git lfs pull 2>/dev/null || true
+
 AFTER=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 
 if [[ "$BEFORE" != "$AFTER" ]]; then

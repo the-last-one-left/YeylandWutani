@@ -155,6 +155,7 @@ install_packages() {
         curl \
         jq \
         git \
+        git-lfs \
         net-tools \
         dnsutils \
         traceroute \
@@ -200,6 +201,8 @@ create_service_user() {
 clone_repo() {
     print_step "Step 3: Cloning repository (sparse checkout)"
 
+    git lfs install --system 2>/dev/null || git lfs install 2>/dev/null || true
+
     if [[ -d "${INSTALL_DIR}/.git" ]]; then
         print_step "Updating existing installation..."
         git -C "${INSTALL_DIR}" fetch --depth=1 origin main 2>>"${LOG_FILE}" || true
@@ -208,6 +211,7 @@ clone_repo() {
             git -C "${INSTALL_DIR}" reset --hard FETCH_HEAD 2>>"${LOG_FILE}" || \
                 print_warn "git reset failed; continuing with existing files."
         fi
+        git -C "${INSTALL_DIR}" lfs pull 2>>"${LOG_FILE}" || true
 
         # git reset recreates the sparse-checkout subfolder — flatten it back to root
         if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}" ]]; then
@@ -227,6 +231,7 @@ clone_repo() {
     git sparse-checkout init --cone
     git sparse-checkout set "${REPO_SUBFOLDER}"
     git checkout
+    git lfs pull 2>>"${LOG_FILE}" || true
 
     # Move files from the subfolder up to the install root
     if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}" ]]; then

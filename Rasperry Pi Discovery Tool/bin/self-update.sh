@@ -132,6 +132,13 @@ fi
 AFTER=$("${GIT_BIN}" -C "${SRC_DIR}" rev-parse HEAD 2>/dev/null || echo "unknown")
 log_ok "Source updated: ${BEFORE:0:8} -> ${AFTER:0:8}"
 
+# ── Pull any updated LFS objects (vuln-db.sqlite etc.) ───────────────────────
+if command -v git-lfs &>/dev/null || command -v git lfs &>/dev/null 2>/dev/null; then
+    log "Pulling LFS objects..."
+    "${GIT_BIN}" -C "${SRC_DIR}" lfs pull >>"${LOG_FILE}" 2>&1 || \
+        log_warn "git lfs pull failed — LFS files may be stale."
+fi
+
 # ── Rsync updated files from source clone to install directory ────────────────
 log "Syncing updated files to ${INSTALL_DIR}..."
 rsync -a "${SRC_DIR}/${REPO_SUBFOLDER}/" "${INSTALL_DIR}/"
