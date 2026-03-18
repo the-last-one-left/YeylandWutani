@@ -1038,6 +1038,10 @@ install_services() {
     systemctl enable risk-scanner-web.service 2>/dev/null || \
         print_warn "risk-scanner-web.service not found — check systemd/ directory."
 
+    # apply-schedule is a oneshot triggered on-demand by the web dashboard;
+    # it must NOT be enabled (no timer/want) but its unit file must be present.
+    systemctl daemon-reload 2>/dev/null || true
+
     systemctl start risk-scanner-daily.timer 2>/dev/null || \
         print_warn "Could not start risk-scanner-daily.timer — may need a reboot."
     systemctl start risk-scanner-report.timer 2>/dev/null || \

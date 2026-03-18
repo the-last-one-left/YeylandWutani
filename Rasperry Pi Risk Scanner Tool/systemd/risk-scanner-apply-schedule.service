@@ -1,0 +1,12 @@
+[Unit]
+Description=Risk Scanner - Apply Schedule from Config to Systemd Timers
+After=risk-scanner-web.service
+
+[Service]
+Type=oneshot
+# Runs as root so it can modify /etc/systemd/system/ timer files and
+# call systemctl daemon-reload.  Triggered on-demand by the web dashboard
+# (risk-scanner user) via polkit when schedule settings are saved.
+ExecStart=/opt/risk-scanner/venv/bin/python3 /opt/risk-scanner/bin/apply-schedule.py
+StandardOutput=journal
+StandardError=journal

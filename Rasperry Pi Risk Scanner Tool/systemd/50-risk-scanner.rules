@@ -1,16 +1,18 @@
 /* polkit rule — Yeyland Wutani Risk Scanner
  *
- * Allows the risk-scanner service account to start the scan and report
- * services via systemctl (used by the web dashboard "Run Scan" button).
+ * Allows the risk-scanner service account to start specific services via
+ * systemctl (used by the web dashboard).  The web dashboard runs with
+ * NoNewPrivileges=yes so sudo cannot be used; polkit D-Bus calls are
+ * unaffected by that restriction.
  *
- * Scope is intentionally narrow: only the start action, only these two
- * units.  The web dashboard runs with NoNewPrivileges=yes so sudo cannot
- * be used; polkit D-Bus calls are unaffected by that restriction.
+ * risk-scanner-apply-schedule.service runs as root and updates the systemd
+ * timer OnCalendar values when schedule settings are saved in the dashboard.
  */
 polkit.addRule(function(action, subject) {
     var ALLOWED_UNITS = [
         "risk-scanner-daily.service",
-        "risk-scanner-report.service"
+        "risk-scanner-report.service",
+        "risk-scanner-apply-schedule.service"
     ];
 
     if (action.id === "org.freedesktop.systemd1.manage-units" &&

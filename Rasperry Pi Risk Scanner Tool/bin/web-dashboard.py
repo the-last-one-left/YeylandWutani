@@ -150,12 +150,153 @@ def _get_session_cookie(headers) -> str:
 
 # ── Main config ───────────────────────────────────────────────────────────────
 
+_SECRET_MASK = "••••••••"
+
+
 def _load_config() -> dict:
     try:
         with open(CONFIG_PATH) as f:
             return json.load(f)
     except Exception:
         return {}
+
+
+def _load_config_safe() -> dict:
+    """Load config with secret fields replaced by mask for safe transmission to browser."""
+    import copy
+    cfg = copy.deepcopy(_load_config())
+    if cfg.get("graph_api", {}).get("client_secret"):
+        cfg.setdefault("graph_api", {})["client_secret"] = _SECRET_MASK
+    if cfg.get("hatz_ai", {}).get("api_key"):
+        cfg.setdefault("hatz_ai", {})["api_key"] = _SECRET_MASK
+    # Flatten networks list to comma string for form field
+    networks = cfg.get("scanning", {}).get("networks", [])
+    if isinstance(networks, list):
+        cfg.setdefault("scanning", {})["networks"] = ", ".join(networks)
+    return cfg
+
+
+def _save_config(body: dict) -> dict:
+    """Validate and save config fields from a POST body dict."""
+    import re
+    VALID_TIME = re.compile(r'^([01]\d|2[0-3]):[0-5]\d$')
+    VALID_DAYS = {"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}
+
+    try:
+        cfg = _load_config()
+
+        # ── Identity / Reporting ──────────────────────────────────────────────
+        rep = cfg.setdefault("reporting", {})
+        for field in ("client_name", "site_name", "sender_email", "report_to"):
+            if field in body and body[field] is not None:
+                rep[field] = str(body[field]).strip()
+
+        # ── Graph API ─────────────────────────────────────────────────────────
+        graph = cfg.setdefault("graph_api", {})
+        for field in ("tenant_id", "client_id"):
+            if field in body and body[field] is not None:
+                graph[field] = str(body[field]).strip()
+        secret = body.get("client_secret", "")
+        if secret and secret != _SECRET_MASK:
+            graph["client_secret"] = secret
+
+        # ── Scanning ──────────────────────────────────────────────────────────
+        scan = cfg.setdefault("scanning", {})
+        if "networks" in body and body["networks"] is not None:
+            scan["networks"] = [n.strip() for n in str(body["networks"]).split(",") if n.strip()]
+
+        # ── Schedule ──────────────────────────────────────────────────────────
+        sched = cfg.setdefault("schedule", {})
+        sched_changed = False
+        scan_time   = str(body.get("scan_time",   sched.get("scan_time",   "02:00"))).strip()
+        report_time = str(body.get("report_time", sched.get("report_time", "06:00"))).strip()
+        report_day  = str(body.get("report_day",  sched.get("report_day",  "Mon"))).strip().capitalize()
+        if "scan_time" in body:
+            if not VALID_TIME.match(scan_time):
+                return {"success": False, "message": f"Invalid scan_time: {scan_time!r} — use HH:MM (24-hour)"}
+            if sched.get("scan_time") != scan_time:
+                sched["scan_time"] = scan_time
+                sched_changed = True
+        if "report_time" in body:
+            if not VALID_TIME.match(report_time):
+                return {"success": False, "message": f"Invalid report_time: {report_time!r} — use HH:MM (24-hour)"}
+            if sched.get("report_time") != report_time:
+                sched["report_time"] = report_time
+                sched_changed = True
+        if "report_day" in body:
+            if report_day not in VALID_DAYS:
+                return {"success": False, "message": f"Invalid report_day: {report_day!r} — use Mon/Tue/Wed/Thu/Fri/Sat/Sun"}
+            if sched.get("report_day") != report_day:
+                sched["report_day"] = report_day
+                sched_changed = True
+
+        # ── Hatz AI ───────────────────────────────────────────────────────────
+        hatz = cfg.setdefault("hatz_ai", {})
+        if "hatz_enabled" in body:
+            hatz["enabled"] = bool(body["hatz_enabled"])
+        if "hatz_model" in body and body["hatz_model"] is not None:
+            hatz["model"] = str(body["hatz_model"]).strip()
+        hatz_key = body.get("hatz_api_key", "")
+        if hatz_key and hatz_key != _SECRET_MASK:
+            hatz["api_key"] = hatz_key
+
+        # ── Write ─────────────────────────────────────────────────────────────
+        CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_PATH, "w") as f:
+            json.dump(cfg, f, indent=2)
+            f.write("\n")
+
+        msg = "Settings saved."
+        if sched_changed:
+            apply = _run_systemctl("start", "risk-scanner-apply-schedule.service")
+            if apply["success"]:
+                msg += " Schedule update applied."
+            else:
+                msg += f" Schedule saved but timer update failed: {apply['message']}"
+
+        return {"success": True, "message": msg}
+
+    except PermissionError:
+        return {"success": False, "message": "Permission denied writing config — check ReadWritePaths in risk-scanner-web.service"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+
+def _change_password(body: dict) -> dict:
+    """Change the dashboard password.  Requires current password verification."""
+    current  = body.get("current_password", "")
+    new_pw   = body.get("new_password", "")
+    confirm  = body.get("confirm_password", "")
+
+    stored = _load_password_hash()
+    if not stored:
+        return {"success": False, "message": "No password configured on this Pi"}
+    if not _verify_password(current, stored):
+        return {"success": False, "message": "Current password is incorrect"}
+    if not new_pw:
+        return {"success": False, "message": "New password cannot be empty"}
+    if len(new_pw) < 8:
+        return {"success": False, "message": "New password must be at least 8 characters"}
+    if new_pw != confirm:
+        return {"success": False, "message": "Passwords do not match"}
+
+    new_hash = _hash_password(new_pw)
+    try:
+        DASHBOARD_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with open(DASHBOARD_CONFIG_PATH) as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+        data["password_hash"] = new_hash
+        with open(DASHBOARD_CONFIG_PATH, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        return {"success": True, "message": "Password changed successfully."}
+    except PermissionError:
+        return {"success": False, "message": "Permission denied — check ReadWritePaths in risk-scanner-web.service"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 
 # ── Scan summary helper ───────────────────────────────────────────────────────
@@ -1037,7 +1178,118 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 """
     elif view == "settings":
-        return ""
+        return r"""
+async function loadSettings() {
+    try {
+        const r = await fetch('/api/config');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const cfg = await r.json();
+
+        const g = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+        const sel = (id, val) => { const el = document.getElementById(id); if (el) el.value = val || ''; };
+
+        // Identity / Reporting
+        g('s-client-name',   (cfg.reporting  || {}).client_name   || '');
+        g('s-site-name',     (cfg.reporting  || {}).site_name     || '');
+        g('s-sender-email',  (cfg.reporting  || {}).sender_email  || '');
+        g('s-report-to',     (cfg.reporting  || {}).report_to     || '');
+
+        // Graph API
+        g('s-tenant-id',     (cfg.graph_api  || {}).tenant_id     || '');
+        g('s-client-id',     (cfg.graph_api  || {}).client_id     || '');
+        g('s-client-secret', (cfg.graph_api  || {}).client_secret || '');
+
+        // Scanning
+        g('s-networks',      (cfg.scanning   || {}).networks      || '');
+
+        // Schedule
+        g('s-scan-time',     (cfg.schedule   || {}).scan_time     || '02:00');
+        g('s-report-time',   (cfg.schedule   || {}).report_time   || '06:00');
+        sel('s-report-day',  (cfg.schedule   || {}).report_day    || 'Mon');
+
+        // Hatz AI
+        sel('s-hatz-enabled', String((cfg.hatz_ai || {}).enabled !== false));
+        g('s-hatz-model',    (cfg.hatz_ai    || {}).model         || '');
+        g('s-hatz-api-key',  (cfg.hatz_ai    || {}).api_key       || '');
+
+        document.getElementById('settings-loading').style.display = 'none';
+        document.getElementById('settings-form').style.display = '';
+    } catch(e) {
+        document.getElementById('settings-loading').textContent = 'Failed to load settings: ' + e.message;
+    }
+}
+
+async function saveSettings() {
+    const btn  = document.getElementById('btn-save-settings');
+    const spin = document.getElementById('spin-save');
+    btn.disabled = true; spin.style.display = '';
+    const g = id => document.getElementById(id)?.value || '';
+    const body = {
+        client_name:    g('s-client-name'),
+        site_name:      g('s-site-name'),
+        sender_email:   g('s-sender-email'),
+        report_to:      g('s-report-to'),
+        tenant_id:      g('s-tenant-id'),
+        client_id:      g('s-client-id'),
+        client_secret:  g('s-client-secret'),
+        networks:       g('s-networks'),
+        scan_time:      g('s-scan-time'),
+        report_day:     g('s-report-day'),
+        report_time:    g('s-report-time'),
+        hatz_enabled:   document.getElementById('s-hatz-enabled')?.value === 'true',
+        hatz_model:     g('s-hatz-model'),
+        hatz_api_key:   g('s-hatz-api-key'),
+    };
+    try {
+        const r = await fetch('/api/config', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        showToast(d.message, d.success ? 'success' : 'error');
+        if (d.success) {
+            // Re-mask secrets so stale values aren't left in the form
+            loadSettings();
+        }
+    } catch(e) {
+        showToast('Error saving settings: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false; spin.style.display = 'none';
+    }
+}
+
+async function changePassword() {
+    const btn  = document.getElementById('btn-change-pw');
+    const spin = document.getElementById('spin-pw');
+    btn.disabled = true; spin.style.display = '';
+    const body = {
+        current_password:  document.getElementById('s-pw-current')?.value  || '',
+        new_password:      document.getElementById('s-pw-new')?.value      || '',
+        confirm_password:  document.getElementById('s-pw-confirm')?.value  || '',
+    };
+    try {
+        const r = await fetch('/api/password', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        showToast(d.message, d.success ? 'success' : 'error');
+        if (d.success) {
+            document.getElementById('s-pw-current').value = '';
+            document.getElementById('s-pw-new').value     = '';
+            document.getElementById('s-pw-confirm').value = '';
+        }
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false; spin.style.display = 'none';
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadSettings);
+"""
     return ""
 
 
@@ -1264,30 +1516,161 @@ def _credentials_content() -> str:
 
 def _settings_content() -> str:
     return """
+<div id="settings-loading" style="color:#888;font-size:14px;padding:8px 0">Loading settings…</div>
+<div id="settings-form" style="display:none">
+
+<!-- ── Identity ─────────────────────────────────────────────────────────── -->
 <div class="card">
-  <div class="card-title">Settings</div>
-  <p style="color:#555;font-size:14px;line-height:1.6">
-    To change the dashboard password, run the following command on the Pi:
-  </p>
-  <pre style="background:#F0F0F0;padding:12px;border-radius:6px;margin-top:12px;
-              font-size:13px;color:#333">sudo /opt/risk-scanner/bin/set-dashboard-password.sh</pre>
-  <p style="color:#555;font-size:14px;line-height:1.6;margin-top:16px">
-    To reconfigure scan targets, reporting, and schedule:
-  </p>
-  <pre style="background:#F0F0F0;padding:12px;border-radius:6px;margin-top:12px;
-              font-size:13px;color:#333">sudo /opt/risk-scanner/bin/update-config.sh</pre>
-  <p style="color:#555;font-size:14px;line-height:1.6;margin-top:16px">
-    Or click <strong>Reconfigure</strong> from the Dashboard view to trigger the
-    configuration wizard remotely (requires the Pi to have a console session).
-  </p>
+  <div class="card-title">Identity</div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Client / Organization Name</label>
+      <input id="s-client-name" type="text" placeholder="Acme Corp">
+    </div>
+    <div class="form-group">
+      <label>Site Name / Location</label>
+      <input id="s-site-name" type="text" placeholder="Main Office">
+    </div>
+  </div>
 </div>
-<div class="card" style="margin-top:0">
+
+<!-- ── Reporting ─────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Reporting</div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Sender Email (From)</label>
+      <input id="s-sender-email" type="text" placeholder="scanner@example.com">
+    </div>
+    <div class="form-group">
+      <label>Report Recipients (comma-separated)</label>
+      <input id="s-report-to" type="text" placeholder="admin@example.com, ciso@example.com">
+    </div>
+  </div>
+</div>
+
+<!-- ── Graph API ──────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Microsoft Graph API</div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Azure Tenant ID</label>
+      <input id="s-tenant-id" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    </div>
+    <div class="form-group">
+      <label>App Client ID</label>
+      <input id="s-client-id" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+    </div>
+  </div>
+  <div class="form-group" style="max-width:420px">
+    <label>Client Secret <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#AAA">(leave blank to keep existing)</span></label>
+    <input id="s-client-secret" type="password" placeholder="Enter new secret to change">
+  </div>
+</div>
+
+<!-- ── Scanning ───────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Scanning</div>
+  <div class="form-group">
+    <label>Target Networks (comma-separated CIDRs)</label>
+    <input id="s-networks" type="text" placeholder="192.168.1.0/24, 10.0.0.0/16">
+  </div>
+</div>
+
+<!-- ── Schedule ──────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Schedule</div>
+  <div class="form-row">
+    <div class="form-group">
+      <label>Daily Scan Time (HH:MM 24-hour)</label>
+      <input id="s-scan-time" type="text" placeholder="02:00" style="max-width:120px">
+    </div>
+    <div class="form-group">
+      <label>Weekly Report Day</label>
+      <select id="s-report-day" style="max-width:150px">
+        <option value="Mon">Monday</option>
+        <option value="Tue">Tuesday</option>
+        <option value="Wed">Wednesday</option>
+        <option value="Thu">Thursday</option>
+        <option value="Fri">Friday</option>
+        <option value="Sat">Saturday</option>
+        <option value="Sun">Sunday</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Weekly Report Time (HH:MM 24-hour)</label>
+      <input id="s-report-time" type="text" placeholder="06:00" style="max-width:120px">
+    </div>
+  </div>
+</div>
+
+<!-- ── Hatz AI ────────────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Hatz AI Enrichment</div>
+  <div class="form-row" style="align-items:flex-end">
+    <div class="form-group" style="max-width:140px">
+      <label>Enabled</label>
+      <select id="s-hatz-enabled">
+        <option value="true">Yes</option>
+        <option value="false">No</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label>Model</label>
+      <input id="s-hatz-model" type="text" placeholder="hatz-risk-v1" style="max-width:200px">
+    </div>
+    <div class="form-group" style="flex:2">
+      <label>API Key <span style="font-weight:400;text-transform:none;letter-spacing:0;color:#AAA">(blank to keep existing)</span></label>
+      <input id="s-hatz-api-key" type="password" placeholder="Enter new key to change">
+    </div>
+  </div>
+</div>
+
+<!-- ── Save ───────────────────────────────────────────────────────────────── -->
+<div class="action-row">
+  <button class="btn btn-orange" id="btn-save-settings" onclick="saveSettings()">
+    <span class="spinner" id="spin-save" style="display:none"></span>
+    Save Settings
+  </button>
+</div>
+
+<!-- ── Change Password ────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">Change Dashboard Password</div>
+  <div class="form-row" style="max-width:580px">
+    <div class="form-group">
+      <label>Current Password</label>
+      <input id="s-pw-current" type="password">
+    </div>
+  </div>
+  <div class="form-row" style="max-width:580px">
+    <div class="form-group">
+      <label>New Password</label>
+      <input id="s-pw-new" type="password">
+    </div>
+    <div class="form-group">
+      <label>Confirm New Password</label>
+      <input id="s-pw-confirm" type="password">
+    </div>
+  </div>
+  <div class="action-row" style="margin-bottom:0">
+    <button class="btn btn-blue" id="btn-change-pw" onclick="changePassword()">
+      <span class="spinner" id="spin-pw" style="display:none"></span>
+      Change Password
+    </button>
+  </div>
+</div>
+
+<!-- ── Service Actions ────────────────────────────────────────────────────── -->
+<div class="card">
   <div class="card-title">Service Actions</div>
   <div class="action-row" style="margin-bottom:0">
     <button class="btn btn-orange" onclick="apiPost('/api/scan','','')">Run Scan Now</button>
     <button class="btn btn-blue"   onclick="apiPost('/api/report','','')">Send Report</button>
   </div>
 </div>
+
+</div><!-- #settings-form -->
 """
 
 
@@ -1460,6 +1843,12 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, {"profiles": _list_credentials()})
             return
 
+        if path == "/api/config":
+            if not self._require_auth_json():
+                return
+            self._send_json(200, _load_config_safe())
+            return
+
         self._send_html(404, "<h1>404 Not Found</h1>")
 
     # ── POST ─────────────────────────────────────────────────────────────────
@@ -1529,6 +1918,22 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
                 self._send_json(400, {"success": False, "message": "profile_name required"})
                 return
             result = _delete_credential(name)
+            self._send_json(200, result)
+            return
+
+        if path == "/api/config":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            result = _save_config(body)
+            self._send_json(200, result)
+            return
+
+        if path == "/api/password":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            result = _change_password(body)
             self._send_json(200, result)
             return
 

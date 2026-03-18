@@ -18,7 +18,7 @@ WorkingDirectory=/opt/risk-scanner
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/risk-scanner/logs /opt/risk-scanner/data
+ReadWritePaths=/opt/risk-scanner/logs /opt/risk-scanner/data /opt/risk-scanner/config
 AmbientCapabilities=
 
 [Install]
