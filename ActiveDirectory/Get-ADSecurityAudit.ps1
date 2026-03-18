@@ -384,7 +384,8 @@ $userProperties = @(
     'LastLogonDate', 'LastLogonTimestamp', 'Created', 'Modified',
     'PasswordLastSet', 'PasswordExpired', 'PasswordNeverExpires',
     'LastBadPasswordAttempt', 'BadLogonCount', 'AccountExpirationDate',
-    'Description', 'DistinguishedName', 'MemberOf', 'Department', 'Title'
+    'Description', 'DistinguishedName', 'MemberOf', 'Department', 'Title',
+    'userAccountControl'
 )
 
 Write-Status "Retrieving user accounts..." -Type Progress
@@ -441,16 +442,51 @@ $auditResults['LockedUsers'] = $lockedUsers | Select-Object `
     Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}}
 Write-Status "Locked out users: $($lockedUsers.Count)" -Type $(if ($lockedUsers.Count -gt 0) { 'Warning' } else { 'Info' })
 
-# Users with indeterminate Enabled state (e.g., migrated accounts with missing userAccountControl)
+# Users with indeterminate Enabled state - missing or zero userAccountControl attribute.
+# Common causes: bulk LDAP/LDIF import without UAC, migration from legacy directory,
+# or manual account creation without using standard AD tools.
+# These accounts bypass all Enabled/Disabled checks and represent an audit gap.
 $unclassifiedUsers = @($allUsers | Where-Object { $_.Enabled -ne $true -and $_.Enabled -ne $false })
+
 if ($unclassifiedUsers.Count -gt 0) {
-    Write-Status "Unclassified accounts (Enabled=null): $($unclassifiedUsers.Count)" -Type Warning
-    Write-Status "  These accounts have no userAccountControl value set and do not appear" -Type Warning
-    Write-Status "  in Active or Disabled counts. Total Users ($($allUsers.Count)) = Active ($($activeUsers.Count)) + Disabled ($($disabledUsers.Count)) + Unclassified ($($unclassifiedUsers.Count))" -Type Warning
+    Write-Status "Unclassified accounts (no userAccountControl): $($unclassifiedUsers.Count)" -Type Warning
+    Write-Status "  Total Users ($($allUsers.Count)) = Active ($($activeUsers.Count)) + Disabled ($($disabledUsers.Count)) + Unclassified ($($unclassifiedUsers.Count))" -Type Warning
+
+    # Sub-classify: accounts in "normal" OUs vs staging/deletion OUs
+    # Accounts in standard OUs with real UPNs are likely real employees needing remediation
+    $stagingPatterns = @('To Be Deleted', 'Disabled', 'Terminated', 'Archive', 'Staging', 'Offboard')
+    $stagingRegex = ($stagingPatterns -join '|')
+
+    $unclassifiedActiveOU  = @($unclassifiedUsers | Where-Object {
+        $_.DistinguishedName -and $_.DistinguishedName -notmatch $stagingRegex
+    })
+    $unclassifiedStagingOU = @($unclassifiedUsers | Where-Object {
+        -not $_.DistinguishedName -or $_.DistinguishedName -match $stagingRegex
+    })
+
+    $auditResults['UnclassifiedActiveOU']  = $unclassifiedActiveOU.Count
+    $auditResults['UnclassifiedStagingOU'] = $unclassifiedStagingOU.Count
+
+    if ($unclassifiedActiveOU.Count -gt 0) {
+        Write-Status "  CRITICAL - $($unclassifiedActiveOU.Count) are in active/production OUs (likely real users)" -Type Warning
+    }
+    Write-Status "  $($unclassifiedStagingOU.Count) are in staging/deletion OUs" -Type Info
+} else {
+    $auditResults['UnclassifiedActiveOU']  = 0
+    $auditResults['UnclassifiedStagingOU'] = 0
 }
+
 $auditResults['UnclassifiedUsers'] = $unclassifiedUsers | Select-Object `
     SamAccountName, Name, UserPrincipalName, Created, Modified, `
-    Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}}
+    @{N='userAccountControl';E={ if ($_.userAccountControl) { $_.userAccountControl } else { 'NOT SET' } }}, `
+    @{N='AccountStatus';E={
+        $dn = $_.DistinguishedName
+        $stagingPatterns = @('To Be Deleted','Disabled','Terminated','Archive','Staging','Offboard')
+        $inStaging = $stagingPatterns | Where-Object { $dn -match $_ }
+        if ($inStaging) { 'Staging/Pending Deletion' } else { 'ACTIVE OU - Needs Remediation' }
+    }}, `
+    Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}} |
+    Sort-Object AccountStatus, SamAccountName
 #endregion
 
 #region Password Security Audit
@@ -1304,6 +1340,13 @@ if (-not $SkipGPOAudit -and $auditResults['UnlinkedGPOs']) {
     $healthDeductions += [Math]::Min(5, $auditResults['UnlinkedGPOs'].Count)
 }
 
+# Deduct for unclassified accounts in active/production OUs (up to 15 points)
+# These are real user accounts with no userAccountControl set - a critical AD data quality issue
+if ($auditResults['UnclassifiedActiveOU'] -gt 0) {
+    $unclassifiedActivePercent = ($auditResults['UnclassifiedActiveOU'] / [Math]::Max($totalUsers, 1)) * 100
+    $healthDeductions += [Math]::Min(15, [Math]::Round($unclassifiedActivePercent / 2))
+}
+
 $healthScore = [Math]::Max(0, 100 - $healthDeductions)
 $healthClass = if ($healthScore -ge 80) { 'excellent' } elseif ($healthScore -ge 60) { 'good' } elseif ($healthScore -ge 40) { 'warning' } else { 'critical' }
 $healthColor = if ($healthScore -ge 80) { '#10B981' } elseif ($healthScore -ge 60) { '#3B82F6' } elseif ($healthScore -ge 40) { '#F59E0B' } else { '#EF4444' }
@@ -1356,7 +1399,13 @@ $htmlReport += @"
                 <div class="label">Disabled Users</div>
             </div>
             $(if ($auditResults['UnclassifiedUsers'] -and $auditResults['UnclassifiedUsers'].Count -gt 0) {
-                "<div class='summary-card warning'><div class='number'>$($auditResults['UnclassifiedUsers'].Count)</div><div class='label'>Unclassified Accounts</div></div>"
+                $unclassCardClass = if ($auditResults['UnclassifiedActiveOU'] -gt 0) { 'danger' } else { 'warning' }
+                $unclassSubLabel  = if ($auditResults['UnclassifiedActiveOU'] -gt 0) {
+                    "$($auditResults['UnclassifiedActiveOU']) in active OUs / $($auditResults['UnclassifiedStagingOU']) in staging"
+                } else {
+                    "All in staging/deletion OUs"
+                }
+                "<div class='summary-card $unclassCardClass'><div class='number'>$($auditResults['UnclassifiedUsers'].Count)</div><div class='label'>Unclassified Accounts</div><div style='font-size:11px;margin-top:4px;opacity:0.85'>$unclassSubLabel</div></div>"
             })
             <div class="summary-card $(if ($auditResults['LockedUsers'].Count -gt 0) { 'danger' })">
                 <div class="number">$($auditResults['LockedUsers'].Count)</div>
@@ -1643,11 +1692,24 @@ if (-not $SkipGroupAudit) {
     }
 }
 
-# Unclassified users section
-$htmlReport += ConvertTo-HTMLReport -Title "Unclassified Accounts" `
-    -Description "User objects in AD where the Enabled state cannot be determined (missing userAccountControl attribute). This typically occurs with migrated or manually-created accounts. These accounts are included in Total Users but do not appear in Active or Disabled counts." `
+# Unclassified users section - build contextual description based on sub-counts
+$unclassDesc = "User objects where the Enabled state cannot be determined because the userAccountControl attribute is missing or zero. " +
+    "These accounts are included in Total Users but do not appear in Active or Disabled counts, creating an audit blind spot. " +
+    "The AccountStatus column identifies where immediate action is required: " +
+    "'ACTIVE OU - Needs Remediation' means the account is in a production/employee OU and is likely a real user - " +
+    "run Set-ADUser -Identity <sam> -Enabled `$true to restore proper UAC and enable the account (verify with the account owner first). " +
+    "'Staging/Pending Deletion' means the account is in a staging or cleanup OU - " +
+    "run Disable-ADAccount -Identity <sam> to formally disable it before deletion. " +
+    "Root cause: bulk LDAP/LDIF import, legacy directory migration, or account creation via non-standard tools that omit userAccountControl."
+
+if ($auditResults['UnclassifiedActiveOU'] -gt 0) {
+    $unclassDesc += " WARNING: $($auditResults['UnclassifiedActiveOU']) account(s) are in active production OUs - these are likely real employees and represent a compliance gap."
+}
+
+$htmlReport += ConvertTo-HTMLReport -Title "Unclassified Accounts ($($auditResults['UnclassifiedActiveOU']) in active OUs / $($auditResults['UnclassifiedStagingOU']) in staging)" `
+    -Description $unclassDesc `
     -Data $auditResults['UnclassifiedUsers'] `
-    -Columns @('SamAccountName', 'Name', 'Created', 'Modified', 'Description', 'OU') `
+    -Columns @('SamAccountName', 'Name', 'AccountStatus', 'userAccountControl', 'Created', 'Modified', 'Description', 'OU') `
     -SectionId "sec-unclassified" `
     -EmptyMessage "No unclassified accounts found - all user objects have a valid Enabled state."
 
@@ -1976,7 +2038,8 @@ if (-not $SkipGPOAudit -and $auditResults['GPOSummary'] -and $auditResults['GPOS
 }
 if ($auditResults['UnclassifiedUsers'] -and $auditResults['UnclassifiedUsers'].Count -gt 0) {
     Write-Host "  Unclassified:     " -NoNewline -ForegroundColor Gray
-    Write-Host "$($auditResults['UnclassifiedUsers'].Count) (see report)" -ForegroundColor Yellow
+    $unclassColor = if ($auditResults['UnclassifiedActiveOU'] -gt 0) { 'Red' } else { 'Yellow' }
+    Write-Host "$($auditResults['UnclassifiedUsers'].Count) total ($($auditResults['UnclassifiedActiveOU']) active OUs / $($auditResults['UnclassifiedStagingOU']) staging)" -ForegroundColor $unclassColor
 }
 
 Write-Host ""
@@ -2011,7 +2074,9 @@ Write-Host ""
     TotalGPOs           = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['GPOSummary'].Count }
     UnlinkedGPOs        = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['UnlinkedGPOs'].Count }
     FineGrainedPolicies = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['FineGrainedPolicies'].Count }
-    UnclassifiedUsers   = if ($auditResults['UnclassifiedUsers']) { $auditResults['UnclassifiedUsers'].Count } else { 0 }
+    UnclassifiedUsers        = if ($auditResults['UnclassifiedUsers']) { $auditResults['UnclassifiedUsers'].Count } else { 0 }
+    UnclassifiedActiveOU     = $auditResults['UnclassifiedActiveOU']
+    UnclassifiedStagingOU    = $auditResults['UnclassifiedStagingOU']
     HealthScore = $healthScore
     ReportPath = $htmlPath
     Duration = $auditDuration
