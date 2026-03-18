@@ -19,6 +19,12 @@
              /dns             DNS zone records (if DNS Server role present)
              /gpos            Group Policy objects
              /hardware        CIM hardware inventory for servers (CPU/RAM/disk/serial)
+             /domain          Domain & forest info (functional level, DCs, sites, PDC)
+             /trusts          AD trust relationships
+             /services        Non-standard auto-start services on servers
+             /shares          SMB shares enumerated per server
+             /local-admins    Local Administrators group membership per server
+             /bitlocker       BitLocker encryption status per server
              /done            Pi signals scan complete; proxy shuts down cleanly
 
       3. Locks to the first IP that successfully authenticates (the Pi).
@@ -489,8 +495,183 @@ function Get-DomainData {
         forest_name             = $fst.Name
         pdc_emulator            = $dom.PDCEmulator
         rid_master              = $dom.RIDMaster
+        infrastructure_master   = $dom.InfrastructureMaster
+        schema_master           = $fst.SchemaMaster
+        naming_master           = $fst.NamingMaster
         sites                   = @($fst.Sites)
+        uac_count               = (Get-ADUser -Filter { Enabled -eq $true } -ErrorAction SilentlyContinue |
+                                      Measure-Object).Count
     }
+}
+
+function Get-TrustsData {
+    try {
+        $trusts = @(Get-ADTrust -Filter * -ErrorAction Stop |
+            Select-Object Name, Direction, TrustType, SelectiveAuthentication,
+                          IntraForest, IsTreeParent, IsTreeRoot, Created, Modified)
+        return @{ available = $true; trusts = $trusts; count = $trusts.Count }
+    }
+    catch {
+        return @{ available = $false; error = $_.Exception.Message }
+    }
+}
+
+function Get-ServicesData([string[]]$ComputerNames) {
+    # Collects auto-start services on each server — focuses on non-Microsoft services
+    # that indicate installed third-party software (backup agents, AV, monitoring, etc.)
+    $out = [System.Collections.Generic.List[hashtable]]::new()
+    $msftPrefixes = @("Windows", "Microsoft", "WMI", "RPC", "DCOM", "COM+", "Plug and Play",
+                      "Task Scheduler", "Security Center", "Windows Defender", "Update",
+                      "Print Spooler", "Fax", "Remote Registry", "Themes", "Audio", "Time",
+                      "Cryptographic", "DHCP Client", "DNS Client", "Workstation", "Server",
+                      "Netlogon", "Browser", "EventLog", "Power", "User Profile", "Shell",
+                      "Secondary Logon", "System Events", "Base Filtering")
+
+    foreach ($name in $ComputerNames) {
+        $entry = @{ computer_name = $name; accessible = $false; error = $null; services = @() }
+        try {
+            $svcs = @(Get-CimInstance -ComputerName $name -ClassName Win32_Service `
+                          -Filter "StartMode='Auto' AND State='Running'" `
+                          -OperationTimeoutSec 20 -ErrorAction Stop |
+                      Where-Object {
+                          $sn = $_.DisplayName
+                          -not ($msftPrefixes | Where-Object { $sn -like "$_*" })
+                      } |
+                      Select-Object Name, DisplayName, PathName, StartMode, State, StartName)
+            $entry.services   = @($svcs | ForEach-Object {
+                @{
+                    name         = $_.Name
+                    display_name = $_.DisplayName
+                    path         = $_.PathName
+                    start_mode   = $_.StartMode
+                    state        = $_.State
+                    run_as       = $_.StartName
+                }
+            })
+            $entry.accessible = $true
+            $entry.count      = $entry.services.Count
+            Write-Host ("          [{0}]  services OK ({1} non-MS auto-start)" -f $name, $entry.count) `
+                -ForegroundColor DarkGreen
+        }
+        catch {
+            $entry.error = $_.Exception.Message
+            Write-Host ("          [{0}]  services unreachable: {1}" -f $name, $_.Exception.Message) `
+                -ForegroundColor DarkYellow
+        }
+        [void]$out.Add($entry)
+    }
+    return , @($out)
+}
+
+function Get-SharesData([string[]]$ComputerNames) {
+    $out = [System.Collections.Generic.List[hashtable]]::new()
+    # Administrative shares to skip — they're on every Windows box
+    $adminShares = @("ADMIN$", "C$", "D$", "E$", "IPC$", "print$", "NETLOGON", "SYSVOL")
+
+    foreach ($name in $ComputerNames) {
+        $entry = @{ computer_name = $name; accessible = $false; error = $null; shares = @() }
+        try {
+            $shares = @(Get-CimInstance -ComputerName $name -ClassName Win32_Share `
+                            -OperationTimeoutSec 20 -ErrorAction Stop)
+            $entry.shares = @($shares | ForEach-Object {
+                @{
+                    name        = $_.Name
+                    path        = $_.Path
+                    description = $_.Description
+                    type        = $_.Type   # 0=disk, 1=print, 2147483648=admin
+                    is_admin    = ($adminShares -contains $_.Name) -or ($_.Name -match '\$$')
+                }
+            })
+            $entry.non_admin_shares = ($entry.shares | Where-Object { -not $_.is_admin }).Count
+            $entry.accessible = $true
+            Write-Host ("          [{0}]  shares OK ({1} total, {2} non-admin)" -f `
+                $name, $entry.shares.Count, $entry.non_admin_shares) -ForegroundColor DarkGreen
+        }
+        catch {
+            $entry.error = $_.Exception.Message
+            Write-Host ("          [{0}]  shares unreachable: {1}" -f $name, $_.Exception.Message) `
+                -ForegroundColor DarkYellow
+        }
+        [void]$out.Add($entry)
+    }
+    return , @($out)
+}
+
+function Get-LocalAdminsData([string[]]$ComputerNames) {
+    $out = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($name in $ComputerNames) {
+        $entry = @{ computer_name = $name; accessible = $false; error = $null; members = @() }
+        try {
+            # Get-LocalGroupMember requires PowerShell 5.1+ and WinRM
+            $sess = New-PSSession -ComputerName $name -ErrorAction Stop
+            $members = Invoke-Command -Session $sess -ScriptBlock {
+                Get-LocalGroupMember -Group "Administrators" -ErrorAction SilentlyContinue |
+                    Select-Object Name, ObjectClass, PrincipalSource
+            } -ErrorAction Stop
+            Remove-PSSession $sess -ErrorAction SilentlyContinue
+            $entry.members = @($members | ForEach-Object {
+                @{
+                    name             = $_.Name
+                    object_class     = $_.ObjectClass.ToString()
+                    principal_source = $_.PrincipalSource.ToString()
+                }
+            })
+            $entry.count      = $entry.members.Count
+            $entry.accessible = $true
+            Write-Host ("          [{0}]  local-admins OK ({1} members)" -f $name, $entry.count) `
+                -ForegroundColor DarkGreen
+        }
+        catch {
+            $entry.error = $_.Exception.Message
+            Write-Host ("          [{0}]  local-admins unreachable: {1}" -f $name, $_.Exception.Message) `
+                -ForegroundColor DarkYellow
+        }
+        [void]$out.Add($entry)
+    }
+    return , @($out)
+}
+
+function Get-BitLockerData([string[]]$ComputerNames) {
+    $out = [System.Collections.Generic.List[hashtable]]::new()
+    foreach ($name in $ComputerNames) {
+        $entry = @{ computer_name = $name; accessible = $false; error = $null; volumes = @() }
+        try {
+            $sess   = New-PSSession -ComputerName $name -ErrorAction Stop
+            $vols   = Invoke-Command -Session $sess -ScriptBlock {
+                # Get-BitLockerVolume only available if BitLocker feature is present
+                try {
+                    Get-BitLockerVolume -ErrorAction Stop |
+                        Select-Object MountPoint, EncryptionMethod, EncryptionPercentage,
+                                      VolumeStatus, ProtectionStatus, KeyProtector
+                }
+                catch { @() }
+            } -ErrorAction Stop
+            Remove-PSSession $sess -ErrorAction SilentlyContinue
+            $entry.volumes = @($vols | ForEach-Object {
+                $kp = @($_.KeyProtector | ForEach-Object { $_.KeyProtectorType.ToString() })
+                @{
+                    mount_point           = $_.MountPoint
+                    encryption_method     = if ($_.EncryptionMethod) { $_.EncryptionMethod.ToString() } else { "None" }
+                    encryption_pct        = $_.EncryptionPercentage
+                    volume_status         = if ($_.VolumeStatus)    { $_.VolumeStatus.ToString()    } else { "Unknown" }
+                    protection_status     = if ($_.ProtectionStatus){ $_.ProtectionStatus.ToString() } else { "Unknown" }
+                    key_protector_types   = $kp
+                }
+            })
+            $entry.encrypted_count   = ($entry.volumes | Where-Object { $_.protection_status -eq "On" }).Count
+            $entry.unencrypted_count = ($entry.volumes | Where-Object { $_.protection_status -ne "On" }).Count
+            $entry.accessible = $true
+            Write-Host ("          [{0}]  bitlocker OK ({1} vol(s), {2} protected)" -f `
+                $name, $entry.volumes.Count, $entry.encrypted_count) -ForegroundColor DarkGreen
+        }
+        catch {
+            $entry.error = $_.Exception.Message
+            Write-Host ("          [{0}]  bitlocker unreachable: {1}" -f $name, $_.Exception.Message) `
+                -ForegroundColor DarkYellow
+        }
+        [void]$out.Add($entry)
+    }
+    return , @($out)
 }
 
 # â”€â”€ HTTP listener helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -604,6 +785,76 @@ function Handle-Request($Context) {
                 -ForegroundColor DarkCyan
             $hwData = Get-ServerHardware -ComputerNames $targets
             Send-Json $Context @{ servers = $hwData; count = $hwData.Count }
+        }
+
+        "^/domain$" {
+            Write-Req $method "/domain" "domain & forest info"
+            Send-Json $Context (Get-DomainData)
+        }
+
+        "^/trusts$" {
+            Write-Req $method "/trusts" "AD trust relationships"
+            Send-Json $Context (Get-TrustsData)
+        }
+
+        "^/services$" {
+            $qs = [System.Web.HttpUtility]::ParseQueryString($req.Url.Query)
+            if ($qs["targets"]) {
+                $targets = @($qs["targets"] -split ',')
+            }
+            else {
+                $targets = @(Get-ADComputer -Filter { OperatingSystem -like "*Server*" } |
+                    Select-Object -ExpandProperty Name)
+            }
+            Write-Host ("  [REQ]   GET  /services  ({0} server(s))..." -f $targets.Count) `
+                -ForegroundColor DarkCyan
+            $svcData = Get-ServicesData -ComputerNames $targets
+            Send-Json $Context @{ servers = $svcData; count = $svcData.Count }
+        }
+
+        "^/shares$" {
+            $qs = [System.Web.HttpUtility]::ParseQueryString($req.Url.Query)
+            if ($qs["targets"]) {
+                $targets = @($qs["targets"] -split ',')
+            }
+            else {
+                $targets = @(Get-ADComputer -Filter { OperatingSystem -like "*Server*" } |
+                    Select-Object -ExpandProperty Name)
+            }
+            Write-Host ("  [REQ]   GET  /shares  ({0} server(s))..." -f $targets.Count) `
+                -ForegroundColor DarkCyan
+            $shareData = Get-SharesData -ComputerNames $targets
+            Send-Json $Context @{ servers = $shareData; count = $shareData.Count }
+        }
+
+        "^/local-admins$" {
+            $qs = [System.Web.HttpUtility]::ParseQueryString($req.Url.Query)
+            if ($qs["targets"]) {
+                $targets = @($qs["targets"] -split ',')
+            }
+            else {
+                $targets = @(Get-ADComputer -Filter { OperatingSystem -like "*Server*" } |
+                    Select-Object -ExpandProperty Name)
+            }
+            Write-Host ("  [REQ]   GET  /local-admins  ({0} server(s))..." -f $targets.Count) `
+                -ForegroundColor DarkCyan
+            $admData = Get-LocalAdminsData -ComputerNames $targets
+            Send-Json $Context @{ servers = $admData; count = $admData.Count }
+        }
+
+        "^/bitlocker$" {
+            $qs = [System.Web.HttpUtility]::ParseQueryString($req.Url.Query)
+            if ($qs["targets"]) {
+                $targets = @($qs["targets"] -split ',')
+            }
+            else {
+                $targets = @(Get-ADComputer -Filter { OperatingSystem -like "*Server*" } |
+                    Select-Object -ExpandProperty Name)
+            }
+            Write-Host ("  [REQ]   GET  /bitlocker  ({0} server(s))..." -f $targets.Count) `
+                -ForegroundColor DarkCyan
+            $blData = Get-BitLockerData -ComputerNames $targets
+            Send-Json $Context @{ servers = $blData; count = $blData.Count }
         }
 
         "^/done$" {

@@ -189,77 +189,6 @@
   "switches": [
     {
       "vendor": "Aruba",
-      "line": "Instant On 1930",
-      "model": "1930 8G PoE",
-      "sku": "JL682A",
-      "ports": 8,
-      "poe_ports": 8,
-      "poe_budget_w": 65,
-      "uplinks": "2x SFP",
-      "management": "Aruba Instant On Cloud App",
-      "layer": "L2",
-      "stackable": false,
-      "min_devices": 1,
-      "max_devices": 10,
-      "msrp_usd": 349,
-      "key_features": [
-        "Aruba Instant On cloud management",
-        "Full PoE on all 8 ports (802.3af/at)",
-        "2x SFP uplinks for fiber connectivity",
-        "Auto-configuration and zero-touch deployment"
-      ],
-      "best_for": "Micro-offices, conference rooms, or satellite closets up to 10 devices"
-    },
-    {
-      "vendor": "Aruba",
-      "line": "Instant On 1930",
-      "model": "1930 24G PoE",
-      "sku": "JL684A",
-      "ports": 24,
-      "poe_ports": 12,
-      "poe_budget_w": 195,
-      "uplinks": "4x SFP",
-      "management": "Aruba Instant On Cloud App",
-      "layer": "L2",
-      "stackable": false,
-      "min_devices": 11,
-      "max_devices": 30,
-      "msrp_usd": 699,
-      "key_features": [
-        "Aruba Instant On cloud management",
-        "12x PoE ports for APs, phones, cameras",
-        "4x SFP uplinks",
-        "Auto-configuration and VLAN support",
-        "Smart rate PoE allocation"
-      ],
-      "best_for": "Small offices up to 30 wired devices"
-    },
-    {
-      "vendor": "Aruba",
-      "line": "Instant On 1930",
-      "model": "1930 48G PoE",
-      "sku": "JL686A",
-      "ports": 48,
-      "poe_ports": 24,
-      "poe_budget_w": 370,
-      "uplinks": "4x SFP",
-      "management": "Aruba Instant On Cloud App",
-      "layer": "L2",
-      "stackable": false,
-      "min_devices": 31,
-      "max_devices": 60,
-      "msrp_usd": 999,
-      "key_features": [
-        "Aruba Instant On cloud management",
-        "24x PoE+ ports (802.3af/at)",
-        "4x SFP uplinks",
-        "VLAN segmentation and access control",
-        "Auto-configuration with zero-touch provisioning"
-      ],
-      "best_for": "Medium offices up to 60 wired devices"
-    },
-    {
-      "vendor": "Aruba",
       "line": "6100",
       "model": "6100 24G PoE",
       "sku": "JL714A",
@@ -270,7 +199,7 @@
       "management": "Aruba Central Cloud / CLI",
       "layer": "L2/L3",
       "stackable": true,
-      "min_devices": 20,
+      "min_devices": 1,
       "max_devices": 50,
       "msrp_usd": 1099,
       "key_features": [

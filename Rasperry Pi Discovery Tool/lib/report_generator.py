@@ -824,6 +824,218 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600",
         {hw_rows}
       </table>"""
 
+    # ── Domain & Forest Info ──────────────────────────────────────────────
+    domain_info_html = ""
+    di = ad_enr.get("domain_info", {})
+    if di:
+        di_rows = ""
+        _di_fields = [
+            ("Domain", di.get("domain_name")),
+            ("NetBIOS Name", di.get("netbios_name")),
+            ("Domain Mode", di.get("domain_mode")),
+            ("Forest Mode", di.get("forest_mode")),
+            ("Domain Controllers", di.get("domain_controller_count")),
+            ("PDC Emulator", di.get("pdc_emulator")),
+            ("Schema Master", di.get("schema_master")),
+            ("Naming Master", di.get("naming_master")),
+            ("Sites", ", ".join(str(s) for s in (di.get("sites") or [])[:6]) or None),
+        ]
+        for label, val in _di_fields:
+            if val is not None:
+                di_rows += f'<tr><td style="padding:3px 10px; font-size:11px; color:#555; width:180px; white-space:nowrap;">{label}</td><td style="padding:3px 10px; font-size:11px; color:#333;">{html.escape(str(val))}</td></tr>'
+        # DC list
+        dc_list = di.get("domain_controllers", [])
+        if dc_list:
+            dc_text = "; ".join(
+                f"{d.get('Name','?')} ({d.get('IPv4Address','?')})" +
+                (" [GC]" if d.get("IsGlobalCatalog") else "") +
+                (" [RO]" if d.get("IsReadOnly") else "")
+                for d in dc_list[:6]
+            )
+            di_rows += f'<tr><td style="padding:3px 10px; font-size:11px; color:#555; white-space:nowrap;">DC List</td><td style="padding:3px 10px; font-size:11px; color:#333;">{html.escape(dc_text)}</td></tr>'
+        if di_rows:
+            domain_info_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        Domain &amp; Forest
+      </div>
+      <table cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; background:#f8f9fa; border:1px solid #dee2e6; border-radius:4px; margin-bottom:10px;">
+        {di_rows}
+      </table>"""
+
+    # ── Trusts ────────────────────────────────────────────────────────────
+    trusts_html = ""
+    trust_list = ad_enr.get("trusts", [])
+    if trust_list:
+        t_rows = ""
+        for t in trust_list:
+            direction = t.get("Direction") or t.get("direction", "")
+            ttype     = t.get("TrustType") or t.get("trust_type", "")
+            intra     = "Intra-Forest" if t.get("IntraForest") else "External"
+            t_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:11px; color:#333;">{html.escape(str(t.get("Name","?")))}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{html.escape(str(direction))}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{html.escape(str(ttype))}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{intra}</td>
+            </tr>"""
+        trusts_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        AD Trusts ({len(trust_list)})
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; background:#fafafa; border:1px solid #dee2e6; border-radius:4px; margin-bottom:10px;">
+        <tr style="background:#e8f4fb; color:#00628a; font-size:11px;">
+          <th style="padding:4px 8px; text-align:left;">Name</th>
+          <th style="padding:4px 8px; text-align:left;">Direction</th>
+          <th style="padding:4px 8px; text-align:left;">Type</th>
+          <th style="padding:4px 8px; text-align:left;">Scope</th>
+        </tr>
+        {t_rows}
+      </table>"""
+
+    # ── BitLocker Status ──────────────────────────────────────────────────
+    bl_html = ""
+    bitlocker = ad_enr.get("bitlocker", {})
+    if bitlocker:
+        bl_rows = ""
+        for cname, bl in sorted(bitlocker.items()):
+            if not bl.get("accessible"):
+                continue
+            enc_count   = bl.get("encrypted_count", 0)
+            uenc_count  = bl.get("unencrypted_count", 0)
+            total_vols  = len(bl.get("volumes", []))
+            if total_vols == 0:
+                continue
+            if uenc_count == 0:
+                status_badge = '<span style="background:#28a745; color:#fff; font-size:10px; padding:2px 6px; border-radius:3px;">Protected</span>'
+            elif enc_count == 0:
+                status_badge = '<span style="background:#dc3545; color:#fff; font-size:10px; padding:2px 6px; border-radius:3px;">Unencrypted</span>'
+            else:
+                status_badge = '<span style="background:#ffc107; color:#333; font-size:10px; padding:2px 6px; border-radius:3px;">Partial</span>'
+            vol_detail = ", ".join(
+                f"{v.get('mount_point','?')} ({v.get('protection_status','?')})"
+                for v in bl.get("volumes", [])[:4]
+            )
+            bl_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold; color:#333; width:120px;">{html.escape(cname)}</td>
+              <td style="padding:4px 8px;">{status_badge}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{html.escape(vol_detail)}</td>
+            </tr>"""
+        if bl_rows:
+            bl_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        BitLocker Encryption Status
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; font-size:11px; margin-bottom:10px;">
+        <tr style="background:#e8f4fb; color:#00628a;">
+          <th style="padding:4px 8px; text-align:left;">Server</th>
+          <th style="padding:4px 8px; text-align:left;">Status</th>
+          <th style="padding:4px 8px; text-align:left;">Volumes</th>
+        </tr>
+        {bl_rows}
+      </table>"""
+
+    # ── Installed Services (3rd-party software signals) ───────────────────
+    services_html = ""
+    services = ad_enr.get("services", {})
+    if services:
+        svc_rows = ""
+        for cname, svc_entry in sorted(services.items()):
+            if not svc_entry.get("accessible"):
+                continue
+            svc_list = svc_entry.get("services", [])
+            if not svc_list:
+                continue
+            svc_names = ", ".join(
+                html.escape(s.get("display_name") or s.get("name", ""))
+                for s in svc_list[:8]
+            )
+            if len(svc_list) > 8:
+                svc_names += f' <span style="color:#888;">+{len(svc_list)-8} more</span>'
+            svc_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold; color:#333; width:120px; vertical-align:top;">{html.escape(cname)}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{svc_names}</td>
+            </tr>"""
+        if svc_rows:
+            services_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        3rd-Party Services (Auto-Start)
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; margin-bottom:10px;">
+        {svc_rows}
+      </table>"""
+
+    # ── SMB Shares ────────────────────────────────────────────────────────
+    shares_html = ""
+    shares = ad_enr.get("shares", {})
+    if shares:
+        sh_rows = ""
+        for cname, sh_entry in sorted(shares.items()):
+            if not sh_entry.get("accessible"):
+                continue
+            non_admin = [s for s in sh_entry.get("shares", []) if not s.get("is_admin")]
+            if not non_admin:
+                continue
+            share_names = ", ".join(
+                f"{html.escape(s.get('name','?'))} ({html.escape(s.get('path',''))})"
+                for s in non_admin[:5]
+            )
+            if len(non_admin) > 5:
+                share_names += f' <span style="color:#888;">+{len(non_admin)-5} more</span>'
+            sh_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold; color:#333; width:120px; vertical-align:top;">{html.escape(cname)}</td>
+              <td style="padding:4px 8px; font-size:11px; color:#555;">{share_names}</td>
+            </tr>"""
+        if sh_rows:
+            shares_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        File Shares (Non-Admin)
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; margin-bottom:10px;">
+        {sh_rows}
+      </table>"""
+
+    # ── Local Admins ──────────────────────────────────────────────────────
+    la_html = ""
+    local_admins = ad_enr.get("local_admins", {})
+    if local_admins:
+        la_rows = ""
+        for cname, la_entry in sorted(local_admins.items()):
+            if not la_entry.get("accessible"):
+                continue
+            members = la_entry.get("members", [])
+            if not members:
+                continue
+            member_pills = "".join(
+                f'<span style="display:inline-block; background:#e2e3e5; color:#383d41; '
+                f'border-radius:3px; padding:2px 7px; margin:2px; font-size:10px;">'
+                f'{html.escape(m.get("name","?"))}</span>'
+                for m in members[:8]
+            )
+            if len(members) > 8:
+                member_pills += f'<span style="font-size:10px; color:#888;"> +{len(members)-8} more</span>'
+            la_rows += f"""
+            <tr style="border-bottom:1px solid #eef2f7;">
+              <td style="padding:4px 8px; font-size:12px; font-weight:bold; color:#333; width:120px; vertical-align:top;">{html.escape(cname)}</td>
+              <td style="padding:4px 8px;">{member_pills}</td>
+            </tr>"""
+        if la_rows:
+            la_html = f"""
+      <div style="font-size:12px; font-weight:bold; color:#555; margin:12px 0 6px 0;">
+        Local Administrators
+      </div>
+      <table width="100%" cellpadding="0" cellspacing="0"
+             style="border-collapse:collapse; margin-bottom:10px;">
+        {la_rows}
+      </table>"""
+
     return f"""
   <!-- ═══ ACTIVE DIRECTORY ENVIRONMENT ═══ -->
   <tr>
@@ -832,10 +1044,16 @@ def _build_ad_section(hosts: list, company_color: str = "#FF6600",
         &#9672; Active Directory Environment
       </h2>
       {cards_html}
+      {domain_info_html}
       {sec_findings_html}
       {stale_html}
       {pwd_policy_html}
       {hw_html}
+      {bl_html}
+      {services_html}
+      {shares_html}
+      {la_html}
+      {trusts_html}
     </td>
   </tr>
 """

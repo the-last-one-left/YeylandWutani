@@ -118,7 +118,7 @@ _BUILTIN_OUI = {
     # Palo Alto Networks
     "00:1B:17": "Palo Alto Networks",
     # WatchGuard Technologies
-    "00:90:7F": "WatchGuard",
+    "00:90:7F": "WatchGuard", "CC:7F:75": "WatchGuard", "00:15:2C": "WatchGuard",
     # Hikvision (IP cameras/NVRs)
     "44:19:B6": "Hikvision", "54:C4:15": "Hikvision", "C0:56:E3": "Hikvision",
     "BC:AD:28": "Hikvision", "E4:24:6C": "Hikvision",
@@ -680,10 +680,17 @@ def classify_device(
             if any(kw in sys_descr for kw in (
                     "procurve", "arubaos", "aruba-cx", "openswitch", "comware",
                     "exos", "ironware", "powerswitch", "ftos", "cumulus",
+                    "officeconnect", "hp switch", "hpe switch", "aruba switch",
+                    "hp 1910", "hp 1920", "hp 1950", "hp v1910", "hp v1920",
+                    "hp networking", "hpswitch",
             )):
                 return "Network Switch"
             # Linux
             if "linux" in sys_descr:
+                # Don't misclassify network gear that runs embedded Linux
+                if any(kw in sys_descr for kw in ("switch", "router", "gateway",
+                                                    "access point", "wireless")):
+                    return "Network Switch"
                 return "Linux/Unix Server"
 
     # ── Service version strings ────────────────────────────────────────────
@@ -733,7 +740,11 @@ def classify_device(
     if any(kw in vendor for kw in _FIREWALL_VENDORS):
         return "Firewall"
     if any(kw in hostname_lower for kw in ("firewall", "fw-", "-fw", "asa-", "fortigate",
-                                            "sonicwall", "panos", "watchguard")):
+                                            "sonicwall", "panos", "watchguard", "firebox",
+                                            "wg-", "-wg")):
+        return "Firewall"
+    # WatchGuard Firebox management port — strong signal even without OUI match
+    if 4118 in ports_set:
         return "Firewall"
 
     # ── IP Camera / NVR — vendor OUI ──────────────────────────────────────
@@ -784,7 +795,8 @@ def classify_device(
         if not (ports_set & {3389, 5900, 445}):  # no RDP/VNC/SMB
             return "Network Switch"
     if any(kw in hostname_lower for kw in ("switch", "sw-", "-sw", "stack",
-                                            "catalyst", "procurve", "aruba-sw")):
+                                            "catalyst", "procurve", "aruba-sw",
+                                            "officeconnect")):
         return "Network Switch"
 
     # ── General network infrastructure ─────────────────────────────────────

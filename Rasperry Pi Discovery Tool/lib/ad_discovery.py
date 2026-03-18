@@ -19,6 +19,12 @@ The Pi finds this record automatically (no manual key entry) and queries:
     /gpos            Group Policy objects
     /hardware        CIM hardware inventory per server
                      (CPU, RAM, disks, serial number, NIC, BIOS, uptime)
+    /domain          Domain & forest info (functional level, DC list, sites, FSMO roles)
+    /trusts          AD trust relationships
+    /services        Non-standard auto-start services on servers
+    /shares          SMB shares per server
+    /local-admins    Local Administrators group per server
+    /bitlocker       BitLocker encryption status per server
     /done            Signal proxy to shut down cleanly
 
 merge_ad_into_hosts() then enriches every device in the Pi's hosts list with:
@@ -490,22 +496,61 @@ def collect_ad_data(dc_ip: str, port: int, token: str, hosts: list) -> dict:
     logger.info("[Phase 24] /gpos ...")
     gpos        = _get(dc_ip, port, token, "/gpos",            timeout=15)  or {}
 
-    # Hardware: only for machines the scan thinks are servers
+    logger.info("[Phase 24] /domain ...")
+    domain_info = _get(dc_ip, port, token, "/domain",           timeout=20)  or {}
+
+    logger.info("[Phase 24] /trusts ...")
+    trusts      = _get(dc_ip, port, token, "/trusts",            timeout=15)  or {}
+
+    # Per-server queries: hardware, services, shares, local-admins, bitlocker
     server_names = _identify_server_names(computers, hosts)
-    hardware: dict[str, dict] = {}
+    hardware:     dict[str, dict] = {}
+    services:     dict[str, dict] = {}
+    shares:       dict[str, dict] = {}
+    local_admins: dict[str, dict] = {}
+    bitlocker:    dict[str, dict] = {}
+
     if server_names:
         targets = ",".join(server_names)
         logger.info(f"[Phase 24] /hardware for {len(server_names)} server(s): {targets}")
-        hw_resp = _get(
-            dc_ip, port, token,
-            f"/hardware?targets={targets}",
-            timeout=300,
-        )
+        hw_resp = _get(dc_ip, port, token, f"/hardware?targets={targets}", timeout=300)
         if hw_resp:
             for entry in hw_resp.get("servers", []):
                 key = (entry.get("computer_name") or "").upper()
                 if key:
                     hardware[key] = entry
+
+        logger.info(f"[Phase 24] /services for {len(server_names)} server(s) ...")
+        svc_resp = _get(dc_ip, port, token, f"/services?targets={targets}", timeout=120)
+        if svc_resp:
+            for entry in svc_resp.get("servers", []):
+                key = (entry.get("computer_name") or "").upper()
+                if key:
+                    services[key] = entry
+
+        logger.info(f"[Phase 24] /shares for {len(server_names)} server(s) ...")
+        sh_resp = _get(dc_ip, port, token, f"/shares?targets={targets}", timeout=60)
+        if sh_resp:
+            for entry in sh_resp.get("servers", []):
+                key = (entry.get("computer_name") or "").upper()
+                if key:
+                    shares[key] = entry
+
+        logger.info(f"[Phase 24] /local-admins for {len(server_names)} server(s) ...")
+        la_resp = _get(dc_ip, port, token, f"/local-admins?targets={targets}", timeout=60)
+        if la_resp:
+            for entry in la_resp.get("servers", []):
+                key = (entry.get("computer_name") or "").upper()
+                if key:
+                    local_admins[key] = entry
+
+        logger.info(f"[Phase 24] /bitlocker for {len(server_names)} server(s) ...")
+        bl_resp = _get(dc_ip, port, token, f"/bitlocker?targets={targets}", timeout=60)
+        if bl_resp:
+            for entry in bl_resp.get("servers", []):
+                key = (entry.get("computer_name") or "").upper()
+                if key:
+                    bitlocker[key] = entry
 
     _signal_done(dc_ip, port, token)
 
@@ -518,6 +563,12 @@ def collect_ad_data(dc_ip: str, port: int, token: str, hosts: list) -> dict:
         "dns":             dns,
         "gpos":            gpos,
         "hardware":        hardware,
+        "domain_info":     domain_info,
+        "trusts":          trusts,
+        "services":        services,
+        "shares":          shares,
+        "local_admins":    local_admins,
+        "bitlocker":       bitlocker,
     }
 
 
@@ -625,12 +676,18 @@ def build_ad_summary(ad_data: dict) -> dict:
     Derive counts and security findings from raw AD data.
     Returns the ad_enrichment dict that is stored in scan_results.
     """
-    computers  = ad_data.get("computers",  [])
-    users      = ad_data.get("users",      [])
-    groups     = ad_data.get("groups",     {})
-    pwd_policy = ad_data.get("password_policy", {})
-    hardware   = ad_data.get("hardware",   {})
-    gpos       = ad_data.get("gpos",       {})
+    computers    = ad_data.get("computers",    [])
+    users        = ad_data.get("users",        [])
+    groups       = ad_data.get("groups",       {})
+    pwd_policy   = ad_data.get("password_policy", {})
+    hardware     = ad_data.get("hardware",     {})
+    gpos         = ad_data.get("gpos",         {})
+    domain_info  = ad_data.get("domain_info",  {})
+    trusts       = ad_data.get("trusts",       {})
+    services     = ad_data.get("services",     {})
+    shares       = ad_data.get("shares",       {})
+    local_admins = ad_data.get("local_admins", {})
+    bitlocker    = ad_data.get("bitlocker",    {})
 
     now           = datetime.now(timezone.utc)
     stale_cutoff  = now - timedelta(days=90)
@@ -778,6 +835,62 @@ def build_ad_summary(ad_data: dict) -> dict:
             ),
         })
 
+    # ── BitLocker findings ─────────────────────────────────────────────────────
+    unencrypted_servers = []
+    for srv_name, bl_entry in bitlocker.items():
+        if bl_entry.get("accessible") and bl_entry.get("unencrypted_count", 0) > 0:
+            unencrypted_servers.append(srv_name)
+    if unencrypted_servers:
+        findings.append({
+            "severity": "high",
+            "title":    f"{len(unencrypted_servers)} server(s) with unencrypted volume(s)",
+            "detail":   (
+                f"{', '.join(unencrypted_servers[:6])}"
+                f"{'...' if len(unencrypted_servers) > 6 else ''}. "
+                "Server drives should be encrypted with BitLocker to protect data at rest."
+            ),
+        })
+
+    # ── Unusual local admin findings ───────────────────────────────────────────
+    external_local_admins: list[str] = []
+    for srv_name, la_entry in local_admins.items():
+        if not la_entry.get("accessible"):
+            continue
+        for m in la_entry.get("members", []):
+            src = (m.get("principal_source") or "").lower()
+            cls = (m.get("object_class") or "").lower()
+            nm  = (m.get("name") or "")
+            # Flag local accounts and domain accounts that aren't built-in Admin
+            if src == "local" and "administrator" not in nm.lower():
+                external_local_admins.append(f"{srv_name}\\{nm}")
+    if external_local_admins:
+        findings.append({
+            "severity": "medium",
+            "title":    f"{len(external_local_admins)} unexpected local admin account(s) on server(s)",
+            "detail":   (
+                f"{', '.join(external_local_admins[:6])}"
+                f"{'...' if len(external_local_admins) > 6 else ''}. "
+                "Non-standard local admin accounts increase lateral movement risk."
+            ),
+        })
+
+    # ── Trust findings ─────────────────────────────────────────────────────────
+    trust_list = trusts.get("trusts", []) if isinstance(trusts, dict) else []
+    if trust_list:
+        # Any external / non-intra-forest trust is worth flagging
+        external_trusts = [t for t in trust_list if not t.get("IntraForest")]
+        if external_trusts:
+            trust_names = [t.get("Name", "") for t in external_trusts]
+            findings.append({
+                "severity": "info",
+                "title":    f"{len(external_trusts)} external AD trust relationship(s)",
+                "detail":   (
+                    f"{', '.join(trust_names[:4])}"
+                    f"{'...' if len(trust_names) > 4 else ''}. "
+                    "External trusts expand the authentication boundary — review periodically."
+                ),
+            })
+
     return {
         "available":            True,
         "computer_count":       len(computers),
@@ -803,6 +916,12 @@ def build_ad_summary(ad_data: dict) -> dict:
         "security_findings":    findings,
         "dhcp_leases":          (ad_data.get("dhcp") or {}).get("leases", []),
         "dns_zones":            (ad_data.get("dns")  or {}).get("zones",  []),
+        "domain_info":          domain_info,
+        "trusts":               trust_list,
+        "services":             services,        # keyed by COMPUTER_NAME.upper()
+        "shares":               shares,          # keyed by COMPUTER_NAME.upper()
+        "local_admins":         local_admins,    # keyed by COMPUTER_NAME.upper()
+        "bitlocker":            bitlocker,       # keyed by COMPUTER_NAME.upper()
         # Full lists for report page generation
         "computers":            computers,
         "users":                users,
