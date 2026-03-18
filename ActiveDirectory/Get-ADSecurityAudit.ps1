@@ -15,7 +15,8 @@
     - Computer Account Analysis (active, stale, disabled, by OS, legacy OS)
     - Privileged Group Membership (Domain Admins, Enterprise Admins, etc.)
     - VPN and Special Group Membership
-    
+    - Group Policy Audit (GPOs, unlinked GPOs, fine-grained password policies)
+
     Features:
     - AD Health Score (0-100) based on security metrics
     - Interactive Table of Contents for easy navigation
@@ -73,7 +74,7 @@
 
 .NOTES
     Author:         Yeyland Wutani LLC
-    Version:        1.0.0
+    Version:        1.1.0
     Required:       Active Directory PowerShell Module (RSAT)
     Compatibility:  PowerShell 5.1+, Windows Server 2012 R2+
 
@@ -115,7 +116,10 @@ param(
     
     [Parameter()]
     [switch]$SkipGroupAudit,
-    
+
+    [Parameter()]
+    [switch]$SkipGPOAudit,
+
     [Parameter()]
     [bool]$ExportCSV = $true,
     
@@ -306,6 +310,17 @@ catch {
     exit 1
 }
 
+if (-not $SkipGPOAudit) {
+    try {
+        Import-Module GroupPolicy -ErrorAction Stop
+        Write-Status "Group Policy module loaded" -Type Success
+    }
+    catch {
+        Write-Status "GroupPolicy module not available - GPO audit will be skipped" -Type Warning
+        $SkipGPOAudit = $true
+    }
+}
+
 # Validate output path
 if (-not (Test-Path $OutputPath)) {
     try {
@@ -425,6 +440,17 @@ $auditResults['LockedUsers'] = $lockedUsers | Select-Object `
     SamAccountName, Name, LastBadPasswordAttempt, BadLogonCount, `
     Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}}
 Write-Status "Locked out users: $($lockedUsers.Count)" -Type $(if ($lockedUsers.Count -gt 0) { 'Warning' } else { 'Info' })
+
+# Users with indeterminate Enabled state (e.g., migrated accounts with missing userAccountControl)
+$unclassifiedUsers = @($allUsers | Where-Object { $_.Enabled -ne $true -and $_.Enabled -ne $false })
+if ($unclassifiedUsers.Count -gt 0) {
+    Write-Status "Unclassified accounts (Enabled=null): $($unclassifiedUsers.Count)" -Type Warning
+    Write-Status "  These accounts have no userAccountControl value set and do not appear" -Type Warning
+    Write-Status "  in Active or Disabled counts. Total Users ($($allUsers.Count)) = Active ($($activeUsers.Count)) + Disabled ($($disabledUsers.Count)) + Unclassified ($($unclassifiedUsers.Count))" -Type Warning
+}
+$auditResults['UnclassifiedUsers'] = $unclassifiedUsers | Select-Object `
+    SamAccountName, Name, UserPrincipalName, Created, Modified, `
+    Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}}
 #endregion
 
 #region Password Security Audit
@@ -606,14 +632,15 @@ if (-not $SkipComputerAudit) {
         LastLogonDate, IPv4Address, Description, @{N='OU';E={($_.DistinguishedName -split ',',2)[1]}}
     Write-Status "Windows Servers: $($windowsServers.Count)" -Type Info
     
-    # Legacy OS detection (XP, Server 2003, Server 2008)
-    $legacyOS = @($allComputers | Where-Object { 
+    # Legacy OS detection (XP, Server 2003, Server 2008, Windows 7, Windows 10 EOL Oct 2025)
+    $legacyOS = @($allComputers | Where-Object {
         $_.Enabled -eq $true -and (
             $_.OperatingSystem -like "*XP*" -or
             $_.OperatingSystem -like "*2003*" -or
             $_.OperatingSystem -like "*2008*" -or
             $_.OperatingSystem -like "*Windows 7*" -or
-            $_.OperatingSystem -like "*Vista*"
+            $_.OperatingSystem -like "*Vista*" -or
+            $_.OperatingSystem -like "*Windows 10*"
         )
     })
     $auditResults['LegacyOS'] = $legacyOS | Select-Object `
@@ -710,6 +737,128 @@ if (-not $SkipGroupAudit) {
 }
 #endregion
 
+#region Group Policy Audit
+if (-not $SkipGPOAudit) {
+    Write-Host ""
+    Write-Status "=== GROUP POLICY AUDIT ===" -Type Progress
+
+    try {
+        Write-Status "Retrieving all Group Policy Objects..." -Type Progress
+        $allGPOs = @(Get-GPO -All -ErrorAction Stop)
+        Write-Status "Found $($allGPOs.Count) GPOs" -Type Success
+
+        # Build a map of linked GPO GUIDs by scanning domain root and all OUs
+        $linkedGPOMap = @{}
+        $gpoTargets = @($domainDN)
+        $gpoTargets += @(Get-ADOrganizationalUnit -Filter * @searchParams |
+            Select-Object -ExpandProperty DistinguishedName)
+
+        Write-Status "Scanning $($gpoTargets.Count) container(s) for GPO links..." -Type Progress
+        foreach ($target in $gpoTargets) {
+            try {
+                $inheritance = Get-GPInheritance -Target $target -ErrorAction SilentlyContinue
+                if ($inheritance -and $inheritance.GpoLinks) {
+                    foreach ($link in $inheritance.GpoLinks) {
+                        $gpoId = $link.GpoId.ToString()
+                        if (-not $linkedGPOMap.ContainsKey($gpoId)) {
+                            $linkedGPOMap[$gpoId] = @()
+                        }
+                        $linkedGPOMap[$gpoId] += [PSCustomObject]@{
+                            Target    = $target
+                            LinkOrder = $link.Order
+                            Enabled   = $link.Enabled
+                            Enforced  = $link.Enforced
+                        }
+                    }
+                }
+            }
+            catch { }
+        }
+
+        # Build GPO summary list
+        $gpoSummary = @()
+        foreach ($gpo in $allGPOs) {
+            $gpoId = $gpo.Id.ToString()
+            $isLinked = $linkedGPOMap.ContainsKey($gpoId)
+            $links    = if ($isLinked) { $linkedGPOMap[$gpoId] } else { @() }
+            $linkLocations = ($links | Select-Object -ExpandProperty Target) -join '; '
+            $anyEnforced   = ($links | Where-Object { $_.Enforced } | Measure-Object).Count -gt 0
+
+            $gpoSummary += [PSCustomObject]@{
+                Name        = $gpo.DisplayName
+                Id          = $gpo.Id
+                Status      = $gpo.GpoStatus
+                IsLinked    = $isLinked
+                LinkCount   = $links.Count
+                LinkedTo    = if ($linkLocations) { $linkLocations } else { 'Not Linked' }
+                Enforced    = $anyEnforced
+                Created     = $gpo.CreationTime
+                Modified    = $gpo.ModificationTime
+                WMIFilter   = if ($gpo.WmiFilter) { $gpo.WmiFilter.Name } else { '' }
+                Description = $gpo.Description
+            }
+        }
+        $auditResults['GPOSummary'] = $gpoSummary
+
+        # Unlinked GPOs (orphaned/stale)
+        $unlinkedGPOs = @($gpoSummary | Where-Object { -not $_.IsLinked })
+        $auditResults['UnlinkedGPOs'] = $unlinkedGPOs
+        Write-Status "Unlinked GPOs: $($unlinkedGPOs.Count)" -Type $(if ($unlinkedGPOs.Count -gt 0) { 'Warning' } else { 'Info' })
+
+        # Fully disabled GPOs
+        $disabledGPOs = @($gpoSummary | Where-Object { $_.Status -eq 'AllSettingsDisabled' })
+        $auditResults['DisabledGPOs'] = $disabledGPOs
+        Write-Status "Fully disabled GPOs: $($disabledGPOs.Count)" -Type $(if ($disabledGPOs.Count -gt 0) { 'Warning' } else { 'Info' })
+
+        # Partially disabled GPOs
+        $partialGPOs = @($gpoSummary | Where-Object {
+            $_.Status -eq 'ComputerSettingsDisabled' -or $_.Status -eq 'UserSettingsDisabled'
+        })
+        $auditResults['PartialGPOs'] = $partialGPOs
+        Write-Status "Partially disabled GPOs: $($partialGPOs.Count)" -Type Info
+
+        Write-Status "Total GPOs: $($allGPOs.Count)" -Type Info
+    }
+    catch {
+        Write-Status "GPO audit failed: $_" -Type Warning
+        $auditResults['GPOSummary']  = @()
+        $auditResults['UnlinkedGPOs'] = @()
+        $auditResults['DisabledGPOs'] = @()
+        $auditResults['PartialGPOs']  = @()
+    }
+
+    # Fine-grained password policies (PSOs)
+    Write-Status "Checking fine-grained password policies (PSOs)..." -Type Progress
+    try {
+        $psos = @(Get-ADFineGrainedPasswordPolicy -Filter * -Properties AppliesTo -ErrorAction SilentlyContinue)
+        $auditResults['FineGrainedPolicies'] = $psos | Select-Object `
+            Name, Precedence, MinPasswordLength, PasswordHistoryCount, `
+            @{N='MaxPasswordAgeDays';E={$_.MaxPasswordAge.Days}}, `
+            @{N='MinPasswordAgeDays';E={$_.MinPasswordAge.Days}}, `
+            @{N='LockoutThreshold';E={$_.LockoutThreshold}}, `
+            @{N='LockoutDurationMins';E={$_.LockoutObservationWindow.TotalMinutes}}, `
+            ComplexityEnabled, ReversibleEncryptionEnabled, `
+            @{N='AppliesTo';E={
+                ($_.AppliesTo | ForEach-Object {
+                    (Get-ADObject -Identity $_ -ErrorAction SilentlyContinue).Name
+                }) -join '; '
+            }}
+        Write-Status "Fine-grained password policies: $($psos.Count)" -Type Info
+    }
+    catch {
+        $auditResults['FineGrainedPolicies'] = @()
+        Write-Status "No fine-grained password policies found or access denied" -Type Info
+    }
+}
+else {
+    $auditResults['GPOSummary']         = @()
+    $auditResults['UnlinkedGPOs']        = @()
+    $auditResults['DisabledGPOs']        = @()
+    $auditResults['PartialGPOs']         = @()
+    $auditResults['FineGrainedPolicies'] = @()
+}
+#endregion
+
 #region User Creation and Last Logon Report
 Write-Host ""
 Write-Status "=== ACCOUNT TIMELINE ANALYSIS ===" -Type Progress
@@ -736,6 +885,7 @@ if ($ExportCSV) {
     Export-AuditCSV -Name "InactiveUsers" -Data $auditResults['InactiveUsers'] -OutputPath $OutputPath
     Export-AuditCSV -Name "NeverLoggedOn" -Data $auditResults['NeverLoggedOn'] -OutputPath $OutputPath
     Export-AuditCSV -Name "LockedUsers" -Data $auditResults['LockedUsers'] -OutputPath $OutputPath
+    Export-AuditCSV -Name "UnclassifiedUsers" -Data $auditResults['UnclassifiedUsers'] -OutputPath $OutputPath
     Export-AuditCSV -Name "ExpiredPasswords" -Data $auditResults['ExpiredPasswords'] -OutputPath $OutputPath
     Export-AuditCSV -Name "PasswordNeverExpires" -Data $auditResults['PasswordNeverExpires'] -OutputPath $OutputPath
     Export-AuditCSV -Name "StalePasswords" -Data $auditResults['StalePasswords'] -OutputPath $OutputPath
@@ -755,6 +905,13 @@ if ($ExportCSV) {
     if (-not $SkipGroupAudit) {
         Export-AuditCSV -Name "PrivilegedGroupMembers" -Data $auditResults['PrivilegedGroupMembers'] -OutputPath $OutputPath
         Export-AuditCSV -Name "VPNUsers" -Data $auditResults['VPNUsers'] -OutputPath $OutputPath
+    }
+
+    if (-not $SkipGPOAudit) {
+        Export-AuditCSV -Name "GPOSummary"          -Data $auditResults['GPOSummary']          -OutputPath $OutputPath
+        Export-AuditCSV -Name "UnlinkedGPOs"         -Data $auditResults['UnlinkedGPOs']         -OutputPath $OutputPath
+        Export-AuditCSV -Name "DisabledGPOs"         -Data $auditResults['DisabledGPOs']         -OutputPath $OutputPath
+        Export-AuditCSV -Name "FineGrainedPolicies"  -Data $auditResults['FineGrainedPolicies']  -OutputPath $OutputPath
     }
 }
 #endregion
@@ -1142,6 +1299,11 @@ if (-not $SkipComputerAudit -and $auditResults['LegacyOS']) {
     $healthDeductions += [Math]::Min(15, $auditResults['LegacyOS'].Count * 3)
 }
 
+# Deduct for unlinked GPOs (up to 5 points — GPO hygiene)
+if (-not $SkipGPOAudit -and $auditResults['UnlinkedGPOs']) {
+    $healthDeductions += [Math]::Min(5, $auditResults['UnlinkedGPOs'].Count)
+}
+
 $healthScore = [Math]::Max(0, 100 - $healthDeductions)
 $healthClass = if ($healthScore -ge 80) { 'excellent' } elseif ($healthScore -ge 60) { 'good' } elseif ($healthScore -ge 40) { 'warning' } else { 'critical' }
 $healthColor = if ($healthScore -ge 80) { '#10B981' } elseif ($healthScore -ge 60) { '#3B82F6' } elseif ($healthScore -ge 40) { '#F59E0B' } else { '#EF4444' }
@@ -1193,6 +1355,9 @@ $htmlReport += @"
                 <div class="number">$($auditResults['DisabledUsers'].Count)</div>
                 <div class="label">Disabled Users</div>
             </div>
+            $(if ($auditResults['UnclassifiedUsers'] -and $auditResults['UnclassifiedUsers'].Count -gt 0) {
+                "<div class='summary-card warning'><div class='number'>$($auditResults['UnclassifiedUsers'].Count)</div><div class='label'>Unclassified Accounts</div></div>"
+            })
             <div class="summary-card $(if ($auditResults['LockedUsers'].Count -gt 0) { 'danger' })">
                 <div class="number">$($auditResults['LockedUsers'].Count)</div>
                 <div class="label">Locked Users</div>
@@ -1233,9 +1398,22 @@ if (-not $SkipGroupAudit) {
 "@
 }
 
+if (-not $SkipGPOAudit -and $auditResults['GPOSummary'].Count -gt 0) {
+    $htmlReport += @"
+            <div class="summary-card $(if ($auditResults['UnlinkedGPOs'].Count -gt 0) { 'warning' })">
+                <div class="number">$($auditResults['GPOSummary'].Count)</div>
+                <div class="label">Total GPOs</div>
+            </div>
+            <div class="summary-card $(if ($auditResults['UnlinkedGPOs'].Count -gt 0) { 'warning' })">
+                <div class="number">$($auditResults['UnlinkedGPOs'].Count)</div>
+                <div class="label">Unlinked GPOs</div>
+            </div>
+"@
+}
+
 $htmlReport += @"
         </div>
-        
+
         <!-- Charts Section -->
         <div class="charts-grid">
             <div class="chart-card">
@@ -1281,10 +1459,10 @@ if (-not $SkipGroupAudit) {
 }
 
 # Calculate inactivity breakdown
-$inactive30 = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -le 120 }).Count
-$inactive120 = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 120 -and $_.DaysSinceLogon -le 180 }).Count
-$inactive180 = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 180 -and $_.DaysSinceLogon -le 365 }).Count
-$inactive365 = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 365 }).Count
+$inactiveNear = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -le 120 }).Count
+$inactiveMid  = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 120 -and $_.DaysSinceLogon -le 180 }).Count
+$inactiveLong = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 180 -and $_.DaysSinceLogon -le 365 }).Count
+$inactiveVeryLong = @($auditResults['InactiveUsers'] | Where-Object { $_.DaysSinceLogon -gt 365 }).Count
 
 $htmlReport += @"
             <div class="chart-card">
@@ -1306,6 +1484,7 @@ $htmlReport += @"
                     <a href="#sec-locked">Locked Out <span class="count $(if ($auditResults['LockedUsers'].Count -gt 0) { 'danger' })">($($auditResults['LockedUsers'].Count))</span></a>
                     <a href="#sec-disabled">Disabled Accounts <span class="count">($($auditResults['DisabledUsers'].Count))</span></a>
                     <a href="#sec-recent">Recently Created <span class="count $(if ($auditResults['RecentlyCreated'].Count -gt 5) { 'warning' })">($($auditResults['RecentlyCreated'].Count))</span></a>
+                    <a href="#sec-unclassified">Unclassified Accounts <span class="count $(if ($auditResults['UnclassifiedUsers'].Count -gt 0) { 'danger' })">($($auditResults['UnclassifiedUsers'].Count))</span></a>
                 </div>
                 <div class="toc-section">
                     <div class="toc-section-title">Password Security</div>
@@ -1336,6 +1515,18 @@ if (-not $SkipGroupAudit) {
                     <div class="toc-section-title">Security Groups</div>
                     <a href="#sec-privileged">Privileged Groups <span class="count">($($auditResults['PrivilegedGroupMembers'].Count))</span></a>
                     <a href="#sec-vpn">VPN Users <span class="count">($vpnCount)</span></a>
+                </div>
+"@
+}
+
+if (-not $SkipGPOAudit -and $auditResults['GPOSummary'].Count -gt 0) {
+    $htmlReport += @"
+                <div class="toc-section">
+                    <div class="toc-section-title">Group Policy</div>
+                    <a href="#sec-gposummary">GPO Summary <span class="count">($($auditResults['GPOSummary'].Count))</span></a>
+                    <a href="#sec-unlinkedgpos">Unlinked GPOs <span class="count $(if ($auditResults['UnlinkedGPOs'].Count -gt 0) { 'warning' })">($($auditResults['UnlinkedGPOs'].Count))</span></a>
+                    <a href="#sec-disabledgpos">Disabled GPOs <span class="count $(if ($auditResults['DisabledGPOs'].Count -gt 0) { 'warning' })">($($auditResults['DisabledGPOs'].Count))</span></a>
+                    <a href="#sec-pso">Fine-Grained Policies <span class="count">($($auditResults['FineGrainedPolicies'].Count))</span></a>
                 </div>
 "@
 }
@@ -1452,12 +1643,50 @@ if (-not $SkipGroupAudit) {
     }
 }
 
+# Unclassified users section
+$htmlReport += ConvertTo-HTMLReport -Title "Unclassified Accounts" `
+    -Description "User objects in AD where the Enabled state cannot be determined (missing userAccountControl attribute). This typically occurs with migrated or manually-created accounts. These accounts are included in Total Users but do not appear in Active or Disabled counts." `
+    -Data $auditResults['UnclassifiedUsers'] `
+    -Columns @('SamAccountName', 'Name', 'Created', 'Modified', 'Description', 'OU') `
+    -SectionId "sec-unclassified" `
+    -EmptyMessage "No unclassified accounts found - all user objects have a valid Enabled state."
+
+if (-not $SkipGPOAudit) {
+    $htmlReport += ConvertTo-HTMLReport -Title "Group Policy Objects (All)" `
+        -Description "All GPOs in the domain. Unlinked GPOs are highlighted — they have no effect on any users or computers and may be safe to remove after review." `
+        -Data ($auditResults['GPOSummary'] | Sort-Object IsLinked, Name) `
+        -Columns @('Name', 'Status', 'IsLinked', 'LinkCount', 'Enforced', 'Modified', 'WMIFilter', 'Description') `
+        -SectionId "sec-gposummary" `
+        -EmptyMessage "No GPOs found."
+
+    $htmlReport += ConvertTo-HTMLReport -Title "Unlinked GPOs" `
+        -Description "GPOs that are not linked to any OU, site, or domain. These have no effect and should be reviewed for removal to reduce administrative clutter." `
+        -Data $auditResults['UnlinkedGPOs'] `
+        -Columns @('Name', 'Status', 'Created', 'Modified', 'Description') `
+        -SectionId "sec-unlinkedgpos" `
+        -EmptyMessage "No unlinked GPOs found - excellent!"
+
+    $htmlReport += ConvertTo-HTMLReport -Title "Disabled GPOs" `
+        -Description "GPOs where all settings are disabled. These have no effect and should be reviewed for removal." `
+        -Data $auditResults['DisabledGPOs'] `
+        -Columns @('Name', 'LinkedTo', 'LinkCount', 'Created', 'Modified', 'Description') `
+        -SectionId "sec-disabledgpos" `
+        -EmptyMessage "No fully disabled GPOs found."
+
+    $htmlReport += ConvertTo-HTMLReport -Title "Fine-Grained Password Policies (PSOs)" `
+        -Description "Password Settings Objects that override the Default Domain Policy for specific users or groups. Verify each PSO is intentional and applied to the correct principals." `
+        -Data $auditResults['FineGrainedPolicies'] `
+        -Columns @('Name', 'Precedence', 'MinPasswordLength', 'MaxPasswordAgeDays', 'LockoutThreshold', 'ComplexityEnabled', 'AppliesTo') `
+        -SectionId "sec-pso" `
+        -EmptyMessage "No fine-grained password policies configured."
+}
+
 # Footer and Charts JavaScript
 $htmlReport += @"
     </div>
     
     <div class="footer">
-        <p>Generated by <a href="https://github.com/YeylandWutani">Yeyland Wutani</a> AD Security Audit Tool v1.0.0</p>
+        <p>Generated by <a href="https://github.com/YeylandWutani">Yeyland Wutani</a> AD Security Audit Tool v1.1.0</p>
         <p>Building Better Systems</p>
         <p style="margin-top: 10px; font-size: 11px; color: #4B5563;">
             Review all findings and validate before taking action on accounts.
@@ -1490,7 +1719,7 @@ $htmlReport += @"
                 data: {
                     labels: ['Active', 'Disabled', 'Inactive', 'Never Logged On'],
                     datasets: [{
-                        data: [$($auditResults['ActiveUsers'].Count - $auditResults['InactiveUsers'].Count - $auditResults['NeverLoggedOn'].Count), $($auditResults['DisabledUsers'].Count), $($auditResults['InactiveUsers'].Count), $($auditResults['NeverLoggedOn'].Count)],
+                        data: [Math.max(0, $($auditResults['ActiveUsers'].Count - $auditResults['InactiveUsers'].Count - $auditResults['NeverLoggedOn'].Count)), $($auditResults['DisabledUsers'].Count), $($auditResults['InactiveUsers'].Count), $($auditResults['NeverLoggedOn'].Count)],
                         backgroundColor: [colors.green, colors.gray, colors.yellow, colors.red],
                         borderWidth: 0
                     }]
@@ -1544,7 +1773,7 @@ $htmlReport += @"
                     labels: ['$InactiveDays-120 days', '121-180 days', '181-365 days', '365+ days'],
                     datasets: [{
                         label: 'Inactive Users',
-                        data: [$inactive30, $inactive120, $inactive180, $inactive365],
+                        data: [$inactiveNear, $inactiveMid, $inactiveLong, $inactiveVeryLong],
                         backgroundColor: [colors.yellow, colors.orange, colors.red, colors.purple],
                         borderWidth: 0,
                         borderRadius: 4
@@ -1739,6 +1968,17 @@ if (-not $SkipComputerAudit) {
     Write-Host "$($auditResults['StaleComputers'].Count)" -ForegroundColor $(if ($auditResults['StaleComputers'].Count -gt 0) { 'Yellow' } else { 'Green' })
 }
 
+if (-not $SkipGPOAudit -and $auditResults['GPOSummary'] -and $auditResults['GPOSummary'].Count -gt 0) {
+    Write-Host "  Total GPOs:       " -NoNewline -ForegroundColor Gray
+    Write-Host $auditResults['GPOSummary'].Count -ForegroundColor White
+    Write-Host "  Unlinked GPOs:    " -NoNewline -ForegroundColor Gray
+    Write-Host "$($auditResults['UnlinkedGPOs'].Count)" -ForegroundColor $(if ($auditResults['UnlinkedGPOs'].Count -gt 0) { 'Yellow' } else { 'Green' })
+}
+if ($auditResults['UnclassifiedUsers'] -and $auditResults['UnclassifiedUsers'].Count -gt 0) {
+    Write-Host "  Unclassified:     " -NoNewline -ForegroundColor Gray
+    Write-Host "$($auditResults['UnclassifiedUsers'].Count) (see report)" -ForegroundColor Yellow
+}
+
 Write-Host ""
 Write-Host "  Output Directory: " -NoNewline -ForegroundColor Gray
 Write-Host $OutputPath -ForegroundColor Cyan
@@ -1768,6 +2008,10 @@ Write-Host ""
     StaleComputers = if ($SkipComputerAudit) { 'Skipped' } else { $auditResults['StaleComputers'].Count }
     LegacyOSSystems = if ($SkipComputerAudit) { 'Skipped' } else { $auditResults['LegacyOS'].Count }
     PrivilegedMembers = if ($SkipGroupAudit) { 'Skipped' } else { $auditResults['PrivilegedGroupMembers'].Count }
+    TotalGPOs           = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['GPOSummary'].Count }
+    UnlinkedGPOs        = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['UnlinkedGPOs'].Count }
+    FineGrainedPolicies = if ($SkipGPOAudit) { 'Skipped' } else { $auditResults['FineGrainedPolicies'].Count }
+    UnclassifiedUsers   = if ($auditResults['UnclassifiedUsers']) { $auditResults['UnclassifiedUsers'].Count } else { 0 }
     HealthScore = $healthScore
     ReportPath = $htmlPath
     Duration = $auditDuration
