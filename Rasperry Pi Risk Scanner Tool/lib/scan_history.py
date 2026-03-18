@@ -56,7 +56,9 @@ CREATE TABLE IF NOT EXISTS scan_hosts (
     risk_level TEXT    DEFAULT 'LOW',
     vuln_count INTEGER DEFAULT 0,
     kev_count  INTEGER DEFAULT 0,
-    open_ports TEXT    DEFAULT '[]',
+    open_ports     TEXT    DEFAULT '[]',
+    auth_attempted INTEGER DEFAULT 0,
+    auth_success   INTEGER DEFAULT 0,
     PRIMARY KEY (scan_id, ip)
 );
 
@@ -88,6 +90,15 @@ def _init_db():
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with _conn() as c:
         c.executescript(_SCHEMA)
+        # Migrate: add new auth columns if they don't exist yet (idempotent)
+        for col, coldef in [
+            ("auth_attempted", "INTEGER DEFAULT 0"),
+            ("auth_success",   "INTEGER DEFAULT 0"),
+        ]:
+            try:
+                c.execute(f"ALTER TABLE scan_hosts ADD COLUMN {col} {coldef}")
+            except Exception:
+                pass  # Column already exists
     _db_ready = True
     _migrate_legacy_archives()
 
@@ -174,14 +185,17 @@ def save_scan(results: dict, archive_path: str = None) -> int:
                 h_vuln,
                 h_kev,
                 json.dumps(h.get("open_ports", [])),
+                int(bool(h.get("credential_attempted", False))),
+                int(h.get("credential_type", "none") != "none"),
             ))
 
         if host_rows:
             c.executemany(
                 "INSERT OR IGNORE INTO scan_hosts "
                 "(scan_id, ip, hostname, mac, vendor, category, os_version, "
-                " risk_score, risk_level, vuln_count, kev_count, open_ports) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " risk_score, risk_level, vuln_count, kev_count, open_ports, "
+                " auth_attempted, auth_success) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 host_rows,
             )
 

@@ -47,18 +47,20 @@ def scan_host_wmi(ip: str, credential_profile: dict) -> dict:
         "error": None,
     }
 
-    username = credential_profile.get("username", "")
+    username_orig = credential_profile.get("username", "")
     password = credential_profile.get("password", "")
     domain = ""
-    if "\\" in username:
-        domain, username = username.split("\\", 1)
-    elif "@" in username:
-        username, domain = username.split("@", 1)
+    username = username_orig
+    if "\\" in username_orig:
+        domain, username = username_orig.split("\\", 1)
+    elif "@" in username_orig:
+        username, domain = username_orig.split("@", 1)
 
     logger.info(f"WMI scan: {ip} (user={username} domain={domain or 'local'})")
 
-    # Try WinRM first (faster, more reliable)
-    winrm_success = _try_winrm(ip, username, password, domain, result)
+    # Try WinRM first (faster, more reliable) — pass original format so pypsrp
+    # handles both UPN (user@domain.local) and NTLM (DOMAIN\user) natively.
+    winrm_success = _try_winrm(ip, username_orig, password, domain, result)
     if winrm_success:
         result["wmi_success"] = True
         result["wmi_method"] = "winrm"
@@ -78,7 +80,13 @@ def scan_host_wmi(ip: str, credential_profile: dict) -> dict:
 
 
 def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict) -> bool:
-    """Try WinRM (pypsrp) connection and collect data via PowerShell."""
+    """Try WinRM (pypsrp) connection and collect data via PowerShell.
+
+    ``username`` is the original credential string — either UPN format
+    (user@domain.local) or NTLM format (DOMAIN\\user) — passed as-is to
+    pypsrp which handles both natively without manual reconstruction.
+    ``domain`` is available for DCOM fallback only.
+    """
     try:
         import pypsrp
         from pypsrp.client import Client
@@ -87,10 +95,10 @@ def _try_winrm(ip: str, username: str, password: str, domain: str, result: dict)
         return False
 
     try:
-        conn_user = f"{domain}\\{username}" if domain else username
+        # Pass username verbatim — pypsrp accepts both user@domain.local and DOMAIN\user
         client = Client(
             ip,
-            username=conn_user,
+            username=username,
             password=password,
             ssl=False,
             connection_timeout=_CMD_TIMEOUT,

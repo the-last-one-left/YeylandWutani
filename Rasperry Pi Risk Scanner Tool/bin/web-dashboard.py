@@ -347,20 +347,25 @@ def _get_last_scan_summary() -> Optional[dict]:
             ]
 
             hosts.append({
-                "ip":              h.get("ip", ""),
-                "hostname":        h.get("hostname", ""),
-                "vendor":          h.get("vendor", ""),
-                "category":        h.get("category", ""),
-                "os_guess":        h.get("os_guess") or h.get("os_version", ""),
-                "risk_score":      int(h.get("risk_score") or 0),
-                "risk_level":      h.get("risk_level", "LOW"),
-                "kev_cves":        kev_count,
-                "total_cves":      len(cve_matches),
-                "credentialed":    bool(h.get("credentialed", False)),
-                "open_ports":      len(h.get("open_ports", [])),
-                "cve_matches":     cve_list,
-                "security_flags":  flags,
-                "services":        services,
+                "ip":                   h.get("ip", ""),
+                "hostname":             h.get("hostname", ""),
+                "vendor":               h.get("vendor", ""),
+                "category":             h.get("category", ""),
+                "os_guess":             h.get("os_guess") or h.get("os_version", ""),
+                "risk_score":           int(h.get("risk_score") or 0),
+                "risk_level":           h.get("risk_level", "LOW"),
+                "kev_cves":             kev_count,
+                "total_cves":           len(cve_matches),
+                "credentialed":         h.get("credential_type", "none") != "none",
+                "credential_type":      h.get("credential_type", "none"),
+                "credential_attempted": bool(h.get("credential_attempted", False)),
+                "credential_error":     h.get("credential_error", ""),
+                "auth_ports":           h.get("auth_ports", []),
+                "wmi_method":           h.get("wmi_method", ""),
+                "open_ports":           len(h.get("open_ports", [])),
+                "cve_matches":          cve_list,
+                "security_flags":       flags,
+                "services":             services,
             })
 
         hosts.sort(key=lambda x: x["risk_score"], reverse=True)
@@ -1085,9 +1090,56 @@ async function loadDetail() {
                      <td style="font-size:12px">${escHtml(f.description||'')}</td></tr>`
             ).join('') || '<tr><td colspan="2" style="color:#AAA">None</td></tr>';
 
+            // ── Auth status panel ─────────────────────────────────────────────
+            const credType  = h.credential_type  || 'none';
+            const attempted = h.credential_attempted;
+            const credErr   = h.credential_error  || '';
+            const wmiMethod = h.wmi_method        || '';
+            const authPorts = h.auth_ports        || [];
+
+            let authStatusHtml = '';
+            if (credType !== 'none') {
+                const methodTag = wmiMethod ? ` <span style="font-size:10px;opacity:.8">(${escHtml(wmiMethod)})</span>` : '';
+                authStatusHtml = `<span class="badge badge-ok">&#10003; ${escHtml(credType.toUpperCase())} authenticated${methodTag}</span>`;
+            } else if (attempted) {
+                authStatusHtml = `<span class="badge badge-err">&#10007; Auth failed</span>`
+                    + (credErr ? `<span style="font-size:11px;color:#C0392B;margin-left:6px">${escHtml(credErr)}</span>` : '');
+            } else if (authPorts.length) {
+                authStatusHtml = `<span class="badge badge-warn">No credential configured</span>`;
+            } else {
+                authStatusHtml = `<span style="color:#AAA;font-size:12px">No auth-capable ports detected</span>`;
+            }
+
+            const authPortsHtml = authPorts.length
+                ? authPorts.map(p => `<span class="badge badge-blue" style="margin-right:4px">${escHtml(String(p.port))}/${escHtml(p.label||'')}</span>`).join('')
+                : '<span style="color:#AAA;font-size:12px">—</span>';
+
+            // Quick "Add Credential" button — shown when auth-capable ports exist but no cred configured
+            let quickCredBtn = '';
+            if (authPorts.length && credType === 'none') {
+                const suggestType = authPorts.some(p => p.port === 22) ? 'ssh' : 'wmi';
+                const encIp   = encodeURIComponent(h.ip || '');
+                const encType = encodeURIComponent(suggestType);
+                quickCredBtn = `<a href="/dashboard?view=credentials&add=1&ip=${encIp}&type=${encType}"
+                    class="btn-sm btn-sm-blue" style="text-decoration:none;display:inline-block;margin-left:10px">
+                    + Add Credential for this host</a>`;
+            }
+
             const expTr = document.createElement('tr');
             expTr.className = 'expand-row';
             expTr.innerHTML = `<td colspan="9"><div class="expand-content">
+
+                <div style="background:#F0F4FF;border-radius:6px;padding:10px 14px;margin-bottom:12px;display:flex;align-items:center;flex-wrap:wrap;gap:16px">
+                  <div>
+                    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#888">Auth Status&nbsp;&nbsp;</span>
+                    ${authStatusHtml}${quickCredBtn}
+                  </div>
+                  <div>
+                    <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:#888">Auth-Capable Ports&nbsp;&nbsp;</span>
+                    ${authPortsHtml}
+                  </div>
+                </div>
+
                 <div style="display:flex;gap:24px;flex-wrap:wrap">
                   <div style="flex:1;min-width:220px">
                     <div style="font-weight:600;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:#888;margin-bottom:6px">Services</div>
@@ -1312,6 +1364,24 @@ document.addEventListener('DOMContentLoaded', () => {
     loadCredentials();
     onTypeChange();
     onScopeChange();
+
+    // Pre-fill add form from URL params when arriving via host detail quick-add button
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('add') === '1') {
+        showCredForm();
+        const ip   = params.get('ip')   || '';
+        const type = params.get('type') || 'wmi';
+        const typeEl = document.getElementById('f-type');
+        if (typeEl && type) { typeEl.value = type; onTypeChange(); }
+        if (ip) {
+            const scopeEl = document.getElementById('f-scope');
+            if (scopeEl) { scopeEl.value = 'host'; onScopeChange(); }
+            const targEl = document.getElementById('f-targets');
+            if (targEl) targEl.value = ip;
+            const nameEl = document.getElementById('f-name');
+            if (nameEl) nameEl.value = type + '-' + ip.replace(/\./g, '-');
+        }
+    }
 });
 """
     elif view == "settings":
@@ -1628,7 +1698,8 @@ def _credentials_content() -> str:
       <div class="form-row">
         <div class="form-group">
           <label>Username</label>
-          <input type="text" id="f-username" autocomplete="off">
+          <input type="text" id="f-username" autocomplete="off"
+               placeholder="user, DOMAIN\user, or user@domain.local">
         </div>
         <div class="form-group">
           <label>Password</label>

@@ -118,7 +118,10 @@ def _blank_host(ip: str, mac: str = "", vendor: str = "") -> dict:
         "open_ports": [],
         "services": [],
         "security_flags": [],
-        "credential_type": "none",
+        "credential_type":      "none",
+        "auth_ports":           [],     # [{port, label}] auth-capable ports detected
+        "credential_attempted": False,  # Was a credential attempted against this host?
+        "credential_error":     "",     # Failure reason if auth was attempted but failed
         "os_version": "",
         "kernel_version": "",
         "installed_packages": [],
@@ -583,9 +586,22 @@ def _run_port_scan(hosts: list, config: dict) -> list:
     hosts_by_ip = {h["ip"]: h for h in hosts}
     _parse_nmap_service_xml(result.stdout, hosts_by_ip)
 
-    # Assign category using updated port/service data
+    # Assign category and annotate auth-capable ports
+    _AUTH_PORT_LABELS = {
+        22:   "SSH",
+        445:  "SMB/WMI",
+        135:  "WMI-DCOM",
+        5985: "WinRM",
+        5986: "WinRM-SSL",
+        161:  "SNMP",
+    }
     for host in hosts:
         host["category"] = _classify_host_category(host)
+        host["auth_ports"] = [
+            {"port": p, "label": _AUTH_PORT_LABELS[p]}
+            for p in host.get("open_ports", [])
+            if p in _AUTH_PORT_LABELS
+        ]
 
     logger.info(f"Phase 3: Port scan complete — {sum(1 for h in hosts if h['open_ports'])} hosts with open ports")
     return hosts
@@ -738,16 +754,20 @@ def _run_ssh_scans(
                 coverage["no_credential"].append(ip)
             return
         try:
+            hosts_by_ip[ip]["credential_attempted"] = True
             result = scan_host_ssh(ip, profile)
-            if result:
-                _merge_dict(hosts_by_ip[ip], result)
+            _merge_dict(hosts_by_ip[ip], result)
+            if result.get("ssh_success"):
                 hosts_by_ip[ip]["credential_type"] = "ssh"
                 coverage["ssh_success"].append(ip)
             else:
-                logger.warning(f"Phase 5: SSH scan returned no data for {ip}")
+                err = result.get("error") or "Authentication failed"
+                hosts_by_ip[ip]["credential_error"] = err
                 coverage["ssh_failed"].append(ip)
         except Exception as exc:
             logger.warning(f"Phase 5: SSH scan failed for {ip}: {exc}")
+            hosts_by_ip[ip]["credential_attempted"] = True
+            hosts_by_ip[ip]["credential_error"] = str(exc)
             coverage["ssh_failed"].append(ip)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -808,16 +828,23 @@ def _run_wmi_scans(
             # Do not double-count as no_credential if SSH already recorded it
             return
         try:
+            hosts_by_ip[ip]["credential_attempted"] = True
             result = scan_host_wmi(ip, profile)
-            if result:
-                _merge_dict(hosts_by_ip[ip], result)
+            _merge_dict(hosts_by_ip[ip], result)
+            if result.get("wmi_success"):
                 if hosts_by_ip[ip].get("credential_type") == "none":
                     hosts_by_ip[ip]["credential_type"] = "wmi"
                 coverage["wmi_success"].append(ip)
             else:
+                if not hosts_by_ip[ip].get("credential_error"):
+                    err = result.get("error") or "WMI/WinRM authentication failed"
+                    hosts_by_ip[ip]["credential_error"] = err
                 coverage["wmi_failed"].append(ip)
         except Exception as exc:
             logger.warning(f"Phase 6: WMI scan failed for {ip}: {exc}")
+            hosts_by_ip[ip]["credential_attempted"] = True
+            if not hosts_by_ip[ip].get("credential_error"):
+                hosts_by_ip[ip]["credential_error"] = str(exc)
             coverage["wmi_failed"].append(ip)
 
     with ThreadPoolExecutor(max_workers=max_workers) as pool:
