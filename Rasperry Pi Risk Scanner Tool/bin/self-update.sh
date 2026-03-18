@@ -4,6 +4,7 @@ set -euo pipefail
 
 INSTALL_DIR="/opt/risk-scanner"
 VENV_DIR="${INSTALL_DIR}/venv"
+REPO_SUBFOLDER="Rasperry Pi Risk Scanner Tool"
 
 # Color helpers
 RED='\033[0;31m'
@@ -22,10 +23,24 @@ fi
 echo -e "${CYAN}${BOLD}Yeyland Wutani Risk Scanner — Self-Update${NC}"
 echo ""
 
-echo "Checking for updates..."
 cd "$INSTALL_DIR"
 
-REPO_SUBFOLDER="Rasperry Pi Risk Scanner Tool"
+# ── Bootstrap ────────────────────────────────────────────────────────────────
+# If a previous git pull landed a newer version of this script in the repo
+# subfolder (because the flatten hadn't run yet), copy it into place and
+# exec into it so we always run the latest update logic.
+_SELF_IN_REPO="${INSTALL_DIR}/${REPO_SUBFOLDER}/bin/self-update.sh"
+if [[ -f "${_SELF_IN_REPO}" ]]; then
+    if ! cmp -s "${_SELF_IN_REPO}" "${INSTALL_DIR}/bin/self-update.sh" 2>/dev/null; then
+        echo "Bootstrapping newer self-update.sh from repo subfolder..."
+        cp "${_SELF_IN_REPO}" "${INSTALL_DIR}/bin/self-update.sh"
+        chmod +x "${INSTALL_DIR}/bin/self-update.sh"
+        exec "${INSTALL_DIR}/bin/self-update.sh" "$@"
+    fi
+fi
+
+# ── Pull ─────────────────────────────────────────────────────────────────────
+echo "Checking for updates..."
 
 BEFORE=$(git rev-parse HEAD 2>/dev/null || echo "unknown")
 
@@ -34,11 +49,55 @@ if ! git pull --ff-only origin main 2>&1; then
     exit 0
 fi
 
-# Pull any updated LFS objects (vuln-db.sqlite etc.)
+# Pull any updated LFS objects.  Suppress the "vuln-db" pointer update — the
+# Pi's database is auto-updated by the scanner and is always newer than the
+# seed committed to git; we must never let git lfs pull overwrite it.
+# Strategy: back it up first, restore if git lfs replaced it with an older one.
+_DB_LIVE="${INSTALL_DIR}/data/vuln-db/vuln-db.sqlite"
+_DB_BACKUP="${INSTALL_DIR}/data/vuln-db/vuln-db.sqlite.selfupdate-bak"
+if [[ -f "${_DB_LIVE}" ]]; then
+    cp "${_DB_LIVE}" "${_DB_BACKUP}"
+fi
 git lfs pull 2>/dev/null || true
+if [[ -f "${_DB_BACKUP}" ]]; then
+    # Restore if backup is newer (i.e. git lfs pulled an older seed version)
+    if [[ "${_DB_BACKUP}" -nt "${_DB_LIVE}" ]]; then
+        mv "${_DB_BACKUP}" "${_DB_LIVE}"
+        echo "  Preserved live vuln-db.sqlite (git seed is older — keeping Pi version)."
+    else
+        rm -f "${_DB_BACKUP}"
+    fi
+fi
 
-# git pull recreates the sparse-checkout subfolder in the working tree —
-# flatten it back to the install root so the running code stays up to date.
+# ── Protect live files before flatten ────────────────────────────────────────
+# These files are Pi-local; they must never be overwritten by a git pull:
+#   data/vuln-db/vuln-db.sqlite  — CVE database auto-updated by the scanner
+#   config/config.json           — site-specific configuration
+#   config/credentials.enc       — encrypted credential store
+#   data/                        — scan history, dashboard state, etc.
+# Remove any copies that landed in the repo subfolder so cp -a won't clobber
+# the live versions.
+_PROTECT=(
+    "data/vuln-db/vuln-db.sqlite"
+    "config/config.json"
+    "config/credentials.enc"
+)
+for _p in "${_PROTECT[@]}"; do
+    _repo_copy="${INSTALL_DIR}/${REPO_SUBFOLDER}/${_p}"
+    _live_copy="${INSTALL_DIR}/${_p}"
+    if [[ -f "${_repo_copy}" && -f "${_live_copy}" ]]; then
+        rm -f "${_repo_copy}"
+    fi
+done
+# Never overwrite the entire data/ directory (scan history lives here)
+if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}/data" ]]; then
+    rm -rf "${INSTALL_DIR}/${REPO_SUBFOLDER}/data"
+fi
+
+# ── Flatten repo subfolder to install root ───────────────────────────────────
+# git sparse-checkout recreates the repo subfolder in the working tree on
+# every pull; move everything up to the install root so the running code
+# is always current.
 if [[ -d "${INSTALL_DIR}/${REPO_SUBFOLDER}" ]]; then
     echo "Flattening updated subfolder to install root..."
     cp -a "${INSTALL_DIR}/${REPO_SUBFOLDER}/." "${INSTALL_DIR}/"
