@@ -1699,7 +1699,7 @@ def _credentials_content() -> str:
         <div class="form-group">
           <label>Username</label>
           <input type="text" id="f-username" autocomplete="off"
-               placeholder="user, DOMAIN\user, or user@domain.local">
+               placeholder="user, DOMAIN\\user, or user@domain.local">
         </div>
         <div class="form-group">
           <label>Password</label>
