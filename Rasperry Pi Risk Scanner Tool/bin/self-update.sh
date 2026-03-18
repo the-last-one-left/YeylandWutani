@@ -61,15 +61,25 @@ if [[ "$BEFORE" != "$AFTER" ]]; then
         systemctl daemon-reload
         echo -e "${GREEN}Systemd units reloaded.${NC}"
 
-        # Restart any active timers that were updated
-        echo "$CHANGED_UNITS" | grep '\.timer$' | while read -r TIMER_PATH; do
-            TIMER_NAME=$(basename "$TIMER_PATH")
-            if systemctl is-active --quiet "$TIMER_NAME" 2>/dev/null; then
-                systemctl restart "$TIMER_NAME" && \
-                    echo -e "  Restarted ${TIMER_NAME}" || \
-                    echo -e "  ${YELLOW}Could not restart ${TIMER_NAME}${NC}"
-            fi
-        done
+        # If any timer files changed, re-apply schedule from config so the
+        # __REPORT_DAY__ / __REPORT_TIME__ placeholders get real values written
+        # back before systemd tries to parse them.
+        if echo "$CHANGED_UNITS" | grep -q '\.timer$'; then
+            echo "Re-applying schedule to updated timer files..."
+            "${VENV_DIR}/bin/python3" "${INSTALL_DIR}/bin/apply-schedule.py" && \
+                echo -e "${GREEN}Schedule re-applied.${NC}" || \
+                echo -e "${YELLOW}Warning: apply-schedule.py failed — timers may need manual restart.${NC}"
+        else
+            # No timers changed; restart any active non-timer units that were updated
+            echo "$CHANGED_UNITS" | grep '\.service$' | while read -r UNIT_PATH; do
+                UNIT_NAME=$(basename "$UNIT_PATH")
+                if systemctl is-active --quiet "$UNIT_NAME" 2>/dev/null; then
+                    systemctl restart "$UNIT_NAME" && \
+                        echo -e "  Restarted ${UNIT_NAME}" || \
+                        echo -e "  ${YELLOW}Could not restart ${UNIT_NAME}${NC}"
+                fi
+            done
+        fi
     fi
 
     echo ""
