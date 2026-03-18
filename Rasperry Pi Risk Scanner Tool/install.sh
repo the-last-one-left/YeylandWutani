@@ -991,6 +991,18 @@ install_services() {
         info "Installed ${dest_name}"
     done
 
+    # Install polkit rule so the web dashboard (NoNewPrivileges=yes) can
+    # trigger scans via systemctl start without requiring sudo.
+    local POLKIT_DIR="/etc/polkit-1/rules.d"
+    local POLKIT_RULE="${SRC_SYSTEMD}/50-risk-scanner.rules"
+    if [[ -f "${POLKIT_RULE}" && -d "${POLKIT_DIR}" ]]; then
+        cp "${POLKIT_RULE}" "${POLKIT_DIR}/50-risk-scanner.rules"
+        chmod 0644 "${POLKIT_DIR}/50-risk-scanner.rules"
+        print_ok "polkit rule installed (web dashboard can trigger scans)."
+    elif [[ -f "${POLKIT_RULE}" ]]; then
+        print_warn "polkit rules.d not found at ${POLKIT_DIR} — web 'Run Scan' button may be denied."
+    fi
+
     # Substitute schedule placeholders in timer unit files
     local SCAN_H SCAN_M REPORT_H REPORT_M
     SCAN_H="${SCAN_TIME%%:*}"
