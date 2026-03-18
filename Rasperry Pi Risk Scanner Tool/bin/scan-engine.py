@@ -437,6 +437,10 @@ def _parse_nmap_service_xml(xml_str: str, hosts_by_ip: dict) -> dict:
     Parse nmap -sV XML output.
     Returns updated hosts_by_ip dict with open_ports, services, os_guess populated.
     """
+    if not xml_str or not xml_str.strip():
+        # Empty output is normal for UDP scans that find no open ports or when
+        # nmap lacks raw-socket privileges for the scan type — not an error.
+        return hosts_by_ip
     try:
         root = ET.fromstring(xml_str)
     except ET.ParseError as exc:

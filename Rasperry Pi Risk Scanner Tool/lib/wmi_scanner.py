@@ -10,12 +10,31 @@ firewall, AV, shares, RDP, and UAC status.
 
 import logging
 import re
+import socket
 from datetime import datetime
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
 _CMD_TIMEOUT = 30
+_PRECHECK_TIMEOUT = 3   # seconds for quick TCP reachability test
+_WMI_CHECK_PORTS = [5985, 445, 135, 5986]
+
+
+def _any_port_reachable(ip: str) -> bool:
+    """Return True if any WMI-related TCP port responds within _PRECHECK_TIMEOUT.
+
+    Avoids wasting 30 seconds × N PS commands on hosts that have no WMI
+    service accessible (e.g. hosts that are firewalled or have WMI disabled).
+    A 3-second connect test costs almost nothing by comparison.
+    """
+    for port in _WMI_CHECK_PORTS:
+        try:
+            with socket.create_connection((ip, port), timeout=_PRECHECK_TIMEOUT):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def scan_host_wmi(ip: str, credential_profile: dict) -> dict:
@@ -57,6 +76,14 @@ def scan_host_wmi(ip: str, credential_profile: dict) -> dict:
         username, domain = username_orig.split("@", 1)
 
     logger.info(f"WMI scan: {ip} (user={username} domain={domain or 'local'})")
+
+    # Fast TCP pre-check — if no WMI port (5985/445/135/5986) responds within
+    # 3 seconds the host is definitely not running accessible WMI/WinRM.
+    # Avoids burning 30s × N PS commands on each unreachable host.
+    if not _any_port_reachable(ip):
+        result["error"] = "No WMI port reachable (checked 5985/445/135/5986)"
+        logger.debug(f"WMI pre-check: {ip} — no port responded, skipping")
+        return result
 
     # Try WinRM first (faster, more reliable) — pass original format so pypsrp
     # handles both UPN (user@domain.local) and NTLM (DOMAIN\user) natively.

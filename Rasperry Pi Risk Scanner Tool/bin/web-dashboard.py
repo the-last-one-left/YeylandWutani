@@ -375,11 +375,15 @@ def _get_last_scan_summary() -> Optional[dict]:
 
         hosts.sort(key=lambda x: x["risk_score"], reverse=True)
 
+        # scan-engine stores the score under results["risk"]["score"] and the
+        # timestamp under results["scan_start"] — fall back to legacy key names
+        # for any older archives that used different conventions.
+        _risk = data.get("risk") or {}
         return {
             "hosts":             hosts,
-            "env_score":         data.get("env_risk_score", 0),
-            "env_level":         data.get("env_risk_level", "LOW"),
-            "scan_time":         data.get("scan_time", ""),
+            "env_score":         _risk.get("score") or data.get("env_risk_score", 0),
+            "env_level":         _risk.get("level") or data.get("env_risk_level", "LOW"),
+            "scan_time":         data.get("scan_start") or data.get("scan_time", ""),
             "total_cves":        sum(h["total_cves"] for h in hosts),
             "delta":             data.get("_delta") or data.get("delta", {}),
             "credentialed_count":sum(1 for h in hosts if h["credentialed"]),
