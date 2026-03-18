@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Yeyland Wutani - Risk Scanner Tool
+Yeyland Wutani - Network Discovery Pi
 vuln_db.py - SQLite-backed Vulnerability Database
 
 Replaces JSON flat-file caches with an indexed SQLite database.
@@ -34,7 +34,7 @@ from typing import Optional
 logger = logging.getLogger(__name__)
 
 # ── Paths ──────────────────────────────────────────────────────────────────
-VULN_DB_DIR = Path("/opt/risk-scanner/data/vuln-db")
+VULN_DB_DIR = Path("/opt/network-discovery/data/vuln-db")
 DB_PATH     = VULN_DB_DIR / "vuln-db.sqlite"
 
 # Legacy JSON paths — only used for one-time auto-migration

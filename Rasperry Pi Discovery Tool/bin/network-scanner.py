@@ -80,6 +80,14 @@ try:
 except ImportError:
     _AD_ENRICHMENT_AVAILABLE = False
 
+# NVD version-range verification — filters vulners false positives.
+# Provided by lib/vuln_db.py (part of this tool's own library).
+try:
+    from vuln_db import verify_cve_for_service as _verify_cve_for_service
+    _VULN_DB_AVAILABLE = True
+except ImportError:
+    _VULN_DB_AVAILABLE = False
+
 # Suppresses per-host repetition of the nmap SYN→connect fallback message.
 # Logged at INFO the first time; demoted to DEBUG for every subsequent host.
 # Lock guards against the race where two scan threads both see False and both
@@ -1968,10 +1976,21 @@ def _run_nse_scripts(ip: str, open_ports: list, config: dict) -> dict:
         if out:
             cves = []
             current_port_v = None
+            port_versions: dict = {}   # port -> (product, version) parsed from nmap -sV output
             for line in out.splitlines():
-                pm = re.match(r"^(\d+)/tcp", line)
+                # "53/tcp  open  domain  dnsmasq 2.90"  → capture port + version string
+                pm = re.match(r"^(\d+)/tcp\s+open\s+\S+\s+(.*)", line)
                 if pm:
                     current_port_v = int(pm.group(1))
+                    svc_tokens = pm.group(2).strip().split(None, 1)
+                    if len(svc_tokens) == 2:
+                        port_versions[current_port_v] = (
+                            svc_tokens[0],          # product name (e.g. "dnsmasq")
+                            svc_tokens[1].split()[0],  # first version token (e.g. "2.90")
+                        )
+                elif re.match(r"^(\d+)/tcp", line):
+                    pm2 = re.match(r"^(\d+)/tcp", line)
+                    current_port_v = int(pm2.group(1))
                 # vulners output: "|       CVE-XXXX-YYYY   9.8   https://..."
                 m = re.search(r"\|\s+(CVE-\d{4}-\d+)\s+([\d.]+)", line)
                 if m:
@@ -1980,12 +1999,32 @@ def _run_nse_scripts(ip: str, open_ports: list, config: dict) -> dict:
                         cvss = float(m.group(2))
                     except ValueError:
                         cvss = 0.0
-                    cves.append({"cve": cve_id, "cvss": cvss, "port": current_port_v})
+                    cves.append({"cve": cve_id, "cvss": cvss, "port": current_port_v,
+                                 "confidence": "unverified"})
             if cves:
+                # ── NVD version-range verification ─────────────────────────
+                # Cross-check each CVE against the local NVD SQLite database
+                # to filter false positives from the vulners script, which
+                # returns all CVEs for a product name regardless of whether the
+                # detected version is actually in the affected range.
+                if _VULN_DB_AVAILABLE:
+                    for cve in cves:
+                        pv = port_versions.get(cve["port"])
+                        if pv:
+                            product, version = pv
+                            try:
+                                cve["confidence"] = _verify_cve_for_service(
+                                    cve["cve"], product, version
+                                )
+                            except Exception:
+                                pass  # leave as "unverified"
+
                 results["vulners_cves"] = cves
-                # Surface high/critical CVEs as nse_vulns
+                # Surface high/critical CVEs as nse_vulns — skip NVD-confirmed false positives
                 nse_vulns = results.setdefault("nse_vulns", [])
                 for cve in cves:
+                    if cve.get("confidence") == "likely_patched":
+                        continue  # NVD confirms this version is not in the affected range
                     if cve["cvss"] >= 9.0:
                         nse_vulns.append({
                             "name": f"{cve['cve']} (CVSS {cve['cvss']}) on port {cve['port']}",

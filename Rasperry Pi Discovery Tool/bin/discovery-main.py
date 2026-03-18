@@ -23,6 +23,7 @@ import os
 import platform
 import shutil
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -217,6 +218,56 @@ def manage_disk_space(config: dict):
         logger.warning("No scan files available to prune. Disk may remain low.")
 
 
+# ── Vulnerability DB maintenance ───────────────────────────────────────────
+
+VULN_DB_PATH = BASE_DIR / "data" / "vuln-db" / "vuln-db.sqlite"
+
+
+def update_vuln_db_if_due(config: dict):
+    """Run update-vuln-db.py --update if the NVD cache is older than the configured interval."""
+    interval_days = config.get("vuln_db_update_interval_days", 1)
+
+    if VULN_DB_PATH.exists():
+        age_days = (time.time() - VULN_DB_PATH.stat().st_mtime) / 86400
+        if age_days < interval_days:
+            logger.info(
+                "Vuln DB is current (%.1f days old, threshold: %d days). Skipping update.",
+                age_days, interval_days,
+            )
+            return
+        logger.info(
+            "Vuln DB is %.1f days old (threshold: %d days). Triggering update...",
+            age_days, interval_days,
+        )
+    else:
+        logger.info("Vuln DB not found — triggering initial seed (this runs once and may take a while)...")
+
+    updater = Path(__file__).parent / "update-vuln-db.py"
+    if not updater.exists():
+        logger.warning("update-vuln-db.py not found at %s — skipping.", updater)
+        return
+
+    cmd = [sys.executable, str(updater)]
+    cmd += ["--init"] if not VULN_DB_PATH.exists() else ["--update"]
+
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=3600,  # --init can take up to an hour without an API key
+        )
+        if result.returncode == 0:
+            logger.info("Vuln DB updated successfully.")
+        else:
+            logger.warning("update-vuln-db.py exited %d: %s",
+                           result.returncode, result.stderr.strip()[:300])
+    except subprocess.TimeoutExpired:
+        logger.warning("Vuln DB update timed out. Continuing with existing DB.")
+    except Exception as e:
+        logger.warning("Vuln DB update failed: %s. Continuing with existing DB.", e)
+
+
 # ── Starting notification email ────────────────────────────────────────────
 
 def send_starting_email(mailer: GraphMailer, config: dict):
@@ -340,6 +391,9 @@ def main():
 
     # Prune oldest archives if disk space is low (before we generate new data)
     manage_disk_space(config)
+
+    # Update NVD vulnerability database if due (incremental daily; full seed on first run)
+    update_vuln_db_if_due(config)
 
     mailer = None
     scan_results = None
