@@ -32,6 +32,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
 
 from network_utils import (
     get_subnets_from_interfaces,
+    get_network_interfaces,
     resolve_credential_profile,
     reverse_dns,
     get_default_gateway,
@@ -88,6 +89,21 @@ def _filter_excluded(hosts: list, excluded: list) -> list:
         return hosts
     excl_set = set(excluded)
     return [h for h in hosts if h.get("ip") not in excl_set]
+
+
+def _get_scanner_own_ips() -> set:
+    """Return the set of IP addresses assigned to this Pi's own interfaces.
+    Used to prevent the scanner from reporting on itself.
+    """
+    own: set = set()
+    try:
+        for iface in get_network_interfaces():
+            ip = iface.get("ip", "")
+            if ip:
+                own.add(ip)
+    except Exception as exc:
+        logger.warning(f"Could not enumerate own IPs for self-exclusion: {exc}")
+    return own
 
 
 def _blank_host(ip: str, mac: str = "", vendor: str = "") -> dict:
@@ -1460,9 +1476,20 @@ def run_scan(config: dict, data_dir: str = "/opt/risk-scanner/data") -> dict:
     # ── Phase 2: Host Discovery ───────────────────────────────────────────
     _phase_log(2)
     hosts: list = []
+    own_ips: set = _get_scanner_own_ips()
     try:
         hosts = _run_host_discovery(subnets, config)
         hosts = _filter_excluded(hosts, excluded_hosts)
+        # Always exclude the scanner's own IP(s) — arp-scan picks up the Pi
+        # itself because it responds to ARP on the local subnet.
+        before = len(hosts)
+        hosts = [h for h in hosts if h.get("ip") not in own_ips]
+        removed = before - len(hosts)
+        if removed:
+            logger.info(
+                f"Phase 2: excluded {removed} self-IP(s) from results "
+                f"({', '.join(sorted(own_ips))})"
+            )
         scan_results["hosts"] = hosts
         phases_completed += 1
     except Exception as exc:

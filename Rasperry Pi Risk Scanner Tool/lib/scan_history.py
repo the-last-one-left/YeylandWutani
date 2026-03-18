@@ -321,6 +321,32 @@ def delete_oldest_scan() -> Optional[str]:
     return archive_path
 
 
+def clear_all_scans() -> dict:
+    """Delete every scan run from the database and unlink all archive files.
+    Returns {"deleted_runs": N, "deleted_archives": N}.
+    """
+    _init_db()
+    deleted_archives = 0
+    with _conn() as c:
+        rows = c.execute("SELECT archive_path FROM scan_runs").fetchall()
+        for row in rows:
+            ap = row["archive_path"]
+            if ap:
+                try:
+                    p = Path(ap)
+                    if p.exists():
+                        p.unlink()
+                        deleted_archives += 1
+                except Exception as e:
+                    logger.debug("scan_history: could not unlink archive %s: %s", ap, e)
+        c.execute("DELETE FROM scan_runs")
+        deleted_runs = len(rows)
+
+    logger.info("scan_history: cleared %d scan run(s), %d archive(s) deleted",
+                deleted_runs, deleted_archives)
+    return {"deleted_runs": deleted_runs, "deleted_archives": deleted_archives}
+
+
 def _migrate_legacy_archives(history_dir: Path = HISTORY_DIR):
     """
     One-time import of existing .json.gz scan archives into SQLite.

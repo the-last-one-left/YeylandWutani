@@ -1425,6 +1425,23 @@ async function changePassword() {
     }
 }
 
+async function clearHistory() {
+    if (!confirm('Delete ALL scan history and archive files? This cannot be undone.')) return;
+    const btn  = document.getElementById('btn-clear-history');
+    const spin = document.getElementById('spin-clear');
+    btn.disabled = true; spin.style.display = '';
+    try {
+        const r = await fetch('/api/history/clear', { method: 'POST',
+            headers: {'Content-Type': 'application/json'}, body: '{}' });
+        const d = await r.json();
+        showToast(d.message, d.success ? 'success' : 'error');
+    } catch(e) {
+        showToast('Error: ' + e.message, 'error');
+    } finally {
+        btn.disabled = false; spin.style.display = 'none';
+    }
+}
+
 document.addEventListener('DOMContentLoaded', loadSettings);
 """
     return ""
@@ -1815,6 +1832,10 @@ def _settings_content() -> str:
   <div class="action-row" style="margin-bottom:0">
     <button class="btn btn-orange" onclick="apiPost('/api/scan','','')">Run Scan Now</button>
     <button class="btn btn-blue"   onclick="apiPost('/api/report','','')">Send Report</button>
+    <button class="btn btn-grey"   onclick="clearHistory()" id="btn-clear-history">
+      <span class="spinner" id="spin-clear" style="display:none"></span>
+      Clear Scan History
+    </button>
   </div>
 </div>
 
@@ -2083,6 +2104,21 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             body = self._parse_body()
             result = _change_password(body)
             self._send_json(200, result)
+            return
+
+        if path == "/api/history/clear":
+            if not self._require_auth_json():
+                return
+            try:
+                import scan_history as _sh
+                stats = _sh.clear_all_scans()
+                self._send_json(200, {
+                    "success": True,
+                    "message": f"Cleared {stats['deleted_runs']} scan run(s) and "
+                               f"{stats['deleted_archives']} archive file(s).",
+                })
+            except Exception as e:
+                self._send_json(200, {"success": False, "message": str(e)})
             return
 
         self._send_json(404, {"error": "Not found"})
