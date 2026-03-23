@@ -1,0 +1,36 @@
+[Unit]
+Description=Risk Scanner REST API
+After=network.target
+Wants=network.target
+# Start after the web dashboard is up (they share config/data)
+After=risk-scanner-web.service
+
+[Service]
+Type=simple
+User=risk-scanner
+Group=risk-scanner
+ExecStart=/opt/risk-scanner/venv/bin/python3 /opt/risk-scanner/bin/rest-api.py --port 8081 --host 0.0.0.0
+Restart=on-failure
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+WorkingDirectory=/opt/risk-scanner
+
+# Environment overrides (optional - can also be set in config.json)
+# EnvironmentFile=/opt/risk-scanner/config/vault.env
+# Environment=VAULT_TOKEN=hvs.xxxx
+# Environment=VAULT_SECRET_ID=xxxx
+# Environment=AZURE_CLIENT_SECRET=xxxx
+
+# Security hardening (mirrors web dashboard)
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ReadWritePaths=/opt/risk-scanner/logs /opt/risk-scanner/data /opt/risk-scanner/config
+AmbientCapabilities=
+
+# Prevent the REST API process from dumping core (credentials in memory)
+LimitCORE=0
+
+[Install]
+WantedBy=multi-user.target

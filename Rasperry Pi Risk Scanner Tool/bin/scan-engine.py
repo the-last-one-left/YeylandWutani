@@ -1774,3 +1774,133 @@ def run_scan(config: dict, data_dir: str = "/opt/risk-scanner/data") -> dict:
     )
 
     return scan_results
+
+
+# ══════════════════════════════════════════════════════════════════════════
+# Policy-aware scan entry point (plugin architecture)
+# ══════════════════════════════════════════════════════════════════════════
+
+def run_scan_with_policy(
+    config: dict,
+    data_dir: str = "/opt/risk-scanner/data",
+    policy: dict = None,
+    plugin_dir: str = None,
+) -> dict:
+    """
+    Policy-aware scan entry point using the modular plugin architecture.
+
+    This function replaces the hardcoded 11-phase run_scan() with a fully
+    dynamic pipeline driven by plugins in the plugins/ directory.  Each
+    plugin declares its own phase number, category, and prerequisites so the
+    loader can assemble and execute them in the correct order, filtered by
+    the active scan policy.
+
+    The existing run_scan() function is left intact for backwards-compatibility
+    and will be used automatically when no policy is supplied.
+
+    Args:
+        config:     Parsed config.json dict.
+        data_dir:   Path to the persistent data directory.
+        policy:     Active scan policy dict (from scan_policies.json), or None
+                    to run all modules with default settings.
+        plugin_dir: Override path to the plugins directory (defaults to
+                    <project_root>/plugins/).
+
+    Returns:
+        scan_results dict (same schema as run_scan()).
+    """
+    import time as _time
+    from pathlib import Path as _Path
+
+    # ─ Setup plugin loader ──────────────────────────────────────────────────
+    lib_dir = str(_Path(__file__).parent.parent / "lib")
+    if lib_dir not in sys.path:
+        sys.path.insert(0, lib_dir)
+
+    from plugin_loader import load_plugins, run_plugins
+    from plugin_base import PluginContext
+
+    _default_plugin_dir = str(_Path(__file__).parent.parent / "plugins")
+    plugin_dir = plugin_dir or _default_plugin_dir
+
+    scan_start = _now_iso()
+    start_ts   = _time.monotonic()
+    client_name = config.get("reporting", {}).get("client_name", "Unknown Client")
+    policy_name = policy.get("name") if policy else "Default"
+
+    logger.info(
+        f"Plugin-based scan started — client: {client_name} "
+        f"| policy: {policy_name} "
+        f"| version: {SCANNER_VERSION}"
+    )
+
+    # ─ Build PluginContext ─────────────────────────────────────────────────
+    ctx = PluginContext(config=config, data_dir=data_dir, policy=policy)
+    ctx.scan_results["scan_start"]      = scan_start
+    ctx.scan_results["scanner_version"] = SCANNER_VERSION
+
+    # Load credentials once and attach to context
+    # Priority: vault credentials override / supplement local encrypted store
+    local_creds: list = []
+    vault_creds: list = []
+    try:
+        local_creds = load_credentials()
+        logger.info(f"Loaded {len(local_creds)} local credential profile(s)")
+    except Exception as exc:
+        logger.error(f"Failed to load local credentials: {exc}")
+    # Fetch from PAM vault if configured
+    try:
+        from vault_provider import fetch_vault_credentials, is_vault_enabled
+        if is_vault_enabled(config):
+            vault_creds = fetch_vault_credentials(config.get("vault", {}))
+            logger.info(f"Vault: fetched {len(vault_creds)} credential(s)")
+        else:
+            logger.debug("Vault integration not enabled - using local credentials only")
+    except Exception as exc:
+        logger.error(f"Vault credential fetch failed: {exc} - using local credentials")
+    # Merge: vault credentials take precedence (deduplicate by name)
+    merged: dict = {c['name']: c for c in local_creds}
+    for vc in vault_creds:
+        merged[vc['name']] = vc
+    ctx.credentials = list(merged.values())
+    logger.info(
+        f"Total credential profiles: {len(ctx.credentials)} "
+        f"({len(local_creds)} local, {len(vault_creds)} vault)"
+    )
+
+    # ─ Determine which module categories are enabled by policy ────────────
+    # Pass None to load_plugins to let the PluginContext handle filtering
+    enabled_cats = None
+    if policy:
+        enabled_cats = policy.get("modules", None)
+
+    # ─ Load and run plugins ───────────────────────────────────────────────
+    plugins = load_plugins(plugin_dir=plugin_dir, categories=enabled_cats)
+    logger.info(f"{len(plugins)} plugin(s) loaded for this scan run")
+
+    ctx = run_plugins(plugins, ctx)
+
+    # ─ Finalise ────────────────────────────────────────────────────────────
+    # Build summary if reporting plugin did not run
+    if not ctx.scan_results.get("scan_end"):
+        ctx.scan_results["scan_end"] = _now_iso()
+    if not ctx.scan_results.get("summary"):
+        ctx.scan_results["summary"] = _build_summary(
+            ctx.scan_results.get("hosts", []),
+            ctx.scan_results.get("reconnaissance", {}),
+        )
+    ctx.scan_results["summary"]["phases_completed"] = ctx.phases_completed
+    ctx.scan_results["summary"]["phases_skipped"]   = ctx.phases_skipped
+
+    elapsed = _time.monotonic() - start_ts
+    summary = ctx.scan_results["summary"]
+    risk    = ctx.scan_results.get("risk", {})
+    logger.info(
+        f"=== PLUGIN SCAN COMPLETE === "
+        f"duration: {elapsed:.1f}s | policy: {policy_name} | "
+        f"hosts: {summary.get('total_hosts', len(ctx.hosts))} | "
+        f"CVEs: {summary.get('total_cves', 0)} | "
+        f"risk: {risk.get('score', 0):.1f} ({risk.get('level', '?')})"
+    )
+
+    return ctx.scan_results

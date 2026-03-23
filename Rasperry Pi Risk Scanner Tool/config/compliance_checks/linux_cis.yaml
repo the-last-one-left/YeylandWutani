@@ -1,0 +1,209 @@
+# Yeyland Wutani - Risk Scanner Tool
+# CIS-inspired Linux hardening checks
+# Each check is evaluated by plugins/08_compliance.py
+#
+# Fields:
+#   id          - unique check identifier
+#   title       - human-readable name
+#   category    - grouping label (shown in report)
+#   platform    - linux | windows | any
+#   severity    - CRITICAL | HIGH | MEDIUM | LOW
+#   check_type  - sshd_config | ssh_field | host_field | package_absent |
+#                 package_present | user_absent | port_closed | cve_absent
+#   key         - field name / package name / port number to check
+#   operator    - eq | ne | contains | not_contains | is_true | is_false |
+#                 lt | gt | lte | gte
+#   value       - expected value (for comparison operators)
+#   remediation - short fix instruction
+
+checks:
+
+  # ── SSH Daemon Configuration ─────────────────────────────────────────
+
+  - id: LIN-SSH-001
+    title: SSH root login disabled
+    category: SSH Configuration
+    platform: linux
+    severity: HIGH
+    check_type: sshd_config
+    key: permitrootlogin
+    operator: eq
+    value: "no"
+    remediation: >-
+      Set 'PermitRootLogin no' in /etc/ssh/sshd_config and restart sshd.
+
+  - id: LIN-SSH-002
+    title: SSH password authentication disabled
+    category: SSH Configuration
+    platform: linux
+    severity: HIGH
+    check_type: sshd_config
+    key: passwordauthentication
+    operator: eq
+    value: "no"
+    remediation: >-
+      Set 'PasswordAuthentication no' in /etc/ssh/sshd_config. Ensure
+      public key authentication is configured before applying.
+
+  - id: LIN-SSH-003
+    title: SSH empty passwords disallowed
+    category: SSH Configuration
+    platform: linux
+    severity: CRITICAL
+    check_type: sshd_config
+    key: permitemptypasswords
+    operator: eq
+    value: "no"
+    remediation: >-
+      Set 'PermitEmptyPasswords no' in /etc/ssh/sshd_config.
+
+  - id: LIN-SSH-004
+    title: SSH X11 forwarding disabled
+    category: SSH Configuration
+    platform: linux
+    severity: MEDIUM
+    check_type: sshd_config
+    key: x11forwarding
+    operator: eq
+    value: "no"
+    remediation: >-
+      Set 'X11Forwarding no' in /etc/ssh/sshd_config.
+
+  - id: LIN-SSH-005
+    title: SSH public key authentication enabled
+    category: SSH Configuration
+    platform: linux
+    severity: MEDIUM
+    check_type: sshd_config
+    key: pubkeyauthentication
+    operator: eq
+    value: "yes"
+    remediation: >-
+      Set 'PubkeyAuthentication yes' in /etc/ssh/sshd_config.
+
+  # ── Risky Services / Ports ───────────────────────────────────────────
+
+  - id: LIN-SVC-001
+    title: Telnet service not running (port 23 closed)
+    category: Risky Services
+    platform: any
+    severity: CRITICAL
+    check_type: port_closed
+    key: "23"
+    operator: is_false
+    value: null
+    remediation: >-
+      Disable and remove the telnet daemon. Use SSH instead.
+
+  - id: LIN-SVC-002
+    title: FTP service not running (port 21 closed)
+    category: Risky Services
+    platform: any
+    severity: HIGH
+    check_type: port_closed
+    key: "21"
+    operator: is_false
+    value: null
+    remediation: >-
+      Disable the FTP daemon. Use SFTP/SCP over SSH instead.
+
+  - id: LIN-SVC-003
+    title: rsh / rlogin service not running (port 513/514 closed)
+    category: Risky Services
+    platform: linux
+    severity: CRITICAL
+    check_type: port_closed
+    key: "514"
+    operator: is_false
+    value: null
+    remediation: >-
+      Remove rsh-server and xinetd configurations for rsh/rlogin/rexec.
+
+  - id: LIN-SVC-004
+    title: VNC not exposed (port 5900 closed)
+    category: Risky Services
+    platform: any
+    severity: HIGH
+    check_type: port_closed
+    key: "5900"
+    operator: is_false
+    value: null
+    remediation: >-
+      Disable VNC or restrict it behind a VPN/SSH tunnel.
+
+  # ── Package Checks ───────────────────────────────────────────────────
+
+  - id: LIN-PKG-001
+    title: telnet client not installed
+    category: Packages
+    platform: linux
+    severity: MEDIUM
+    check_type: package_absent
+    key: telnet
+    operator: is_false
+    value: null
+    remediation: >-
+      Remove the telnet client package: apt remove telnet / yum remove telnet.
+
+  - id: LIN-PKG-002
+    title: netcat not installed (nc/ncat)
+    category: Packages
+    platform: linux
+    severity: LOW
+    check_type: package_absent
+    key: netcat
+    operator: is_false
+    value: null
+    remediation: >-
+      Remove netcat if not required for administrative purposes.
+
+  - id: LIN-PKG-003
+    title: auditd installed
+    category: Packages
+    platform: linux
+    severity: MEDIUM
+    check_type: package_present
+    key: auditd
+    operator: is_true
+    value: null
+    remediation: >-
+      Install auditd: apt install auditd / yum install audit.
+
+  - id: LIN-PKG-004
+    title: fail2ban installed
+    category: Packages
+    platform: linux
+    severity: MEDIUM
+    check_type: package_present
+    key: fail2ban
+    operator: is_true
+    value: null
+    remediation: >-
+      Install fail2ban: apt install fail2ban / yum install fail2ban.
+
+  # ── User Hygiene ──────────────────────────────────────────────────────
+
+  - id: LIN-USR-001
+    title: Default 'pi' user absent (Raspberry Pi)
+    category: User Hygiene
+    platform: linux
+    severity: HIGH
+    check_type: user_absent
+    key: pi
+    operator: is_false
+    value: null
+    remediation: >-
+      Remove the default 'pi' user or change its password immediately:
+      userdel -r pi.
+
+  - id: LIN-USR-002
+    title: Default 'ubuntu' user absent
+    category: User Hygiene
+    platform: linux
+    severity: MEDIUM
+    check_type: user_absent
+    key: ubuntu
+    operator: is_false
+    value: null
+    remediation: >-
+      Remove or rename the default 'ubuntu' user after initial setup.

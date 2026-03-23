@@ -1,0 +1,95 @@
+{
+  "_comment": "Copy the relevant provider(s) into config.json under the 'soar' key.",
+
+  "soar": {
+    "enabled": true,
+    "min_severity": "HIGH",
+    "on_kev_only": false,
+    "deduplicate": true,
+    "dedup_cache_file": "/opt/risk-scanner/data/soar_sent.json",
+
+    "providers": [
+
+      {
+        "_comment": "Jira Cloud / Server",
+        "type": "jira",
+        "name": "Jira Security Board",
+        "enabled": false,
+        "url": "https://yourorg.atlassian.net",
+        "email": "scanner@yourorg.com",
+        "api_token": "YOUR_ATLASSIAN_API_TOKEN (or set JIRA_API_TOKEN env var)",
+        "project_key": "SEC",
+        "issue_type": "Bug",
+        "labels": ["risk-scanner", "vulnerability", "automated"],
+        "priority_map": {
+          "CRITICAL": "Highest",
+          "HIGH":     "High",
+          "MEDIUM":   "Medium",
+          "LOW":      "Low"
+        }
+      },
+
+      {
+        "_comment": "ServiceNow ITSM",
+        "type": "servicenow",
+        "name": "ServiceNow Incidents",
+        "enabled": false,
+        "url": "https://yourorg.service-now.com",
+        "username": "scanner-svc-account",
+        "password": "YOUR_PASSWORD (or set SNOW_PASSWORD env var)",
+        "table": "incident",
+        "category": "security",
+        "assignment_group": "Security Operations",
+        "urgency_map": {
+          "CRITICAL": 1,
+          "HIGH":     1,
+          "MEDIUM":   2,
+          "LOW":      3
+        }
+      },
+
+      {
+        "_comment": "Slack Webhook",
+        "type": "webhook",
+        "name": "Slack #security-alerts",
+        "enabled": false,
+        "url": "https://hooks.slack.com/services/YOUR/WEBHOOK/URL",
+        "template": "slack"
+      },
+
+      {
+        "_comment": "Microsoft Teams Webhook",
+        "type": "webhook",
+        "name": "Teams Security Channel",
+        "enabled": false,
+        "url": "https://yourorg.webhook.office.com/webhookb2/YOUR_TEAMS_WEBHOOK_URL",
+        "template": "teams"
+      },
+
+      {
+        "_comment": "PagerDuty Events API v2",
+        "type": "webhook",
+        "name": "PagerDuty",
+        "enabled": false,
+        "url": "https://events.pagerduty.com/v2/enqueue",
+        "template": "pagerduty",
+        "routing_key": "YOUR_PAGERDUTY_INTEGRATION_KEY"
+      },
+
+      {
+        "_comment": "Generic Webhook (any HTTP endpoint)",
+        "type": "webhook",
+        "name": "Custom SOAR Webhook",
+        "enabled": false,
+        "url": "https://your-soar.example.com/api/ingest",
+        "method": "POST",
+        "template": "default",
+        "headers": {
+          "Authorization": "Bearer YOUR_TOKEN",
+          "X-Source": "risk-scanner"
+        }
+      }
+
+    ]
+  }
+}

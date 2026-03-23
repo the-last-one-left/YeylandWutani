@@ -1,0 +1,131 @@
+# Yeyland Wutani - Risk Scanner Tool
+# CIS-inspired Windows hardening checks
+# Evaluated by plugins/08_compliance.py via WinRM audit data
+
+checks:
+
+  # ── Firewall ───────────────────────────────────────────────────────────────
+
+  - id: WIN-FW-001
+    title: Windows Firewall enabled on Domain profile
+    category: Firewall
+    platform: windows
+    severity: HIGH
+    check_type: wmi_field
+    key: firewall.Domain
+    operator: is_true
+    value: null
+    remediation: >-
+      Enable Windows Firewall for the Domain profile via Group Policy or:
+      Set-NetFirewallProfile -Profile Domain -Enabled True
+
+  - id: WIN-FW-002
+    title: Windows Firewall enabled on Private profile
+    category: Firewall
+    platform: windows
+    severity: HIGH
+    check_type: wmi_field
+    key: firewall.Private
+    operator: is_true
+    value: null
+    remediation: >-
+      Enable Windows Firewall for the Private profile:
+      Set-NetFirewallProfile -Profile Private -Enabled True
+
+  - id: WIN-FW-003
+    title: Windows Firewall enabled on Public profile
+    category: Firewall
+    platform: windows
+    severity: CRITICAL
+    check_type: wmi_field
+    key: firewall.Public
+    operator: is_true
+    value: null
+    remediation: >-
+      Enable Windows Firewall for the Public profile:
+      Set-NetFirewallProfile -Profile Public -Enabled True
+
+  # ── Risky Ports / Services ─────────────────────────────────────────────
+
+  - id: WIN-SVC-001
+    title: Telnet service port 23 not open
+    category: Risky Services
+    platform: any
+    severity: CRITICAL
+    check_type: port_closed
+    key: "23"
+    operator: is_false
+    value: null
+    remediation: >-
+      Disable the Telnet Server service:
+      Set-Service -Name TlntSvr -StartupType Disabled; Stop-Service TlntSvr
+
+  - id: WIN-SVC-002
+    title: SMBv1 port 445 (NetBIOS) access reviewed
+    category: Risky Services
+    platform: any
+    severity: HIGH
+    check_type: port_closed
+    key: "139"
+    operator: is_false
+    value: null
+    remediation: >-
+      Disable NetBIOS over TCP/IP and SMBv1 via Group Policy or:
+      Set-SmbServerConfiguration -EnableSMB1Protocol $false -Force
+
+  - id: WIN-SVC-003
+    title: RDP not exposed externally (port 3389)
+    category: Risky Services
+    platform: any
+    severity: HIGH
+    check_type: port_closed
+    key: "3389"
+    operator: is_false
+    value: null
+    remediation: >-
+      Restrict RDP access via Windows Firewall rules or VPN. Disable RDP
+      if not required:
+      Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name fDenyTSConnections -Value 1
+
+  - id: WIN-SVC-004
+    title: WinRM port 5985 (HTTP) restricted
+    category: Risky Services
+    platform: any
+    severity: MEDIUM
+    check_type: port_closed
+    key: "5985"
+    operator: is_false
+    value: null
+    remediation: >-
+      Restrict WinRM access with firewall rules to management IPs only, or
+      switch to WinRM over HTTPS (port 5986).
+
+  # ── Local Administrators ───────────────────────────────────────────────
+
+  - id: WIN-USR-001
+    title: Built-in Administrator account renamed or disabled
+    category: User Hygiene
+    platform: windows
+    severity: MEDIUM
+    check_type: wmi_field
+    key: local_users
+    operator: not_contains
+    value: "Administrator"
+    remediation: >-
+      Rename the built-in Administrator account or disable it:
+      Rename-LocalUser -Name Administrator -NewName <custom_name>
+
+  # ── Windows Update / Patching ────────────────────────────────────────
+
+  - id: WIN-PATCH-001
+    title: At least one hotfix applied (system is being patched)
+    category: Patch Management
+    platform: windows
+    severity: HIGH
+    check_type: wmi_field
+    key: hotfixes
+    operator: is_true
+    value: null
+    remediation: >-
+      Ensure Windows Update is enabled and patches are being applied regularly.
+      Run: Install-Module PSWindowsUpdate; Get-WUInstall -AcceptAll

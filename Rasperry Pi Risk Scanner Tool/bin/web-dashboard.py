@@ -169,6 +169,10 @@ def _load_config_safe() -> dict:
         cfg.setdefault("graph_api", {})["client_secret"] = _SECRET_MASK
     if cfg.get("hatz_ai", {}).get("api_key"):
         cfg.setdefault("hatz_ai", {})["api_key"] = _SECRET_MASK
+    # Mask vault secrets
+    for _vf in ("token", "secret_id", "client_secret"):
+        if cfg.get("vault", {}).get(_vf):
+            cfg.setdefault("vault", {})[_vf] = _SECRET_MASK
     # Flatten networks list to comma string for form field
     networks = cfg.get("scanning", {}).get("networks", [])
     if isinstance(networks, list):
@@ -241,6 +245,86 @@ def _save_config(body: dict) -> dict:
             hatz["api_key"] = hatz_key
 
         # ── Write ─────────────────────────────────────────────────────────────
+        # ── Vault / PAM integration ───────────────────────────────────────────────
+        if "vault_enabled" in body:
+            vault = cfg.setdefault("vault", {})
+            en = body.get("vault_enabled")
+            vault["enabled"]    = en is True or str(en).lower() == "true"
+            vault["provider"]   = str(body.get("vault_provider", "hashicorp")).strip()
+            vault["url"]        = str(body.get("vault_url", "")).strip()
+            tls = body.get("vault_tls", True)
+            vault["tls_verify"] = tls is not False and str(tls).lower() != "false"
+            provider = vault["provider"]
+            if provider == "hashicorp":
+                vault["auth_method"] = str(body.get("vault_auth", "token")).strip()
+                vault["mount"]       = str(body.get("vault_mount", "secret")).strip() or "secret"
+                vault["kv_version"]  = int(body.get("vault_kv_version", 2))
+                vault["paths"]       = [p.strip() for p in str(body.get("vault_paths", "")).split(",") if p.strip()]
+                vault["role_id"]     = str(body.get("vault_role_id", "")).strip()
+                tok = body.get("vault_token", "")
+                if tok and tok != _SECRET_MASK:
+                    vault["token"] = tok
+                sid = body.get("vault_secret_id", "")
+                if sid and sid != _SECRET_MASK:
+                    vault["secret_id"] = sid
+            elif provider == "cyberark":
+                vault["app_id"]    = str(body.get("vault_app_id", "")).strip()
+                vault["safe"]      = str(body.get("vault_safe", "")).strip()
+                vault["objects"]   = [o.strip() for o in str(body.get("vault_objects", "")).split(",") if o.strip()]
+                vault["cert_path"] = str(body.get("vault_cert", "")).strip()
+                vault["key_path"]  = str(body.get("vault_key", "")).strip()
+            elif provider in ("azure_keyvault", "azure"):
+                vault["vault_name"]    = str(body.get("vault_akv_name", "")).strip()
+                vault["tenant_id"]     = str(body.get("vault_tenant", "")).strip()
+                vault["client_id"]     = str(body.get("vault_client_id", "")).strip()
+                vault["secrets"]       = [s.strip() for s in str(body.get("vault_secrets", "")).split(",") if s.strip()]
+                asec = body.get("vault_akv_secret", "")
+                if asec and asec != _SECRET_MASK:
+                    vault["client_secret"] = asec
+
+        # ── SOAR / Ticketing ────────────────────────────────────────────────────
+        if "soar_enabled" in body:
+            soar = cfg.setdefault("soar", {})
+            soar["enabled"]      = body.get("soar_enabled") is True or str(body.get("soar_enabled","")).lower() == "true"
+            soar["min_severity"] = str(body.get("soar_min_sev", "HIGH")).upper()
+            soar["on_kev_only"]  = body.get("soar_kev_only") is True or str(body.get("soar_kev_only","")).lower() == "true"
+            soar["deduplicate"]  = body.get("soar_dedup") is not False and str(body.get("soar_dedup","true")).lower() != "false"
+            providers = []
+            # Jira
+            jira_p = {"type": "jira", "name": "Jira",
+                      "enabled":     body.get("jira_enabled") is True or str(body.get("jira_enabled","")).lower() == "true",
+                      "url":         str(body.get("jira_url",         "")).strip(),
+                      "email":       str(body.get("jira_email",       "")).strip(),
+                      "project_key": str(body.get("jira_project",    "")).strip(),
+                      "issue_type":  str(body.get("jira_issue_type",  "Bug")).strip()}
+            tok = body.get("jira_token", "")
+            if tok and tok != _SECRET_MASK: jira_p["api_token"] = tok
+            elif cfg.get("soar", {}).get("providers"):
+                old_j = next((p for p in cfg["soar"]["providers"] if p.get("type")=="jira"), {})
+                if old_j.get("api_token"): jira_p["api_token"] = old_j["api_token"]
+            providers.append(jira_p)
+            # ServiceNow
+            snow_p = {"type": "servicenow", "name": "ServiceNow",
+                      "enabled":          body.get("snow_enabled") is True or str(body.get("snow_enabled","")).lower() == "true",
+                      "url":              str(body.get("snow_url",   "")).strip(),
+                      "username":         str(body.get("snow_user",  "")).strip(),
+                      "table":            str(body.get("snow_table", "incident")).strip(),
+                      "assignment_group": str(body.get("snow_group", "")).strip()}
+            sp = body.get("snow_pass", "")
+            if sp and sp != _SECRET_MASK: snow_p["password"] = sp
+            elif cfg.get("soar", {}).get("providers"):
+                old_s = next((p for p in cfg["soar"]["providers"] if p.get("type")=="servicenow"), {})
+                if old_s.get("password"): snow_p["password"] = old_s["password"]
+            providers.append(snow_p)
+            # Webhook
+            wh_p = {"type": "webhook", "name": "Webhook",
+                    "enabled":     body.get("wh_enabled") is True or str(body.get("wh_enabled","")).lower() == "true",
+                    "url":         str(body.get("wh_url",         "")).strip(),
+                    "template":    str(body.get("wh_template",    "slack")).strip(),
+                    "routing_key": str(body.get("wh_routing_key", "")).strip()}
+            providers.append(wh_p)
+            soar["providers"] = providers
+
         CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(CONFIG_PATH, "w") as f:
             json.dump(cfg, f, indent=2)
@@ -553,6 +637,131 @@ def _delete_credential(profile_name: str) -> dict:
 
 
 # ── HTML pages ────────────────────────────────────────────────────────────────
+
+
+# ── Policies persistence ─────────────────────────────────────────────────────
+
+def _policies_path() -> str:
+    import os
+    return os.path.join(BASE_DIR, 'config', 'scan_policies.json')
+
+
+
+
+# ── Plugin registry helper ────────────────────────────────────────────────
+
+def _get_plugin_registry_safe() -> list:
+    """Load plugin registry, return empty list on error."""
+    try:
+        import sys
+        from pathlib import Path
+        lib_dir = str(Path(__file__).parent.parent / "lib")
+        if lib_dir not in sys.path:
+            sys.path.insert(0, lib_dir)
+        from plugin_loader import get_plugin_registry
+        plugin_dir = str(Path(__file__).parent.parent / "plugins")
+        return get_plugin_registry(plugin_dir)
+    except Exception as exc:
+        return [{"error": str(exc)}]
+
+
+def _plugins_content() -> str:
+    return """
+<div class="card">
+  <div class="card-title">Installed Scan Plugins
+    <span id="plugin-count" style="float:right;font-size:12px;color:#888;font-weight:400">Loading...</span>
+  </div>
+  <p style="color:#888;font-size:13px;margin-bottom:14px">
+    Plugins are auto-discovered from the <code>plugins/</code> directory at scan time.
+    Each plugin maps to a scan category that can be enabled or disabled per
+    <a href="/dashboard?view=policies" style="color:#e67e22">Scan Policy</a>.
+  </p>
+  <div style="overflow-x:auto">
+  <table class="cred-table" id="plugin-table">
+    <thead>
+      <tr>
+        <th>Phase</th><th>Plugin Name</th><th>ID</th><th>Category</th>
+        <th>Description</th><th>Version</th><th>Requires</th>
+      </tr>
+    </thead>
+    <tbody id="plugin-tbody">
+      <tr><td colspan="7" style="text-align:center;color:#888;padding:20px">Loading&#8230;</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card">
+  <div class="card-title">Compliance Check Files</div>
+  <p style="color:#888;font-size:13px;margin-bottom:14px">
+    Compliance checks are defined as YAML files in <code>config/compliance_checks/</code>.
+    Add your own <code>*.yaml</code> file to extend the audit coverage.
+  </p>
+  <div id="compliance-files" style="color:#888;font-size:13px">Loading...</div>
+</div>
+"""
+
+def _list_policies() -> list:
+    import json, os
+    p = _policies_path()
+    if not os.path.exists(p):
+        return []
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []
+
+
+def _save_policy(body: dict) -> dict:
+    import json, os
+    name = (body.get('name') or '').strip()
+    if not name:
+        return {'success': False, 'message': 'Policy name is required.'}
+    edit_name = (body.get('edit_name') or '').strip() or None
+    policies = _list_policies()
+    # Prevent duplicate names (unless editing the same entry)
+    existing_names = {p['name'] for p in policies}
+    if name in existing_names and name != edit_name:
+        return {'success': False, 'message': f'A policy named "{name}" already exists.'}
+    # Remove old entry when renaming
+    if edit_name:
+        policies = [p for p in policies if p['name'] != edit_name]
+    # Also remove if same name (update)
+    policies = [p for p in policies if p['name'] != name]
+    policy = {
+        'name':             name,
+        'scan_type':        body.get('scan_type',        'credentialed'),
+        'intensity':        body.get('intensity',        'normal'),
+        'networks':         body.get('networks',         ''),
+        'modules':          body.get('modules',          []),
+        'max_parallel':     int(body.get('max_parallel',     10)),
+        'port_range':       body.get('port_range',       'top1000'),
+        'timeout_per_host': int(body.get('timeout_per_host', 120)),
+        'notes':            body.get('notes',            ''),
+    }
+    policies.append(policy)
+    p = _policies_path()
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(policies, f, indent=2)
+    return {'success': True, 'message': f'Policy "{name}" saved.'}
+
+
+def _delete_policy(name: str) -> dict:
+    import json, os
+    if not name:
+        return {'success': False, 'message': 'name required'}
+    policies = _list_policies()
+    new_list = [p for p in policies if p['name'] != name]
+    if len(new_list) == len(policies):
+        return {'success': False, 'message': f'Policy "{name}" not found.'}
+    p = _policies_path()
+    with open(p, 'w', encoding='utf-8') as f:
+        json.dump(new_list, f, indent=2)
+    return {'success': True, 'message': f'Policy "{name}" deleted.'}
+
 
 _CSS = """
 * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -918,6 +1127,16 @@ _SIDEBAR_HTML = """
         <path d="M10 1a4 4 0 0 1 4 4c0 1.5-.83 2.8-2.05 3.49L12 13H9l-.5-1H8l-.5 1H4l.05-4.51A4 4 0 1 1 10 1zm0 2a2 2 0 1 0 0 4 2 2 0 0 0 0-4z"/>
       </svg><span>Credentials</span>
     </a>
+    <a class="nav-item {cls_plugins}" href="/dashboard?view=plugins">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M6 1H1v4h1V2h3V1zM1 10H0V1h1v9zm14-9h-5v1h4v3h1V1zm0 9V1h1v9h-1zM6 14H2v-3H1v4h5v-1zm4 0v1h5v-4h-1v3h-4zM6 4H2v8h8V4H6zm7 4v1H9V4h1V3H6V2h1V1H6v1H5v1H4V2H3v1H2V2H1v1h1v1H1v1h1V4h1v1H2v6h8V4H9V3H8V2H7v1H6V2H7V1h2v1h1v1h1V2h1v1h1V2h1v1zm-2 6H3V5h8v5z"/>
+      </svg><span>Plugins</span>
+    </a>
+    <a class="nav-item {cls_policies}" href="/dashboard?view=policies">
+      <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
+        <path d="M14 2H6a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zM6 3h8a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/>
+      </svg><span>Policies</span>
+    </a>
     <a class="nav-item {cls_settings}" href="/dashboard?view=settings">
       <svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor">
         <path d="M7.5 10a2.5 2.5 0 1 1 0-5 2.5 2.5 0 0 1 0 5zm5.6-2.25-.9-.52a4.98 4.98 0 0 0 0-1.46l.9-.52-.75-1.3-.9.52A4.97 4.97 0 0 0 10.2 4V3h-1.5v1a4.97 4.97 0 0 0-1.26.47l-.9-.52-.75 1.3.9.52a4.98 4.98 0 0 0 0 1.46l-.9.52.75 1.3.9-.52c.38.21.8.37 1.26.47v1h1.5v-1c.46-.1.88-.26 1.26-.47l.9.52.75-1.3z"/>
@@ -929,7 +1148,7 @@ _SIDEBAR_HTML = """
 
 
 def _dashboard_page(view: str = "main") -> str:
-    cls = {"main": "", "detail": "", "logs": "", "creds": "", "settings": ""}
+    cls = {"main": "", "detail": "", "logs": "", "creds": "", "settings": "", "policies": "", "plugins": ""}
     if view == "detail":
         cls["detail"] = "active"
     elif view == "logs":
@@ -938,6 +1157,10 @@ def _dashboard_page(view: str = "main") -> str:
         cls["creds"] = "active"
     elif view == "settings":
         cls["settings"] = "active"
+    elif view == "policies":
+        cls["policies"] = "active"
+    elif view == "plugins":
+        cls["plugins"] = "active"
     else:
         cls["main"] = "active"
 
@@ -947,6 +1170,8 @@ def _dashboard_page(view: str = "main") -> str:
         cls_logs=cls["logs"],
         cls_creds=cls["creds"],
         cls_settings=cls["settings"],
+        cls_policies=cls["policies"],
+        cls_plugins=cls["plugins"],
     )
 
     if view == "detail":
@@ -957,6 +1182,10 @@ def _dashboard_page(view: str = "main") -> str:
         content = _credentials_content()
     elif view == "settings":
         content = _settings_content()
+    elif view == "policies":
+        content = _policies_content()
+    elif view == "plugins":
+        content = _plugins_content()
     else:
         content = _main_content()
 
@@ -1446,6 +1675,53 @@ async function loadSettings() {
         g('s-hatz-model',    (cfg.hatz_ai    || {}).model         || '');
         g('s-hatz-api-key',  (cfg.hatz_ai    || {}).api_key       || '');
 
+        // Vault settings
+        const v = cfg.vault || {};
+        sel('s-vault-enabled',  String(v.enabled === true));
+        sel('s-vault-provider', v.provider     || 'hashicorp');
+        g('s-vault-url',        v.url          || '');
+        sel('s-vault-tls',      String(v.tls_verify !== false));
+        sel('s-vault-auth',     v.auth_method  || 'token');
+        g('s-vault-mount',      v.mount        || 'secret');
+        sel('s-vault-kv-version', String(v.kv_version || 2));
+        g('s-vault-paths',      (v.paths       || []).join(', '));
+        g('s-vault-role-id',    v.role_id      || '');
+        g('s-vault-app-id',     v.app_id       || '');
+        g('s-vault-safe',       v.safe         || '');
+        g('s-vault-objects',    (v.objects     || []).join(', '));
+        g('s-vault-cert',       v.cert_path    || '');
+        g('s-vault-key',        v.key_path     || '');
+        g('s-vault-akv-name',   v.vault_name   || '');
+        g('s-vault-akv-tenant', v.tenant_id    || '');
+        g('s-vault-akv-client-id', v.client_id || '');
+        g('s-vault-akv-secrets',(v.secrets     || []).join(', '));
+        onVaultProviderChange();
+
+        // SOAR settings
+        const soar = cfg.soar || {};
+        sel('s-soar-enabled',  String(soar.enabled === true));
+        sel('s-soar-min-sev',  soar.min_severity  || 'HIGH');
+        sel('s-soar-kev-only', String(soar.on_kev_only === true));
+        sel('s-soar-dedup',    String(soar.deduplicate !== false));
+        const providers = soar.providers || [];
+        const jira = providers.find(p => p.type === 'jira')        || {};
+        const snow = providers.find(p => p.type === 'servicenow')  || {};
+        const wh   = providers.find(p => p.type === 'webhook')     || {};
+        sel('s-jira-enabled', String(jira.enabled === true));
+        g('s-jira-url',       jira.url          || '');
+        g('s-jira-email',     jira.email         || '');
+        g('s-jira-project',   jira.project_key   || '');
+        g('s-jira-issue-type',jira.issue_type     || 'Bug');
+        sel('s-snow-enabled', String(snow.enabled === true));
+        g('s-snow-url',       snow.url      || '');
+        g('s-snow-user',      snow.username  || '');
+        g('s-snow-table',     snow.table     || 'incident');
+        g('s-snow-group',     snow.assignment_group || '');
+        sel('s-wh-enabled',   String(wh.enabled === true));
+        g('s-wh-url',         wh.url          || '');
+        sel('s-wh-template',  wh.template     || 'slack');
+        g('s-wh-routing-key', wh.routing_key  || '');
+
         document.getElementById('settings-loading').style.display = 'none';
         document.getElementById('settings-form').style.display = '';
     } catch(e) {
@@ -1473,6 +1749,49 @@ async function saveSettings() {
         hatz_enabled:   document.getElementById('s-hatz-enabled')?.value === 'true',
         hatz_model:     g('s-hatz-model'),
         hatz_api_key:   g('s-hatz-api-key'),
+        // Vault
+        vault_enabled:  document.getElementById('s-vault-enabled')?.value === 'true',
+        vault_provider: g('s-vault-provider'),
+        vault_url:      g('s-vault-url'),
+        vault_tls:      document.getElementById('s-vault-tls')?.value !== 'false',
+        vault_auth:     g('s-vault-auth'),
+        vault_token:    g('s-vault-token'),
+        vault_role_id:  g('s-vault-role-id'),
+        vault_secret_id: g('s-vault-secret-id'),
+        vault_mount:    g('s-vault-mount'),
+        vault_kv_version: parseInt(g('s-vault-kv-version')) || 2,
+        vault_paths:    g('s-vault-paths'),
+        vault_app_id:   g('s-vault-app-id'),
+        vault_safe:     g('s-vault-safe'),
+        vault_objects:  g('s-vault-objects'),
+        vault_cert:     g('s-vault-cert'),
+        vault_key:      g('s-vault-key'),
+        vault_akv_name: g('s-vault-akv-name'),
+        vault_tenant:   g('s-vault-akv-tenant'),
+        vault_client_id: g('s-vault-akv-client-id'),
+        vault_akv_secret: g('s-vault-akv-secret'),
+        vault_secrets:  g('s-vault-akv-secrets'),
+        // SOAR
+        soar_enabled:    document.getElementById('s-soar-enabled')?.value === 'true',
+        soar_min_sev:    g('s-soar-min-sev'),
+        soar_kev_only:   document.getElementById('s-soar-kev-only')?.value === 'true',
+        soar_dedup:      document.getElementById('s-soar-dedup')?.value !== 'false',
+        jira_enabled:    document.getElementById('s-jira-enabled')?.value === 'true',
+        jira_url:        g('s-jira-url'),
+        jira_email:      g('s-jira-email'),
+        jira_token:      g('s-jira-token'),
+        jira_project:    g('s-jira-project'),
+        jira_issue_type: g('s-jira-issue-type'),
+        snow_enabled:    document.getElementById('s-snow-enabled')?.value === 'true',
+        snow_url:        g('s-snow-url'),
+        snow_user:       g('s-snow-user'),
+        snow_pass:       g('s-snow-pass'),
+        snow_table:      g('s-snow-table'),
+        snow_group:      g('s-snow-group'),
+        wh_enabled:      document.getElementById('s-wh-enabled')?.value === 'true',
+        wh_url:          g('s-wh-url'),
+        wh_template:     g('s-wh-template'),
+        wh_routing_key:  g('s-wh-routing-key'),
     };
     try {
         const r = await fetch('/api/config', {
@@ -1541,7 +1860,310 @@ async function clearHistory() {
 
 document.addEventListener('DOMContentLoaded', loadSettings);
 """
+    elif view == "plugins":
+        return r"""
+async function loadPlugins() {
+    const tbody = document.getElementById('plugin-tbody');
+    const count = document.getElementById('plugin-count');
+    if (!tbody) return;
+    try {
+        const r = await fetch('/api/plugins');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const plugins = d.plugins || [];
+        count.textContent = plugins.length + ' plugin(s) installed';
+        if (!plugins.length) {
+            tbody.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#888;padding:20px">No plugins found in plugins/ directory.</td></tr>';
+            return;
+        }
+        const catColors = {
+            discovery:  '#3498db',
+            ssh:        '#27ae60',
+            wmi:        '#8e44ad',
+            snmp:       '#16a085',
+            cve:        '#e74c3c',
+            compliance: '#e67e22',
+            web:        '#2980b9',
+            bruteforce: '#c0392b',
+            risk:       '#d35400',
+            delta:      '#7f8c8d',
+            reporting:  '#2ecc71',
+        };
+        tbody.innerHTML = '';
+        plugins.forEach(p => {
+            if (p.error) {
+                tbody.innerHTML += `<tr><td colspan="7" style="color:#c00">${p.error}</td></tr>`;
+                return;
+            }
+            const col = catColors[p.category] || '#999';
+            const reqs = (p.requires || []).join(', ') || '&mdash;';
+            const badge = `<span style="background:${col};color:#fff;padding:2px 8px;border-radius:10px;font-size:11px">${p.category}</span>`;
+            tbody.innerHTML += `
+              <tr>
+                <td style="text-align:center;font-weight:600">${p.phase}</td>
+                <td><strong>${p.name}</strong>${p.requires_root ? ' <span title="Requires root/admin" style="color:#e74c3c;font-size:10px">★root</span>' : ''}</td>
+                <td><code style="font-size:11px">${p.plugin_id}</code></td>
+                <td>${badge}</td>
+                <td style="font-size:12px;color:#555">${p.description}</td>
+                <td style="font-size:12px">${p.version}</td>
+                <td style="font-size:11px;color:#888">${reqs}</td>
+              </tr>`;
+        });
+    } catch(e) {
+        tbody.innerHTML = `<tr><td colspan="7" style="color:#c00;padding:16px">Failed to load plugins: ${e.message}</td></tr>`;
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadPlugins);
+"""
+    elif view == "policies":
+        return r"""
+async function loadPolicies() {
+    const tbody = document.getElementById('policy-tbody');
+    if (!tbody) return;
+    try {
+        const r = await fetch('/api/policies');
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const d = await r.json();
+        const policies = d.policies || [];
+        if (!policies.length) {
+            tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#888;padding:20px">No policies yet. Click &ldquo;+ New Policy&rdquo; to create one.</td></tr>';
+            return;
+        }
+        tbody.innerHTML = '';
+        policies.forEach(p => {
+            const mods = (p.modules || []).join(', ') || '—';
+            const nets = p.networks || '<span style="color:#aaa">Global</span>';
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td><strong>${escPol(p.name)}</strong>${p.notes ? '<br><span style="color:#888;font-size:11px">' + escPol(p.notes) + '</span>' : ''}</td>
+                <td><span class="badge badge-ok" style="text-transform:capitalize">${escPol(p.scan_type||'')}</span></td>
+                <td style="font-size:12px;color:#555">${escPol(nets)}</td>
+                <td style="font-size:12px;color:#555">${escPol(mods)}</td>
+                <td><span class="badge ${p.intensity==='high'?'badge-warn':p.intensity==='low'?'badge-ok':'badge-medium'}" style="text-transform:capitalize">${escPol(p.intensity||'normal')}</span></td>
+                <td>
+                  <button class="btn btn-grey btn-sm" style="padding:3px 10px;font-size:12px"
+                          onclick='editPolicy(${JSON.stringify(JSON.stringify(p))})'>Edit</button>
+                  <button class="btn btn-sm" style="padding:3px 10px;font-size:12px;background:#c0392b;color:#fff"
+                          onclick="deletePolicy('${escPol(p.name).replace(/'/g,'\'')}')" >Delete</button>
+                </td>`;
+            tbody.appendChild(tr);
+        });
+    } catch(e) {
+        tbody.innerHTML = '<tr><td colspan="6" style="color:#c00;padding:16px">Failed to load policies: ' + e.message + '</td></tr>';
+    }
+}
+
+function escPol(s) {
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function showPolicyForm(title) {
+    document.getElementById('policy-form-card').style.display = '';
+    document.getElementById('policy-form-title').textContent = title || 'Create Scan Policy';
+    document.getElementById('policy-form-card').scrollIntoView({behavior:'smooth',block:'start'});
+}
+
+function hidePolicyForm() {
+    document.getElementById('policy-form-card').style.display = 'none';
+    document.getElementById('policy-form').reset();
+    document.getElementById('policy-form').removeAttribute('data-edit');
+}
+
+function getCheckedModules() {
+    return Array.from(document.querySelectorAll('#p-modules input[type=checkbox]:checked'))
+                .map(el => el.value);
+}
+
+function setCheckedModules(mods) {
+    document.querySelectorAll('#p-modules input[type=checkbox]').forEach(el => {
+        el.checked = mods.includes(el.value);
+    });
+}
+
+function editPolicy(jsonStr) {
+    const p = JSON.parse(jsonStr);
+    document.getElementById('p-name').value      = p.name      || '';
+    document.getElementById('p-type').value      = p.scan_type || 'credentialed';
+    document.getElementById('p-intensity').value = p.intensity || 'normal';
+    document.getElementById('p-networks').value  = p.networks  || '';
+    document.getElementById('p-parallel').value  = p.max_parallel || 10;
+    document.getElementById('p-ports').value     = p.port_range   || 'top1000';
+    document.getElementById('p-timeout').value   = p.timeout_per_host || 120;
+    document.getElementById('p-notes').value     = p.notes || '';
+    setCheckedModules(p.modules || []);
+    document.getElementById('policy-form').setAttribute('data-edit', p.name);
+    showPolicyForm('Edit Policy: ' + p.name);
+}
+
+async function submitPolicyForm(e) {
+    e.preventDefault();
+    const btn  = document.getElementById('btn-policy-save');
+    const spin = document.getElementById('spin-policy');
+    btn.disabled = true; spin.style.display = '';
+    const editName = document.getElementById('policy-form').getAttribute('data-edit') || null;
+    const body = {
+        name:             document.getElementById('p-name').value.trim(),
+        scan_type:        document.getElementById('p-type').value,
+        intensity:        document.getElementById('p-intensity').value,
+        networks:         document.getElementById('p-networks').value.trim(),
+        modules:          getCheckedModules(),
+        max_parallel:     parseInt(document.getElementById('p-parallel').value) || 10,
+        port_range:       document.getElementById('p-ports').value.trim() || 'top1000',
+        timeout_per_host: parseInt(document.getElementById('p-timeout').value) || 120,
+        notes:            document.getElementById('p-notes').value.trim(),
+        edit_name:        editName,
+    };
+    try {
+        const r = await fetch('/api/policies/save', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(body)
+        });
+        const d = await r.json();
+        showToast(d.message, d.success ? 'success' : 'error');
+        if (d.success) { hidePolicyForm(); loadPolicies(); }
+    } catch(err) {
+        showToast('Error: ' + err.message, 'error');
+    } finally {
+        btn.disabled = false; spin.style.display = 'none';
+    }
+}
+
+async function deletePolicy(name) {
+    if (!confirm('Delete policy "' + name + '"? This cannot be undone.')) return;
+    try {
+        const r = await fetch('/api/policies/delete', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({name})
+        });
+        const d = await r.json();
+        showToast(d.message, d.success ? 'success' : 'error');
+        if (d.success) loadPolicies();
+    } catch(err) {
+        showToast('Error: ' + err.message, 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', loadPolicies);
+"""
     return ""
+
+
+
+
+def _policies_content() -> str:
+    return """
+<div class="card">
+  <div class="card-title">Scan Policies
+    <button class="btn btn-orange btn-sm" style="float:right;padding:5px 14px;font-size:12px"
+            onclick="showPolicyForm()">+ New Policy</button>
+  </div>
+  <p style="color:#888;font-size:13px;margin-bottom:14px">
+    Policies control which scan modules run, which targets are in scope, and how aggressively
+    the scanner probes. Assign a policy when scheduling a scan run.
+  </p>
+  <div style="overflow-x:auto">
+  <table class="cred-table" id="policy-table">
+    <thead>
+      <tr>
+        <th>Policy Name</th><th>Scan Type</th><th>Target Networks</th><th>Modules</th><th>Intensity</th><th>Actions</th>
+      </tr>
+    </thead>
+    <tbody id="policy-tbody">
+      <tr><td colspan="6" style="text-align:center;color:#888;padding:20px">Loading&#8230;</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="card" id="policy-form-card" style="display:none">
+  <div class="card-title" id="policy-form-title">Create Scan Policy</div>
+  <form id="policy-form" onsubmit="submitPolicyForm(event)">
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Policy Name</label>
+        <input type="text" id="p-name" placeholder="e.g. Full Credentialed Audit" required>
+      </div>
+      <div class="form-group">
+        <label>Scan Type</label>
+        <select id="p-type">
+          <option value="discovery">Discovery (ping/port sweep only)</option>
+          <option value="basic">Basic Network Scan</option>
+          <option value="credentialed" selected>Credentialed Patch Audit</option>
+          <option value="compliance">Compliance / Hardening Audit</option>
+          <option value="full">Full Deep Scan</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Scan Intensity</label>
+        <select id="p-intensity">
+          <option value="low">Low (stealthy, slow)</option>
+          <option value="normal" selected>Normal</option>
+          <option value="high">High (aggressive, fast)</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Target Networks (comma-separated CIDRs or IPs, blank = use global config)</label>
+      <input type="text" id="p-networks" placeholder="e.g. 192.168.1.0/24, 10.0.0.0/8">
+    </div>
+
+    <div class="form-group">
+      <label>Enabled Modules</label>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;margin-top:6px" id="p-modules">
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="nmap" checked> Nmap Port Scan</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="ssh" checked> SSH Credentialed Audit</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="wmi" checked> WMI / WinRM Audit</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="snmp" checked> SNMP Enumeration</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="cve" checked> CVE Correlation (NVD/KEV)</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="compliance"> Compliance / CIS Checks</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="web"> Web Application Probing</label>
+        <label style="font-weight:400;display:flex;align-items:center;gap:6px">
+          <input type="checkbox" value="bruteforce"> Credential Brute-force Check</label>
+      </div>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Max Parallel Hosts</label>
+        <input type="number" id="p-parallel" value="10" min="1" max="100">
+      </div>
+      <div class="form-group">
+        <label>Port Range</label>
+        <input type="text" id="p-ports" placeholder="e.g. 1-65535 or top1000" value="top1000">
+      </div>
+      <div class="form-group">
+        <label>Timeout per Host (sec)</label>
+        <input type="number" id="p-timeout" value="120" min="10" max="3600">
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Notes / Description</label>
+      <input type="text" id="p-notes" placeholder="Optional description">
+    </div>
+
+    <div style="display:flex;gap:12px;margin-top:8px">
+      <button type="submit" class="btn btn-orange" id="btn-policy-save">
+        <span class="spinner" id="spin-policy" style="display:none"></span>
+        Save Policy
+      </button>
+      <button type="button" class="btn btn-grey" onclick="hidePolicyForm()">Cancel</button>
+    </div>
+  </form>
+</div>
+"""
 
 
 def _main_content() -> str:
@@ -1888,6 +2510,304 @@ def _settings_content() -> str:
   </div>
 </div>
 
+
+
+<!-- ── SOAR / Ticketing Integration ──────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">SOAR / Ticketing Integration
+    <span style="float:right;font-size:11px;color:#888;font-weight:400">
+      Findings dispatched automatically after each scan
+    </span>
+  </div>
+  <p style="color:#888;font-size:13px;margin-bottom:14px">
+    Automatically create tickets or send alerts to Jira, ServiceNow, Slack,
+    Teams, PagerDuty or any custom webhook when scan findings meet the
+    configured severity threshold.
+  </p>
+  <div class="form-row" style="align-items:flex-end">
+    <div class="form-group" style="max-width:140px">
+      <label>Enabled</label>
+      <select id="s-soar-enabled">
+        <option value="false">Disabled</option>
+        <option value="true">Enabled</option>
+      </select>
+    </div>
+    <div class="form-group" style="max-width:180px">
+      <label>Min. Severity</label>
+      <select id="s-soar-min-sev">
+        <option value="CRITICAL">Critical only</option>
+        <option value="HIGH" selected>High &amp; above</option>
+        <option value="MEDIUM">Medium &amp; above</option>
+        <option value="LOW">All findings</option>
+      </select>
+    </div>
+    <div class="form-group" style="max-width:180px">
+      <label>KEV-only Mode</label>
+      <select id="s-soar-kev-only">
+        <option value="false">All findings</option>
+        <option value="true">KEV findings only</option>
+      </select>
+    </div>
+    <div class="form-group" style="max-width:160px">
+      <label>Deduplicate</label>
+      <select id="s-soar-dedup">
+        <option value="true" selected>Yes (30-day window)</option>
+        <option value="false">No (always send)</option>
+      </select>
+    </div>
+  </div>
+
+  <div style="font-size:13px;font-weight:600;color:#ccc;margin:10px 0 6px">Providers</div>
+
+  <!-- Jira -->
+  <details style="margin-bottom:10px">
+    <summary style="cursor:pointer;font-size:13px;color:#e67e22;font-weight:600">Jira</summary>
+    <div style="padding:10px 0 0 10px">
+      <div class="form-row">
+        <div class="form-group" style="max-width:120px">
+          <label>Enabled</label>
+          <select id="s-jira-enabled">
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Jira URL</label>
+          <input id="s-jira-url" type="text" placeholder="https://yourorg.atlassian.net">
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input id="s-jira-email" type="text" placeholder="scanner@yourorg.com">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group">
+          <label>API Token <span style="color:#aaa;font-weight:400">(or JIRA_API_TOKEN env)</span></label>
+          <input id="s-jira-token" type="password" placeholder="Leave blank to keep existing">
+        </div>
+        <div class="form-group" style="max-width:140px">
+          <label>Project Key</label>
+          <input id="s-jira-project" type="text" placeholder="SEC">
+        </div>
+        <div class="form-group" style="max-width:160px">
+          <label>Issue Type</label>
+          <input id="s-jira-issue-type" type="text" placeholder="Bug" value="Bug">
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <!-- ServiceNow -->
+  <details style="margin-bottom:10px">
+    <summary style="cursor:pointer;font-size:13px;color:#e67e22;font-weight:600">ServiceNow</summary>
+    <div style="padding:10px 0 0 10px">
+      <div class="form-row">
+        <div class="form-group" style="max-width:120px">
+          <label>Enabled</label>
+          <select id="s-snow-enabled">
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Instance URL</label>
+          <input id="s-snow-url" type="text" placeholder="https://yourorg.service-now.com">
+        </div>
+        <div class="form-group">
+          <label>Username</label>
+          <input id="s-snow-user" type="text" placeholder="scanner-svc">
+        </div>
+        <div class="form-group">
+          <label>Password <span style="color:#aaa;font-weight:400">(or SNOW_PASSWORD env)</span></label>
+          <input id="s-snow-pass" type="password" placeholder="Leave blank to keep existing">
+        </div>
+      </div>
+      <div class="form-row">
+        <div class="form-group" style="max-width:160px">
+          <label>Table</label>
+          <input id="s-snow-table" type="text" placeholder="incident" value="incident">
+        </div>
+        <div class="form-group">
+          <label>Assignment Group</label>
+          <input id="s-snow-group" type="text" placeholder="Security Operations">
+        </div>
+      </div>
+    </div>
+  </details>
+
+  <!-- Webhook (Slack / Teams / PagerDuty / Custom) -->
+  <details style="margin-bottom:6px">
+    <summary style="cursor:pointer;font-size:13px;color:#e67e22;font-weight:600">Webhook (Slack / Teams / PagerDuty / Custom)</summary>
+    <div style="padding:10px 0 0 10px">
+      <div class="form-row">
+        <div class="form-group" style="max-width:120px">
+          <label>Enabled</label>
+          <select id="s-wh-enabled">
+            <option value="false">No</option>
+            <option value="true">Yes</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label>Webhook URL</label>
+          <input id="s-wh-url" type="text" placeholder="https://hooks.slack.com/...">
+        </div>
+        <div class="form-group" style="max-width:200px">
+          <label>Template</label>
+          <select id="s-wh-template">
+            <option value="slack">Slack</option>
+            <option value="teams">Microsoft Teams</option>
+            <option value="pagerduty">PagerDuty</option>
+            <option value="default">Generic JSON</option>
+          </select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label>PagerDuty Routing Key <span style="color:#aaa;font-weight:400">(if using PagerDuty template)</span></label>
+        <input id="s-wh-routing-key" type="text" placeholder="PagerDuty integration key">
+      </div>
+    </div>
+  </details>
+</div>
+
+<!-- ── PAM / Vault Integration ────────────────────────────────────────────────────── -->
+<div class="card">
+  <div class="card-title">PAM / Secrets Vault Integration
+    <span style="float:right;font-size:11px;color:#888;font-weight:400">
+      Credentials fetched at scan time — never stored locally
+    </span>
+  </div>
+  <p style="color:#888;font-size:13px;margin-bottom:14px">
+    Connect to HashiCorp Vault, CyberArk CCP, or Azure Key Vault to dynamically
+    fetch scan credentials at runtime instead of storing them on the device.
+  </p>
+  <div class="form-row" style="align-items:flex-end">
+    <div class="form-group" style="max-width:140px">
+      <label>Enabled</label>
+      <select id="s-vault-enabled" onchange="onVaultProviderChange()">
+        <option value="false">Disabled</option>
+        <option value="true">Enabled</option>
+      </select>
+    </div>
+    <div class="form-group" style="max-width:220px">
+      <label>Provider</label>
+      <select id="s-vault-provider" onchange="onVaultProviderChange()">
+        <option value="hashicorp">HashiCorp Vault</option>
+        <option value="cyberark">CyberArk CCP</option>
+        <option value="azure_keyvault">Azure Key Vault</option>
+      </select>
+    </div>
+    <div class="form-group" style="flex:2">
+      <label>Vault URL</label>
+      <input id="s-vault-url" type="text" placeholder="https://vault.example.com:8200">
+    </div>
+    <div class="form-group" style="max-width:100px">
+      <label>TLS Verify</label>
+      <select id="s-vault-tls">
+        <option value="true">Yes</option>
+        <option value="false">No</option>
+      </select>
+    </div>
+  </div>
+
+  <!-- HashiCorp fields -->
+  <div id="vault-hashicorp" style="display:none">
+    <div class="form-row">
+      <div class="form-group" style="max-width:180px">
+        <label>Auth Method</label>
+        <select id="s-vault-auth">
+          <option value="token">Token</option>
+          <option value="approle">AppRole</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label>Token <span style="color:#aaa;font-weight:400">(or set VAULT_TOKEN env)</span></label>
+        <input id="s-vault-token" type="password" placeholder="hvs.xxxxx">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>AppRole Role ID</label>
+        <input id="s-vault-role-id" type="text" placeholder="role_id">
+      </div>
+      <div class="form-group">
+        <label>AppRole Secret ID <span style="color:#aaa;font-weight:400">(or VAULT_SECRET_ID env)</span></label>
+        <input id="s-vault-secret-id" type="password" placeholder="secret_id">
+      </div>
+      <div class="form-group" style="max-width:140px">
+        <label>KV Mount</label>
+        <input id="s-vault-mount" type="text" placeholder="secret" value="secret">
+      </div>
+      <div class="form-group" style="max-width:100px">
+        <label>KV Version</label>
+        <select id="s-vault-kv-version">
+          <option value="2" selected>v2</option>
+          <option value="1">v1</option>
+        </select>
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Secret Paths <span style="color:#aaa;font-weight:400">(comma-separated, e.g. creds/ssh-admin, creds/wmi-svc)</span></label>
+      <input id="s-vault-paths" type="text" placeholder="creds/ssh-admin, creds/windows-svc">
+    </div>
+  </div>
+
+  <!-- CyberArk fields -->
+  <div id="vault-cyberark" style="display:none">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Application ID</label>
+        <input id="s-vault-app-id" type="text" placeholder="ScannerApp">
+      </div>
+      <div class="form-group">
+        <label>Safe Name</label>
+        <input id="s-vault-safe" type="text" placeholder="ScannerSafe">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Object Names <span style="color:#aaa;font-weight:400">(comma-separated)</span></label>
+      <input id="s-vault-objects" type="text" placeholder="ssh-root, win-svc-account">
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Client Certificate Path <span style="color:#aaa;font-weight:400">(optional)</span></label>
+        <input id="s-vault-cert" type="text" placeholder="/etc/scanner/ccp-client.pem">
+      </div>
+      <div class="form-group">
+        <label>Client Key Path <span style="color:#aaa;font-weight:400">(optional)</span></label>
+        <input id="s-vault-key" type="text" placeholder="/etc/scanner/ccp-client.key">
+      </div>
+    </div>
+  </div>
+
+  <!-- Azure Key Vault fields -->
+  <div id="vault-azure" style="display:none">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Vault Name</label>
+        <input id="s-vault-akv-name" type="text" placeholder="my-keyvault">
+      </div>
+      <div class="form-group">
+        <label>Tenant ID</label>
+        <input id="s-vault-akv-tenant" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      </div>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label>Client ID</label>
+        <input id="s-vault-akv-client-id" type="text" placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+      </div>
+      <div class="form-group">
+        <label>Client Secret <span style="color:#aaa;font-weight:400">(or AZURE_CLIENT_SECRET env)</span></label>
+        <input id="s-vault-akv-secret" type="password" placeholder="Leave blank to keep existing">
+      </div>
+    </div>
+    <div class="form-group">
+      <label>Secret Names <span style="color:#aaa;font-weight:400">(comma-separated)</span></label>
+      <input id="s-vault-akv-secrets" type="text" placeholder="ssh-admin-cred, win-svc-cred">
+    </div>
+  </div>
+</div>
+
 <!-- ── Save ───────────────────────────────────────────────────────────────── -->
 <div class="action-row">
   <button class="btn btn-orange" id="btn-save-settings" onclick="saveSettings()">
@@ -2115,6 +3035,18 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             self._send_json(200, _load_config_safe())
             return
 
+        if path == "/api/policies":
+            if not self._require_auth_json():
+                return
+            self._send_json(200, {"policies": _list_policies()})
+            return
+
+        if path == "/api/plugins":
+            if not self._require_auth_json():
+                return
+            self._send_json(200, {"plugins": _get_plugin_registry_safe()})
+            return
+
         self._send_html(404, "<h1>404 Not Found</h1>")
 
     # ── POST ─────────────────────────────────────────────────────────────────
@@ -2196,6 +3128,24 @@ class DashboardHandler(http.server.BaseHTTPRequestHandler):
             body = self._parse_body()
             result = _change_password(body)
             self._send_json(200, result)
+            return
+
+        if path == "/api/policies/save":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            self._send_json(200, _save_policy(body))
+            return
+
+        if path == "/api/policies/delete":
+            if not self._require_auth_json():
+                return
+            body = self._parse_body()
+            name = body.get("name", "")
+            if not name:
+                self._send_json(400, {"success": False, "message": "name required"})
+                return
+            self._send_json(200, _delete_policy(name))
             return
 
         if path == "/api/history/clear":

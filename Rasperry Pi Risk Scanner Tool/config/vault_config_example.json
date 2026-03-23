@@ -1,0 +1,76 @@
+{
+  "_comment": "Copy the relevant section into config.json under the 'vault' key.",
+  "_comment2": "Sensitive values (token, secret_id, client_secret) can also be set via environment variables.",
+
+  "hashicorp_example": {
+    "vault": {
+      "enabled": true,
+      "provider": "hashicorp",
+      "url": "https://vault.example.com:8200",
+      "tls_verify": true,
+      "timeout": 15,
+      "auth_method": "approle",
+      "role_id": "YOUR_ROLE_ID_HERE",
+      "secret_id": "YOUR_SECRET_ID_HERE (or set VAULT_SECRET_ID env var)",
+      "mount": "secret",
+      "kv_version": 2,
+      "paths": [
+        "creds/ssh-admin",
+        "creds/windows-service-account",
+        "creds/snmp-community"
+      ]
+    },
+    "_secret_format": {
+      "_comment": "Each Vault secret at the configured paths should contain these fields:",
+      "name": "ssh-admin",
+      "type": "ssh",
+      "username": "admin",
+      "password": "optional-if-using-key",
+      "key_path": "/path/to/private/key (optional)",
+      "hosts": ["192.168.1.0/24", "10.0.0.0/8"]
+    }
+  },
+
+  "cyberark_example": {
+    "vault": {
+      "enabled": true,
+      "provider": "cyberark",
+      "url": "https://cyberark-ccp.example.com",
+      "tls_verify": true,
+      "timeout": 15,
+      "app_id": "RiskScannerApp",
+      "safe": "ScannerSafe",
+      "objects": [
+        "ssh-root-prod",
+        "windows-svc-account"
+      ],
+      "cert_path": "/etc/scanner/ccp-client.pem",
+      "key_path": "/etc/scanner/ccp-client.key"
+    }
+  },
+
+  "azure_keyvault_example": {
+    "vault": {
+      "enabled": true,
+      "provider": "azure_keyvault",
+      "vault_name": "my-scanner-keyvault",
+      "tenant_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "client_id": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx",
+      "client_secret": "YOUR_SECRET_HERE (or set AZURE_CLIENT_SECRET env var)",
+      "tls_verify": true,
+      "timeout": 15,
+      "secrets": [
+        "ssh-admin-cred",
+        "win-svc-cred"
+      ]
+    },
+    "_secret_format": {
+      "_comment": "Azure Key Vault secrets should be JSON strings with credential fields:",
+      "name": "ssh-admin-cred",
+      "type": "ssh",
+      "username": "admin",
+      "password": "yourpassword",
+      "hosts": ["*"]
+    }
+  }
+}
