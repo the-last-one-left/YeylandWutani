@@ -1398,6 +1398,7 @@ function Process-Site {
         Url                    = $siteUrl
         SiteType               = $siteType
         Template               = $SPOSite.Template
+        IsOneDrive             = $isOneDrive
         StorageUsageMB         = $SPOSite.StorageUsageCurrent
         StorageUsageReadable   = Convert-BytesToReadable ($SPOSite.StorageUsageCurrent * 1MB)
         StorageQuotaMB         = $SPOSite.StorageQuota
@@ -1560,6 +1561,12 @@ function Export-ToHtml {
     $totalSites = $Script:Data.Sites.Count
     $totalStorage = ($Script:Data.Sites | Measure-Object -Property StorageUsageMB -Sum).Sum
 
+    # Separate SharePoint and OneDrive storage so OneDrive doesn't inflate SP quota numbers
+    $spSites = @($Script:Data.Sites | Where-Object { -not $_.IsOneDrive })
+    $odSites = @($Script:Data.Sites | Where-Object { $_.IsOneDrive })
+    $spTotalStorageMB = [double](($spSites | Measure-Object -Property StorageUsageMB -Sum).Sum)
+    $odTotalStorageMB = [double](($odSites | Measure-Object -Property StorageUsageMB -Sum).Sum)
+
     # External sharing enabled sites (anything except Disabled)
     $externalEnabledSites = ($Script:Data.Sites | Where-Object { 
         $_.SharingCapability -ne "Disabled" 
@@ -1582,7 +1589,7 @@ function Export-ToHtml {
     $totalExternalUsers = ($Script:Data.SiteMembers | 
         Where-Object { $_.IsExternal -eq $true }).Count
 
-    Write-Log "  Summary: $totalSites sites, $(Convert-BytesToReadable ($totalStorage * 1MB)) used" -Level Debug
+    Write-Log "  Summary: $($spSites.Count) SP sites ($(Convert-BytesToReadable ($spTotalStorageMB * 1MB))), $($odSites.Count) OneDrive ($(Convert-BytesToReadable ($odTotalStorageMB * 1MB)))" -Level Debug
     Write-Log "  External: $externalEnabledSites sites enabled, $externalLinks links, $totalExternalUsers users" -Level Debug
     # ======================================================================
     Write-Log "Generating HTML report..." -Level Info
@@ -1684,14 +1691,27 @@ a:hover { text-decoration: underline; }
     # For example, your first section: total sites, storage, external sharing
     $html += @"
 <div class="summary-grid">
-  <div class="summary-card"><div class="value">$($totalSites)</div><div class="label">Total Sites</div></div>
-  <div class="summary-card"><div class="value">$(Convert-BytesToReadable ($totalStorage * 1MB))</div><div class="label">Storage Used</div></div>
-  <div class="summary-card$(if ($externalEnabledSites -gt 0) { ' warning' })"><div class="value">$($externalEnabledSites)</div><div class="label">External Sharing Enabled</div></div>
+  <div class="summary-card"><div class="value">$($spSites.Count)</div><div class="label">SharePoint Sites</div></div>
+  <div class="summary-card"><div class="value">$(Convert-BytesToReadable ($spTotalStorageMB * 1MB))</div><div class="label">SharePoint Storage</div></div>
+$(if ($odSites.Count -gt 0) { "  <div class=`"summary-card`"><div class=`"value`">$(Convert-BytesToReadable ($odTotalStorageMB * 1MB))</div><div class=`"label`">OneDrive Storage ($($odSites.Count) accounts)</div></div>`n" })  <div class="summary-card$(if ($externalEnabledSites -gt 0) { ' warning' })"><div class="value">$($externalEnabledSites)</div><div class="label">External Sharing Enabled</div></div>
   <div class="summary-card$(if ($externalLinks -gt 0) { ' danger' })"><div class="value">$($externalLinks)</div><div class="label">External Links</div></div>
   <div class="summary-card$(if ($uniquePermItems -gt 0) { ' warning' })"><div class="value">$($uniquePermItems)</div><div class="label">Unique Permissions</div></div>
   <div class="summary-card"><div class="value">$($sitesWithMembers)</div><div class="label">Sites w/Members</div></div>
 </div>
 "@
+
+    # Top sites by storage bar chart
+    $topStorageSites = $Script:Data.Sites | Sort-Object StorageUsageMB -Descending | Select-Object -First 10
+    $maxStorageMB = [double](($topStorageSites | Measure-Object -Property StorageUsageMB -Maximum).Maximum)
+    if ($topStorageSites.Count -gt 0 -and $maxStorageMB -gt 0) {
+        $html += "<div class=`"section`"><div class=`"section-header`" onclick=`"toggleSection(this)`"><h2>&#127942; Top Sites by Storage</h2><span class=`"count`">Top $($topStorageSites.Count) sites</span><span class=`"toggle`">&#9660;</span></div><div class=`"section-content`"><div class=`"bar-chart`">"
+        foreach ($tsite in $topStorageSites) {
+            $barPct = [math]::Round(($tsite.StorageUsageMB / $maxStorageMB) * 100, 1)
+            $barColor = if ($tsite.IsOneDrive) { "#17a2b8" } else { "#FF6600" }
+            $html += "<div class=`"bar-item`"><div class=`"bar-label`" title=`"$(Get-HtmlSafeString $tsite.Title)`">$(Get-HtmlSafeString $tsite.Title)</div><div class=`"bar-container`"><div class=`"bar-fill`" style=`"width:${barPct}%;background:$barColor;`"><span class=`"bar-value`">$(Get-HtmlSafeString $tsite.SiteType)</span></div></div><div class=`"bar-size`">$($tsite.StorageUsageReadable)</div></div>"
+        }
+        $html += "</div></div></div>"
+    }
 
     # Tenant Settings Block (you can generate this from your data)
     if ($Script:Data.TenantSettings) {
@@ -1722,16 +1742,18 @@ a:hover { text-decoration: underline; }
 <div class="section">
 <div class="section-header" onclick="toggleSection(this)"><h2>SharePoint Sites</h2><span class="count">$($Script:Data.Sites.Count) sites</span><span class="toggle">&#9660;</span></div>
 <div class="section-content"><table>
-<tr><th>Site</th><th>Type</th><th>Storage</th><th>% of Tenant</th><th>Sharing</th><th>Owner</th><th>Modified</th></tr>
+<tr><th>Site</th><th>Type</th><th>Storage</th><th>% of SP Quota</th><th>Sharing</th><th>Owner</th><th>Modified</th></tr>
 "@
 
     foreach ($site in ($Script:Data.Sites | Sort-Object StorageUsageMB -Descending)) {
         $pct = 0
-        if ($Script:Data.TenantSettings.StorageQuota -gt 0) {
-            $pct = [math]::Round(($site.StorageUsageMB / $Script:Data.TenantSettings.StorageQuota) * 100, 2)
-        } elseif (($Script:Data.Sites | Measure-Object -Property StorageUsageMB -Sum).Sum -gt 0) {
-            $totalUsed = ($Script:Data.Sites | Measure-Object -Property StorageUsageMB -Sum).Sum
-            $pct = [math]::Round(($site.StorageUsageMB / $totalUsed) * 100, 2)
+        # OneDrive has per-user quotas outside the SP pool — only calculate SP pool % for SP sites
+        if (-not $site.IsOneDrive) {
+            if ($Script:Data.TenantSettings -and $Script:Data.TenantSettings.StorageQuota -gt 0) {
+                $pct = [math]::Round(($site.StorageUsageMB / $Script:Data.TenantSettings.StorageQuota) * 100, 2)
+            } elseif ($spTotalStorageMB -gt 0) {
+                $pct = [math]::Round(($site.StorageUsageMB / $spTotalStorageMB) * 100, 2)
+            }
         }
 
         $ShareBadge = switch ($site.SharingCapability) {
