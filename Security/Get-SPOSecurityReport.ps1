@@ -272,7 +272,7 @@ function Get-DefaultLinkTypeText {
 
 function Test-IsOneDriveSite {
     param([string]$Url)
-    return $Url -match "-my\.sharepoint\.com" -or $Url -match "/personal/"
+    return ($Url -like "*/personal/*" -or $Url -like "*-my.sharepoint.com*")
 }
 
 function Test-IsSystemLibrary {
@@ -287,20 +287,11 @@ function Test-IsSystemLibrary {
 
 function Get-CleanSiteName {
     param([string]$Url)
-    if ([string]::IsNullOrWhiteSpace($Url)) { return "" }
-    if ($Url -match "/personal/([^/]+)") { return $Matches[1] }
-    if ($Url -match "/sites/([^/]+)") { return $Matches[1] }
-    if ($Url -match "/portals/([^/]+)") { return $Matches[1] }
-    if ($Url -match "sharepoint\.com/?$") { return "Root" }
-    try {
-        $uri = [System.Uri]$Url
-        $segments = @($uri.Segments | Where-Object { $_ -ne "/" })
-        if ($segments.Count -gt 0) {
-            $lastSegment = [string]$segments[-1]
-            return $lastSegment.TrimEnd('/')
-        }
-    } catch {}
-    return $Url
+    if ([string]::IsNullOrWhiteSpace($Url)) { return "Unknown" }
+    $uri = try { [System.Uri]$Url } catch { return $Url }
+    $path = $uri.AbsolutePath.TrimEnd('/').TrimStart('/')
+    if ([string]::IsNullOrWhiteSpace($path)) { return $uri.Host }
+    return ($path -split '/')[-1]
 }
 
 function Get-HtmlSafeString {
@@ -439,14 +430,11 @@ function Get-AllSharePointSites {
     Write-Log "Enumerating SharePoint sites..." -Level Info
     
     try {
-        # Get sites - include personal sites only if IncludeOneDrive is specified
-        # Must explicitly convert switch to bool for -IncludePersonalSite parameter
-        $includePersonal = $IncludeOneDrive.IsPresent
-        $spoSites = Get-SPOSite -Limit All -IncludePersonalSite:$includePersonal
+        $spoSites = Get-SPOSite -Limit All -IncludePersonalSite $true
         if ($SiteUrlFilter -ne "*") { $spoSites = $spoSites | Where-Object { $_.Url -like $SiteUrlFilter } }
-        
+
         # Filter out OneDrive sites unless explicitly included
-        if (-not $IncludeOneDrive) { 
+        if (-not $IncludeOneDrive) {
             $spoSites = $spoSites | Where-Object { -not (Test-IsOneDriveSite $_.Url) }
             Write-Log "OneDrive sites excluded (use -IncludeOneDrive to include)" -Level Info
         }
