@@ -133,11 +133,14 @@ $Script:ChartColors = @(
     "#e83e8c", "#374151", "#7952b3", "#F97316", "#51cf66"
 )
 
-# URLs and timestamps
-$Script:TenantUrl = "https://$TenantName.sharepoint.com"
-$Script:AdminUrl = "https://$TenantName-admin.sharepoint.com"
+# URLs and timestamps — lowercase tenant name since SPO URLs are case-sensitive
+$Script:TenantUrl = "https://$($TenantName.ToLower()).sharepoint.com"
+$Script:AdminUrl = "https://$($TenantName.ToLower())-admin.sharepoint.com"
 $Script:Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
 $Script:ReportDate = Get-Date -Format "MMMM dd, yyyy 'at' HH:mm"
+
+# SPO connection state — Get-SPOSite requires a live SPO connection, same as tenant settings
+$Script:SPOConnected = $false
 
 # Data collections
 $Script:Data = @{
@@ -369,16 +372,17 @@ function Connect-Services {
         throw
     }
     
-    if (-not $SkipTenantSettings) {
-        Write-Log "Connecting to SharePoint Online Admin Center..." -Level Info
-        try {
-            Connect-SPOService -Url $Script:AdminUrl
-            Write-Log "Connected to SPO Admin Center" -Level Success
-        } catch {
-            Write-Log "Failed to connect to SPO Admin: $_" -Level Error
-            Write-Log "Tenant settings will be skipped." -Level Warning
-            $Script:SkipTenantSettings = $true
-        }
+    # SPO connection is always required — Get-SPOSite (site enumeration) needs it, not just Get-SPOTenant
+    Write-Log "Connecting to SharePoint Online Admin Center ($Script:AdminUrl)..." -Level Info
+    try {
+        Connect-SPOService -Url $Script:AdminUrl
+        $Script:SPOConnected = $true
+        Write-Log "Connected to SPO Admin Center" -Level Success
+    } catch {
+        Write-Log "Failed to connect to SPO Admin: $_" -Level Error
+        Write-Log "Verify the tenant name is correct and the account has SharePoint Admin permissions." -Level Warning
+        $Script:SPOConnected = $false
+        throw "Unable to connect to SharePoint Online at $Script:AdminUrl. Site enumeration requires this connection."
     }
 }
 
@@ -427,8 +431,12 @@ function Get-TenantSharingSettings {
 }
 
 function Get-AllSharePointSites {
+    if (-not $Script:SPOConnected) {
+        Write-Log "SharePoint Online is not connected - cannot enumerate sites" -Level Error
+        return @()
+    }
     Write-Log "Enumerating SharePoint sites..." -Level Info
-    
+
     try {
         $spoSites = Get-SPOSite -Limit All -IncludePersonalSite $true
         if ($SiteUrlFilter -ne "*") { $spoSites = $spoSites | Where-Object { $_.Url -like $SiteUrlFilter } }
