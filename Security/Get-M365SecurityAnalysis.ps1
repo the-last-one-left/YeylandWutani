@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.7"
+$ScriptVer = "11.8"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -4286,12 +4286,12 @@ function Get-TenantSignInData {
             $userId = $userGroup.Name
             $userSignIns = $userGroup.Group
             
-            $uniqueUserLocations = $userSignIns | 
+            $uniqueUserLocations = $userSignIns |
                 Select-Object UserId, UserDisplayName, IP, IPVersion, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) }
-            
+                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
+
             foreach ($location in $uniqueUserLocations) {
-                $signInCount = ($userSignIns | Where-Object { 
+                $signInCount = ($userSignIns | Where-Object {
                     $_.IP -eq $location.IP -and 
                     $_.City -eq $location.City -and 
                     $_.Country -eq $location.Country 
@@ -4360,13 +4360,17 @@ function Get-TenantSignInData {
         Write-Log "Data Source: $(if ($isPremiumTenant) { "Premium Graph API" } else { "Exchange Online Fallback" })" -Level "Info"
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
         Write-Log "Total Sign-ins: $($results.Count)" -Level "Info"
-        Write-Log "  IPv4 Addresses: $ipv4Count" -Level "Info"
-        Write-Log "  IPv6 Addresses: $ipv6Count" -Level "Info"
-        Write-Log "  Private IPs: $privateIPCount" -Level "Info"
-        Write-Log "Unusual Locations: $($unusualSignIns.Count)" -Level "Info"
+        if ($isPremiumTenant) {
+            Write-Log "  IPv4 Addresses: $ipv4Count" -Level "Info"
+            Write-Log "  IPv6 Addresses: $ipv6Count" -Level "Info"
+            Write-Log "  Private IPs: $privateIPCount" -Level "Info"
+            Write-Log "Unusual Locations: $($unusualSignIns.Count)" -Level "Info"
+            Write-Log "Unique IP Locations: $($uniqueLogins.Count)" -Level "Info"
+            Write-Log "Geolocation Cache: $($ipCache.Count) IPs cached" -Level "Info"
+        } else {
+            Write-Log "  IP/Geolocation: Not available (requires Azure AD Premium P1/P2)" -Level "Warning"
+        }
         Write-Log "Failed Sign-ins: $($failedSignIns.Count)" -Level "Info"
-        Write-Log "Unique IP Locations: $($uniqueLogins.Count)" -Level "Info"
-        Write-Log "Geolocation Cache: $($ipCache.Count) IPs cached" -Level "Info"
         Write-Log "Output Files:" -Level "Info"
         Write-Log "  Main: $OutputPath" -Level "Info"
         if ($unusualSignIns.Count -gt 0) {
@@ -7821,9 +7825,9 @@ function Invoke-CompromiseDetection {
             $userId = $userGroup.Name
             $userSignIns = $userGroup.Group
             
-            $uniqueUserLocations = $userSignIns | 
+            $uniqueUserLocations = $userSignIns |
                 Select-Object UserId, UserDisplayName, IP, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) }
+                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
             
             foreach ($location in $uniqueUserLocations) {
                 $signInCount = ($userSignIns | Where-Object { 
