@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.3"
+$ScriptVer = "11.4"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
