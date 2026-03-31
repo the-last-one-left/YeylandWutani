@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.9"
+$ScriptVer = "11.10"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -3008,39 +3008,61 @@ function Connect-TenantServices {
             $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
             if ($userPrincipalName) {
-                # All PowerShell versions: use interactive auth with WinForms SynchronizationContext
-                # cleared during MSAL/WAM init to avoid RuntimeBroker NullReferenceException.
-                # (MSAL's RuntimeBroker constructor accesses SynchronizationContext.Current; the
-                # WindowsFormsSynchronizationContext installed by this GUI causes a null dereference
-                # inside the WAM SDK. Clearing it temporarily fixes init without affecting the auth
-                # dialog itself.)
-                Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) — connecting to Exchange Online (interactive auth)" -Level "Info"
-                Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)  |  clearing WinForms SynchronizationContext for MSAL init" -Level "Info"
-                Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
+                Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)" -Level "Info"
 
-                $savedSyncCtx = [System.Threading.SynchronizationContext]::Current
-                [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
-                try {
-                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                }
-                catch {
-                    # Only fall back to device code if WAM/broker is genuinely unavailable
-                    $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
-                    if ($isWamError) {
-                        Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
-                        Update-GuiStatus "Exchange Online: WAM unavailable, using device code flow..." ([System.Drawing.Color]::Yellow)
-                        $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
-                        if ($deviceParamExists) {
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
+                # WAM/RuntimeBroker crashes when MSAL is initialised from a WinForms GUI thread
+                # regardless of SynchronizationContext tricks (EXO 3.x / MSAL 4.x+).
+                # Detect WinForms context and skip WAM entirely; fall straight through to the
+                # enhanced device-code path which opens the browser and shows the user the code.
+                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
+                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
+                } else { "" }
+                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
+
+                $needsDeviceCode = $false
+
+                if ($isWinFormsCtx) {
+                    Write-Log "WinForms GUI context — skipping WAM (RuntimeBroker incompatible), using device code" -Level "Info"
+                    $needsDeviceCode = $true
+                } else {
+                    # Non-GUI context: try standard interactive auth
+                    Write-Log "Connecting to Exchange Online (interactive auth)..." -Level "Info"
+                    Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
+                    try {
+                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
+                    }
+                    catch {
+                        $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
+                        if ($isWamError) {
+                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
+                            $needsDeviceCode = $true
                         } else {
                             throw
                         }
-                    } else {
-                        throw
                     }
                 }
-                finally {
-                    [System.Threading.SynchronizationContext]::SetSynchronizationContext($savedSyncCtx)
+
+                if ($needsDeviceCode) {
+                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                    if (-not $deviceParamExists) {
+                        throw "Exchange Online module does not support device code auth (-Device parameter missing)"
+                    }
+
+                    Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
+                    Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
+
+                    # Open browser to device login page before the code is printed to console
+                    try { Start-Process "https://microsoft.com/devicelogin" } catch {}
+
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online Authentication",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Information
+                    ) | Out-Null
+
+                    Update-GuiStatus "Exchange Online: Waiting for device code authentication..." ([System.Drawing.Color]::Yellow)
+                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
                 }
             } else {
                 Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
@@ -3318,16 +3340,58 @@ function Connect-ExchangeOnlineIfNeeded {
                 Write-Log "Retrieving authenticated account from Graph session..." -Level "Info"
                 $graphContext = Get-MgContext
                 $userPrincipalName = $graphContext.Account
-                $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
-                if ($userPrincipalName) {
-                    Write-Log "Connecting to Exchange Online as $userPrincipalName" -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
-                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
+                # Check for WinForms GUI context — WAM/RuntimeBroker crashes in this context
+                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
+                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
+                } else { "" }
+                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
+
+                $needsDeviceCode = $false
+                $connectUpn = if ($userPrincipalName) { $userPrincipalName } else { $null }
+
+                if ($isWinFormsCtx) {
+                    Write-Log "WinForms GUI context — skipping WAM, using device code" -Level "Info"
+                    $needsDeviceCode = $true
                 } else {
-                    Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
-                    Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                    try {
+                        if ($connectUpn) {
+                            Connect-ExchangeOnline -UserPrincipalName $connectUpn -ShowBanner:$false -ErrorAction Stop
+                        } else {
+                            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                        }
+                    }
+                    catch {
+                        if ($_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker') {
+                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
+                            $needsDeviceCode = $true
+                        } else {
+                            throw
+                        }
+                    }
+                }
+
+                if ($needsDeviceCode) {
+                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                    if (-not $deviceParamExists) { throw "Exchange Online module does not support -Device parameter" }
+
+                    Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
+                    Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
+                    try { Start-Process "https://microsoft.com/devicelogin" } catch {}
+
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online Authentication",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Information
+                    ) | Out-Null
+
+                    Update-GuiStatus "Exchange Online: Waiting for device code authentication..." ([System.Drawing.Color]::Yellow)
+                    if ($connectUpn) {
+                        Connect-ExchangeOnline -UserPrincipalName $connectUpn -Device -ShowBanner:$false -ErrorAction Stop
+                    } else {
+                        Connect-ExchangeOnline -Device -ShowBanner:$false -ErrorAction Stop
+                    }
                 }
                 
                 # Verify connection worked
