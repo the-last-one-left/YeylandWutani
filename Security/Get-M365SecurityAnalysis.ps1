@@ -4642,6 +4642,9 @@ function Get-SignInDataFromExchangeOnline {
                     $auditDetails.ClientIPAddress
                 } elseif ($auditDetails.ActorIpAddress) {
                     $auditDetails.ActorIpAddress
+                } elseif ($auditDetails.ExtendedProperties) {
+                    $ipProp = $auditDetails.ExtendedProperties | Where-Object { $_.Name -eq "ipaddr" -or $_.Name -eq "IP" -or $_.Name -eq "IPAddress" } | Select-Object -First 1
+                    if ($ipProp) { $ipProp.Value } else { "Unknown" }
                 } else {
                     "Unknown"
                 }
