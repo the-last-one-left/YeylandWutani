@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.6"
+$ScriptVer = "11.7"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -3008,65 +3008,39 @@ function Connect-TenantServices {
             $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
             if ($userPrincipalName) {
-                # PowerShell 5.1: Use device code flow if available (more compatible)
-                # PowerShell 7+: Use interactive browser auth
-                if ($isPowerShell51) {
-                    Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
+                # All PowerShell versions: use interactive auth with WinForms SynchronizationContext
+                # cleared during MSAL/WAM init to avoid RuntimeBroker NullReferenceException.
+                # (MSAL's RuntimeBroker constructor accesses SynchronizationContext.Current; the
+                # WindowsFormsSynchronizationContext installed by this GUI causes a null dereference
+                # inside the WAM SDK. Clearing it temporarily fixes init without affecting the auth
+                # dialog itself.)
+                Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) — connecting to Exchange Online (interactive auth)" -Level "Info"
+                Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)  |  clearing WinForms SynchronizationContext for MSAL init" -Level "Info"
+                Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
 
-                    # Check if -Device parameter exists in this version of the module
-                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
-
-                    if ($deviceParamExists) {
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                    } else {
-                        Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
-                        Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
-                } else {
-                    # PowerShell 7+ WAM path.
-                    #
-                    # ROOT CAUSE of RuntimeBroker NullReferenceException:
-                    # When WinForms starts its message loop it installs WindowsFormsSynchronizationContext
-                    # as SynchronizationContext.Current on the UI thread. MSAL's RuntimeBroker constructor
-                    # (EXO module 3.5+ ships a newer MSAL) now accesses SynchronizationContext.Current
-                    # during init to marshal COM calls for WAM. WindowsFormsSynchronizationContext causes
-                    # a null dereference inside the WAM SDK. Older EXO/MSAL never touched the sync
-                    # context in the constructor, which is why this used to work.
-                    #
-                    # FIX: temporarily clear the sync context so MSAL initialises RuntimeBroker in
-                    # console mode (no SynchronizationContext), then restore it. WAM auth itself
-                    # still pops the Windows sign-in dialog normally; only the init path changes.
-                    Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) — attempting WAM interactive authentication" -Level "Info"
-                    Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)  |  clearing WinForms SynchronizationContext for WAM init" -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
-
-                    $savedSyncCtx = [System.Threading.SynchronizationContext]::Current
-                    [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
-                    try {
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
-                    catch {
-                        # If WAM still fails (e.g. WAM service unavailable on this machine),
-                        # fall back to device code so the user is never hard-blocked.
-                        $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
-                        if ($isWamError) {
-                            Write-Log "WAM failed even without WinForms SyncContext — falling back to device code" -Level "Warning"
-                            Update-GuiStatus "Exchange Online: WAM unavailable, using device code flow..." ([System.Drawing.Color]::Yellow)
-                            $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
-                            if ($deviceParamExists) {
-                                Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                            } else {
-                                throw
-                            }
+                $savedSyncCtx = [System.Threading.SynchronizationContext]::Current
+                [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
+                try {
+                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
+                }
+                catch {
+                    # Only fall back to device code if WAM/broker is genuinely unavailable
+                    $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
+                    if ($isWamError) {
+                        Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
+                        Update-GuiStatus "Exchange Online: WAM unavailable, using device code flow..." ([System.Drawing.Color]::Yellow)
+                        $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                        if ($deviceParamExists) {
+                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
                         } else {
                             throw
                         }
+                    } else {
+                        throw
                     }
-                    finally {
-                        [System.Threading.SynchronizationContext]::SetSynchronizationContext($savedSyncCtx)
-                    }
+                }
+                finally {
+                    [System.Threading.SynchronizationContext]::SetSynchronizationContext($savedSyncCtx)
                 }
             } else {
                 Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
