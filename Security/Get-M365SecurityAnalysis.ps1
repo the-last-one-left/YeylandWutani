@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.4"
+$ScriptVer = "11.10"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -3008,65 +3008,61 @@ function Connect-TenantServices {
             $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
             if ($userPrincipalName) {
-                # PowerShell 5.1: Use device code flow if available (more compatible)
-                # PowerShell 7+: Use interactive browser auth
-                if ($isPowerShell51) {
-                    Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
+                Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)" -Level "Info"
 
-                    # Check if -Device parameter exists in this version of the module
-                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                # WAM/RuntimeBroker crashes when MSAL is initialised from a WinForms GUI thread
+                # regardless of SynchronizationContext tricks (EXO 3.x / MSAL 4.x+).
+                # Detect WinForms context and skip WAM entirely; fall straight through to the
+                # enhanced device-code path which opens the browser and shows the user the code.
+                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
+                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
+                } else { "" }
+                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
 
-                    if ($deviceParamExists) {
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                    } else {
-                        Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
-                        Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
+                $needsDeviceCode = $false
+
+                if ($isWinFormsCtx) {
+                    Write-Log "WinForms GUI context — skipping WAM (RuntimeBroker incompatible), using device code" -Level "Info"
+                    $needsDeviceCode = $true
                 } else {
-                    # PowerShell 7+ WAM path.
-                    #
-                    # ROOT CAUSE of RuntimeBroker NullReferenceException:
-                    # When WinForms starts its message loop it installs WindowsFormsSynchronizationContext
-                    # as SynchronizationContext.Current on the UI thread. MSAL's RuntimeBroker constructor
-                    # (EXO module 3.5+ ships a newer MSAL) now accesses SynchronizationContext.Current
-                    # during init to marshal COM calls for WAM. WindowsFormsSynchronizationContext causes
-                    # a null dereference inside the WAM SDK. Older EXO/MSAL never touched the sync
-                    # context in the constructor, which is why this used to work.
-                    #
-                    # FIX: temporarily clear the sync context so MSAL initialises RuntimeBroker in
-                    # console mode (no SynchronizationContext), then restore it. WAM auth itself
-                    # still pops the Windows sign-in dialog normally; only the init path changes.
-                    Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) — attempting WAM interactive authentication" -Level "Info"
-                    Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)  |  clearing WinForms SynchronizationContext for WAM init" -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
-
-                    $savedSyncCtx = [System.Threading.SynchronizationContext]::Current
-                    [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
+                    # Non-GUI context: try standard interactive auth
+                    Write-Log "Connecting to Exchange Online (interactive auth)..." -Level "Info"
+                    Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
                     try {
                         Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
                     }
                     catch {
-                        # If WAM still fails (e.g. WAM service unavailable on this machine),
-                        # fall back to device code so the user is never hard-blocked.
                         $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
                         if ($isWamError) {
-                            Write-Log "WAM failed even without WinForms SyncContext — falling back to device code" -Level "Warning"
-                            Update-GuiStatus "Exchange Online: WAM unavailable, using device code flow..." ([System.Drawing.Color]::Yellow)
-                            $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
-                            if ($deviceParamExists) {
-                                Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                            } else {
-                                throw
-                            }
+                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
+                            $needsDeviceCode = $true
                         } else {
                             throw
                         }
                     }
-                    finally {
-                        [System.Threading.SynchronizationContext]::SetSynchronizationContext($savedSyncCtx)
+                }
+
+                if ($needsDeviceCode) {
+                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                    if (-not $deviceParamExists) {
+                        throw "Exchange Online module does not support device code auth (-Device parameter missing)"
                     }
+
+                    Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
+                    Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
+
+                    # Open browser to device login page before the code is printed to console
+                    try { Start-Process "https://microsoft.com/devicelogin" } catch {}
+
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online Authentication",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Information
+                    ) | Out-Null
+
+                    Update-GuiStatus "Exchange Online: Waiting for device code authentication..." ([System.Drawing.Color]::Yellow)
+                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
                 }
             } else {
                 Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
@@ -3344,34 +3340,58 @@ function Connect-ExchangeOnlineIfNeeded {
                 Write-Log "Retrieving authenticated account from Graph session..." -Level "Info"
                 $graphContext = Get-MgContext
                 $userPrincipalName = $graphContext.Account
-                $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
-                if ($userPrincipalName) {
-                    # PowerShell 5.1: Use device code flow if available (more compatible)
-                    # PowerShell 7+: Use interactive browser auth
-                    if ($isPowerShell51) {
-                        Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
-                        Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
+                # Check for WinForms GUI context — WAM/RuntimeBroker crashes in this context
+                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
+                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
+                } else { "" }
+                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
 
-                        # Check if -Device parameter exists in this version of the module
-                        $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                $needsDeviceCode = $false
+                $connectUpn = if ($userPrincipalName) { $userPrincipalName } else { $null }
 
-                        if ($deviceParamExists) {
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                        } else {
-                            Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
-                            Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                        }
-                    } else {
-                        Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
-                        Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
+                if ($isWinFormsCtx) {
+                    Write-Log "WinForms GUI context — skipping WAM, using device code" -Level "Info"
+                    $needsDeviceCode = $true
                 } else {
-                    Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
-                    Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                    Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                    try {
+                        if ($connectUpn) {
+                            Connect-ExchangeOnline -UserPrincipalName $connectUpn -ShowBanner:$false -ErrorAction Stop
+                        } else {
+                            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
+                        }
+                    }
+                    catch {
+                        if ($_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker') {
+                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
+                            $needsDeviceCode = $true
+                        } else {
+                            throw
+                        }
+                    }
+                }
+
+                if ($needsDeviceCode) {
+                    $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
+                    if (-not $deviceParamExists) { throw "Exchange Online module does not support -Device parameter" }
+
+                    Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
+                    Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
+                    try { Start-Process "https://microsoft.com/devicelogin" } catch {}
+
+                    [System.Windows.Forms.MessageBox]::Show(
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online Authentication",
+                        [System.Windows.Forms.MessageBoxButtons]::OK,
+                        [System.Windows.Forms.MessageBoxIcon]::Information
+                    ) | Out-Null
+
+                    Update-GuiStatus "Exchange Online: Waiting for device code authentication..." ([System.Drawing.Color]::Yellow)
+                    if ($connectUpn) {
+                        Connect-ExchangeOnline -UserPrincipalName $connectUpn -Device -ShowBanner:$false -ErrorAction Stop
+                    } else {
+                        Connect-ExchangeOnline -Device -ShowBanner:$false -ErrorAction Stop
+                    }
                 }
                 
                 # Verify connection worked
@@ -4091,11 +4111,12 @@ function Get-TenantSignInData {
         
         Update-GuiStatus "Extracting unique IP addresses..." ([System.Drawing.Color]::Orange)
         
-        $uniqueIPs = $signInLogs | 
-            Where-Object { -not [string]::IsNullOrEmpty($_.IpAddress) } | 
+        $uniqueIPs = $signInLogs |
+            Where-Object { -not [string]::IsNullOrEmpty($_.IpAddress) -and $_.IpAddress -ne "Unknown" } |
             Select-Object -ExpandProperty IpAddress -Unique
-        
+
         Write-Log "Found $($uniqueIPs.Count) unique IP addresses (IPv4 and IPv6)" -Level "Info"
+
         
         #═══════════════════════════════════════════════════════════════════════
         # PERFORM GEOLOCATION LOOKUPS WITH IPv6 SUPPORT
@@ -4174,8 +4195,8 @@ function Get-TenantSignInData {
             $ipVersion = "Unknown"
             $isPrivateIP = $false
             
-            # Apply geolocation data if available
-            if (-not [string]::IsNullOrEmpty($ip)) {
+            # Apply geolocation data if available (skip placeholder "Unknown" values)
+            if (-not [string]::IsNullOrEmpty($ip) -and $ip -ne "Unknown") {
                 #═══════════════════════════════════════════════════════════════
                 # VALIDATE IP ADDRESS (IPv4 or IPv6)
                 #═══════════════════════════════════════════════════════════════
@@ -4326,12 +4347,12 @@ function Get-TenantSignInData {
             $userId = $userGroup.Name
             $userSignIns = $userGroup.Group
             
-            $uniqueUserLocations = $userSignIns | 
+            $uniqueUserLocations = $userSignIns |
                 Select-Object UserId, UserDisplayName, IP, IPVersion, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) }
-            
+                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
+
             foreach ($location in $uniqueUserLocations) {
-                $signInCount = ($userSignIns | Where-Object { 
+                $signInCount = ($userSignIns | Where-Object {
                     $_.IP -eq $location.IP -and 
                     $_.City -eq $location.City -and 
                     $_.Country -eq $location.Country 
@@ -4404,9 +4425,12 @@ function Get-TenantSignInData {
         Write-Log "  IPv6 Addresses: $ipv6Count" -Level "Info"
         Write-Log "  Private IPs: $privateIPCount" -Level "Info"
         Write-Log "Unusual Locations: $($unusualSignIns.Count)" -Level "Info"
-        Write-Log "Failed Sign-ins: $($failedSignIns.Count)" -Level "Info"
         Write-Log "Unique IP Locations: $($uniqueLogins.Count)" -Level "Info"
         Write-Log "Geolocation Cache: $($ipCache.Count) IPs cached" -Level "Info"
+        if (-not $isPremiumTenant -and $ipv4Count -eq 0 -and $ipv6Count -eq 0) {
+            Write-Log "  Note: IP addresses were null in these audit records (varies by tenant auth flow)" -Level "Info"
+        }
+        Write-Log "Failed Sign-ins: $($failedSignIns.Count)" -Level "Info"
         Write-Log "Output Files:" -Level "Info"
         Write-Log "  Main: $OutputPath" -Level "Info"
         if ($unusualSignIns.Count -gt 0) {
@@ -4640,6 +4664,9 @@ function Get-SignInDataFromExchangeOnline {
                     $auditDetails.ClientIP
                 } elseif ($auditDetails.ClientIPAddress) {
                     $auditDetails.ClientIPAddress
+                } elseif ($auditDetails.IPAddress) {
+                    # AzureActiveDirectoryStsLogon (RecordType 15) uses IPAddress as top-level field
+                    $auditDetails.IPAddress
                 } elseif ($auditDetails.ActorIpAddress) {
                     $auditDetails.ActorIpAddress
                 } elseif ($auditDetails.ExtendedProperties) {
@@ -7858,9 +7885,9 @@ function Invoke-CompromiseDetection {
             $userId = $userGroup.Name
             $userSignIns = $userGroup.Group
             
-            $uniqueUserLocations = $userSignIns | 
+            $uniqueUserLocations = $userSignIns |
                 Select-Object UserId, UserDisplayName, IP, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) }
+                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
             
             foreach ($location in $uniqueUserLocations) {
                 $signInCount = ($userSignIns | Where-Object { 
