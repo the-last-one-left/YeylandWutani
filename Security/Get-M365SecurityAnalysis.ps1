@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.4"
+$ScriptVer = "11.5"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -4640,6 +4640,9 @@ function Get-SignInDataFromExchangeOnline {
                     $auditDetails.ClientIP
                 } elseif ($auditDetails.ClientIPAddress) {
                     $auditDetails.ClientIPAddress
+                } elseif ($auditDetails.IPAddress) {
+                    # AzureActiveDirectoryStsLogon (RecordType 15) uses IPAddress as top-level field
+                    $auditDetails.IPAddress
                 } elseif ($auditDetails.ActorIpAddress) {
                     $auditDetails.ActorIpAddress
                 } elseif ($auditDetails.ExtendedProperties) {
