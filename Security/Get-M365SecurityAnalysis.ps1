@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.5"
+$ScriptVer = "11.6"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -3347,27 +3347,9 @@ function Connect-ExchangeOnlineIfNeeded {
                 $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
 
                 if ($userPrincipalName) {
-                    # PowerShell 5.1: Use device code flow if available (more compatible)
-                    # PowerShell 7+: Use interactive browser auth
-                    if ($isPowerShell51) {
-                        Write-Log "PowerShell 5.1 detected - attempting device code authentication" -Level "Info"
-                        Update-GuiStatus "Connecting to Exchange Online (device code for PS 5.1)..." ([System.Drawing.Color]::Yellow)
-
-                        # Check if -Device parameter exists in this version of the module
-                        $deviceParamExists = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('Device')
-
-                        if ($deviceParamExists) {
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -Device -ShowBanner:$false -ErrorAction Stop
-                        } else {
-                            Write-Log "Device parameter not available - using standard authentication for PS 5.1" -Level "Info"
-                            Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
-                            Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                        }
-                    } else {
-                        Write-Log "PowerShell $($PSVersionTable.PSVersion.Major) detected - using interactive authentication" -Level "Info"
-                        Update-GuiStatus "Connecting to Exchange Online (interactive auth)..." ([System.Drawing.Color]::Yellow)
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
+                    Write-Log "Connecting to Exchange Online as $userPrincipalName" -Level "Info"
+                    Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
+                    Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
                 } else {
                     Write-Log "No authenticated account found in Graph context - using direct connection" -Level "Warning"
                     Update-GuiStatus "Exchange Online: Waiting for authentication..." ([System.Drawing.Color]::Yellow)
@@ -4091,11 +4073,15 @@ function Get-TenantSignInData {
         
         Update-GuiStatus "Extracting unique IP addresses..." ([System.Drawing.Color]::Orange)
         
-        $uniqueIPs = $signInLogs | 
-            Where-Object { -not [string]::IsNullOrEmpty($_.IpAddress) } | 
+        $uniqueIPs = $signInLogs |
+            Where-Object { -not [string]::IsNullOrEmpty($_.IpAddress) -and $_.IpAddress -ne "Unknown" } |
             Select-Object -ExpandProperty IpAddress -Unique
-        
+
         Write-Log "Found $($uniqueIPs.Count) unique IP addresses (IPv4 and IPv6)" -Level "Info"
+
+        if ($uniqueIPs.Count -eq 0 -and $signInLogs.Count -gt 0) {
+            Write-Log "No IP addresses available - Exchange Online fallback does not populate ClientIP for sign-in events (RecordType 15 limitation)" -Level "Info"
+        }
         
         #═══════════════════════════════════════════════════════════════════════
         # PERFORM GEOLOCATION LOOKUPS WITH IPv6 SUPPORT
@@ -4174,8 +4160,8 @@ function Get-TenantSignInData {
             $ipVersion = "Unknown"
             $isPrivateIP = $false
             
-            # Apply geolocation data if available
-            if (-not [string]::IsNullOrEmpty($ip)) {
+            # Apply geolocation data if available (skip placeholder "Unknown" values)
+            if (-not [string]::IsNullOrEmpty($ip) -and $ip -ne "Unknown") {
                 #═══════════════════════════════════════════════════════════════
                 # VALIDATE IP ADDRESS (IPv4 or IPv6)
                 #═══════════════════════════════════════════════════════════════
