@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.8"
+$ScriptVer = "11.9"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -4053,9 +4053,6 @@ function Get-TenantSignInData {
 
         Write-Log "Found $($uniqueIPs.Count) unique IP addresses (IPv4 and IPv6)" -Level "Info"
 
-        if ($uniqueIPs.Count -eq 0 -and $signInLogs.Count -gt 0) {
-            Write-Log "No IP addresses available - Exchange Online fallback does not populate ClientIP for sign-in events (RecordType 15 limitation)" -Level "Info"
-        }
         
         #═══════════════════════════════════════════════════════════════════════
         # PERFORM GEOLOCATION LOOKUPS WITH IPv6 SUPPORT
@@ -4360,15 +4357,14 @@ function Get-TenantSignInData {
         Write-Log "Data Source: $(if ($isPremiumTenant) { "Premium Graph API" } else { "Exchange Online Fallback" })" -Level "Info"
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
         Write-Log "Total Sign-ins: $($results.Count)" -Level "Info"
-        if ($isPremiumTenant) {
-            Write-Log "  IPv4 Addresses: $ipv4Count" -Level "Info"
-            Write-Log "  IPv6 Addresses: $ipv6Count" -Level "Info"
-            Write-Log "  Private IPs: $privateIPCount" -Level "Info"
-            Write-Log "Unusual Locations: $($unusualSignIns.Count)" -Level "Info"
-            Write-Log "Unique IP Locations: $($uniqueLogins.Count)" -Level "Info"
-            Write-Log "Geolocation Cache: $($ipCache.Count) IPs cached" -Level "Info"
-        } else {
-            Write-Log "  IP/Geolocation: Not available (requires Azure AD Premium P1/P2)" -Level "Warning"
+        Write-Log "  IPv4 Addresses: $ipv4Count" -Level "Info"
+        Write-Log "  IPv6 Addresses: $ipv6Count" -Level "Info"
+        Write-Log "  Private IPs: $privateIPCount" -Level "Info"
+        Write-Log "Unusual Locations: $($unusualSignIns.Count)" -Level "Info"
+        Write-Log "Unique IP Locations: $($uniqueLogins.Count)" -Level "Info"
+        Write-Log "Geolocation Cache: $($ipCache.Count) IPs cached" -Level "Info"
+        if (-not $isPremiumTenant -and $ipv4Count -eq 0 -and $ipv6Count -eq 0) {
+            Write-Log "  Note: IP addresses were null in these audit records (varies by tenant auth flow)" -Level "Info"
         }
         Write-Log "Failed Sign-ins: $($failedSignIns.Count)" -Level "Info"
         Write-Log "Output Files:" -Level "Info"
