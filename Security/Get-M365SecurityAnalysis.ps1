@@ -4551,7 +4551,7 @@ function Get-SignInDataFromExchangeOnline {
                     $pageResults = Search-UnifiedAuditLog `
                         -StartDate $currentStart `
                         -EndDate $currentEnd `
-                        -Operations "UserLoggedIn","UserLoginFailed","UserLoggedOut" `
+                        -RecordType "AzureActiveDirectoryStsLogon" `
                         -ResultSize 5000 `
                         -SessionId $sessionId `
                         -SessionCommand ReturnLargeSet `
@@ -4574,7 +4574,7 @@ function Get-SignInDataFromExchangeOnline {
                         $pageResults = Search-UnifiedAuditLog `
                             -StartDate $currentStart `
                             -EndDate $currentEnd `
-                            -RecordType "AzureActiveDirectory" `
+                            -RecordType "AzureActiveDirectoryStsLogon" `
                             -ResultSize 5000 `
                             -SessionId $sessionId `
                             -SessionCommand ReturnLargeSet `
