@@ -379,13 +379,17 @@ def _bulk_insert_nvd_dicts(entries):
 # NVD Update
 # ══════════════════════════════════════════════════════════════════════════
 
-def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bool = False) -> int:
+def update_nvd_cache(api_key: str = None, max_age_years: int = 5,
+                     force_full: bool = False, max_incremental_days: int = 10) -> int:
     """
     Fetch CVEs from NVD 2.0 API and store in SQLite.
 
     - Without api_key: 5 req/30 s limit.  With key: 50 req/30 s.
     - Date range is chunked into 119-day windows (NVD API limit).
     - Interrupted seeds resume from the last completed window.
+    - max_incremental_days: cap on how far back an incremental update looks.
+      Prevents runaway multi-hour fetches when the DB is very stale. CVEs older
+      than this that were missed are already in the DB from the initial seed.
     - Returns number of CVEs processed in this run.
     """
     _init_db()
@@ -409,7 +413,17 @@ def update_nvd_cache(api_key: str = None, max_age_years: int = 5, force_full: bo
             logger.info(f"NVD: Full fetch from {start_date.date()} (last {max_age_years} years)...")
     else:
         last_updated = datetime.fromisoformat(stats["nvd_last_updated"]).replace(tzinfo=timezone.utc)
-        start_date = last_updated - timedelta(days=1)
+        uncapped_start = last_updated - timedelta(days=1)
+        cap_start = now_utc - timedelta(days=max_incremental_days)
+        if uncapped_start < cap_start:
+            logger.info(
+                f"NVD: DB is {(now_utc - last_updated).days}d old — "
+                f"capping incremental window to last {max_incremental_days} days "
+                f"(from {cap_start.date()}). Earlier CVEs already in DB from initial seed."
+            )
+            start_date = cap_start
+        else:
+            start_date = uncapped_start
         logger.info(f"NVD: Incremental update from {start_date.date()}...")
 
     end_date = now_utc

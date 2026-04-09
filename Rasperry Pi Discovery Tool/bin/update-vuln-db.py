@@ -279,11 +279,13 @@ Examples:
         run_start = time.time()
         errors = 0
 
+        interval_days = config.get("vuln_db_update_interval_days", 7)
         print("  [1/3] Updating NVD CVE database (incremental)...")
         logger.info("Updating NVD CVE database (incremental)...")
         nvd_start = time.time()
         try:
-            nvd_count = update_nvd_cache(api_key=nvd_api_key)
+            nvd_count = update_nvd_cache(api_key=nvd_api_key,
+                                         max_incremental_days=interval_days + 3)
             _print_update_summary("NVD CVE Database", {"total": nvd_count, "duration_s": time.time() - nvd_start})
         except Exception as e:
             logger.error("NVD update failed: %s", e, exc_info=True)
