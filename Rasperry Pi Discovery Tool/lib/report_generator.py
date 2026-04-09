@@ -12,7 +12,7 @@ import html
 import io
 import json
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -388,6 +388,31 @@ def _hostname_source_badge(source: str) -> str:
     )
 
 
+def _calc_host_risk_score(host: dict) -> tuple:
+    """Returns (score: int, level: str) where level is CRITICAL/HIGH/MEDIUM/LOW/CLEAN."""
+    score = 0
+    sev_weights = {"CRITICAL": 30, "HIGH": 20, "MEDIUM": 10, "LOW": 5, "INFO": 1}
+    for flag in host.get("security_flags", []):
+        score += sev_weights.get(flag.get("severity", "LOW"), 5)
+    # EOL penalty
+    if any(
+        "end-of-life" in str(f.get("flag", "")).lower() or "eol" in str(f.get("flag", "")).lower()
+        for f in host.get("security_flags", [])
+    ):
+        score += 15
+    # Open port count (capped at 10 pts)
+    score += min(len(host.get("open_ports", [])), 10)
+    if score >= 50:
+        return (score, "CRITICAL")
+    if score >= 25:
+        return (score, "HIGH")
+    if score >= 10:
+        return (score, "MEDIUM")
+    if score > 0:
+        return (score, "LOW")
+    return (score, "CLEAN")
+
+
 def _build_device_rows(hosts: list, company_color: str) -> str:
     rows = ""
     for i, host in enumerate(hosts):
@@ -433,17 +458,41 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
         if hn_source and hostname not in ("N/A", ""):
             hn_source_badge = "<br>" + _hostname_source_badge(hn_source)
 
+        # Logged-in user
+        logged_in_user = host.get("logged_in_user", "")
+        user_info = ""
+        if logged_in_user:
+            user_info = f'<br><span style="color:#1a56db; font-size:10px;">&#128100; {logged_in_user}</span>'
+
         # OS guess
         os_guess = host.get("os_guess", "")
         os_info = ""
         if os_guess:
             os_info = f'<br><span style="color:#888; font-size:10px; font-style:italic;">OS: {os_guess[:80]}</span>'
 
-        # SSL cert expiry
+        # SSL cert expiry with color coding
         ssl_cert = services.get("ssl_cert", {}) or {}
         cert_info = ""
         if ssl_cert.get("expires"):
-            cert_info = f'<br><span style="color:#888; font-size:10px;">SSL exp: {ssl_cert["expires"][:20]}</span>'
+            try:
+                exp_str = ssl_cert["expires"]
+                exp_date = datetime.fromisoformat(exp_str.replace("Z", "+00:00"))
+                if exp_date.tzinfo is None:
+                    exp_date = exp_date.replace(tzinfo=timezone.utc)
+                days_left = (exp_date - datetime.now(timezone.utc)).days
+                if days_left < 0:
+                    cert_color = "#dc3545"
+                    cert_label = f"SSL EXPIRED ({abs(days_left)}d ago)"
+                elif days_left <= 30:
+                    cert_color = "#fd7e14"
+                    cert_label = f"SSL exp: {exp_str[:10]} ({days_left}d)"
+                else:
+                    cert_color = "#28a745"
+                    cert_label = f"SSL exp: {exp_str[:10]}"
+            except Exception:
+                cert_color = "#888"
+                cert_label = f"SSL exp: {ssl_cert['expires'][:20]}"
+            cert_info = f'<br><span style="color:{cert_color}; font-size:10px;">{cert_label}</span>'
 
         # Representative service version
         version_str = ""
@@ -474,6 +523,23 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
                 f'&#9650; {gw_label}</span>'
             )
 
+        # Host risk score badge
+        risk_score, risk_level = _calc_host_risk_score(host)
+        _risk_colors = {
+            "CRITICAL": ("#dc3545", "#fff"),
+            "HIGH": ("#fd7e14", "#fff"),
+            "MEDIUM": ("#ffc107", "#333"),
+            "LOW": ("#6c757d", "#fff"),
+            "CLEAN": ("#28a745", "#fff"),
+        }
+        risk_bg, risk_fg = _risk_colors.get(risk_level, ("#6c757d", "#fff"))
+        risk_badge = (
+            f'<div style="background:{risk_bg}; color:{risk_fg}; font-size:10px; font-weight:bold; '
+            f'text-align:center; padding:2px 6px; border-radius:3px;">{risk_level}</div>'
+            + (f'<div style="font-size:9px; color:#888; text-align:center;">{risk_score}pts</div>'
+               if risk_score > 0 else "")
+        )
+
         rows += f"""
         <tr style="background:{bg};">
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:12px; font-family:monospace;">{ip}{subnet_badge}</td>
@@ -481,10 +547,11 @@ def _build_device_rows(hosts: list, company_color: str) -> str:
             {icon} <span style="color:{company_color}; font-weight:bold;">{category}</span>
             {gw_badge}{http_title}{smb_info}{snmp_info}{os_info}{cert_info}
           </td>
-          <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; color:#555;">{hostname}{hn_source_badge}</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; color:#555;">{hostname}{hn_source_badge}{user_info}</td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; font-size:11px; font-family:monospace;">{mac}<br><span style="color:#888;">{vendor}</span></td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7;">{port_html}{version_str}</td>
           <td style="padding:7px 10px; border-bottom:1px solid #eef2f7;">{flag_html}</td>
+          <td style="padding:7px 10px; border-bottom:1px solid #eef2f7; text-align:center; vertical-align:middle;">{risk_badge}</td>
         </tr>"""
     return rows
 
@@ -1068,20 +1135,54 @@ def _build_security_section(hosts: list, company_color: str) -> str:
           &#10003; No significant security observations detected.
         </td></tr>"""
 
-    rows = ""
+    # Group flags by text — aggregate affected hosts per unique flag
+    severity_order = {"CRITICAL": 0, "HIGH": 1, "MEDIUM": 2, "LOW": 3, "INFO": 4}
+    groups: dict = {}
     for host in flagged:
         for flag in host.get("security_flags", []):
-            sev = flag.get("severity", "LOW")
-            rows += f"""
-            <tr>
-              <td style="padding:6px 10px; border-bottom:1px solid #f0f0f0; font-size:12px; font-family:monospace;">
-                {host.get('ip', 'N/A')}
+            key = flag.get("flag", "Unknown")
+            if key not in groups:
+                groups[key] = {"flag": key, "severity": flag.get("severity", "LOW"), "ips": [], "hostnames": []}
+            groups[key]["ips"].append(host.get("ip", "N/A"))
+            hn = host.get("hostname", "") or ""
+            if hn and hn not in groups[key]["hostnames"]:
+                groups[key]["hostnames"].append(hn)
+
+    sorted_groups = sorted(
+        groups.values(),
+        key=lambda g: (severity_order.get(g["severity"], 9), g["flag"]),
+    )
+
+    # Category header rows + per-group detail rows
+    rows = ""
+    for i, g in enumerate(sorted_groups):
+        bg = "#ffffff" if i % 2 == 0 else "#fafafa"
+        sev = g["severity"]
+        sev_colors = {
+            "CRITICAL": ("#fff5f5", "#c0392b"),
+            "HIGH": ("#fff8f0", "#c0680a"),
+            "MEDIUM": ("#fffbf0", "#856404"),
+            "LOW": ("#f8f9fa", "#555"),
+            "INFO": ("#f0f8ff", "#00628a"),
+        }
+        row_bg, accent = sev_colors.get(sev, ("#f8f9fa", "#555"))
+        ip_list = ", ".join(g["ips"][:5])
+        if len(g["ips"]) > 5:
+            ip_list += f" +{len(g['ips']) - 5} more"
+        count = len(g["ips"])
+        rows += f"""
+            <tr style="background:{row_bg}; border-bottom:1px solid #f0e0e0;">
+              <td style="padding:6px 10px; font-size:12px; font-family:monospace; color:#555; width:120px;">
+                {ip_list}
               </td>
-              <td style="padding:6px 10px; border-bottom:1px solid #f0f0f0; font-size:12px;">
-                {host.get('hostname', 'N/A')}
+              <td style="padding:6px 10px; font-size:12px; white-space:nowrap;">
+                {_severity_badge(sev)}
               </td>
-              <td style="padding:6px 10px; border-bottom:1px solid #f0f0f0; font-size:12px;">
-                {_severity_badge(sev)} {flag.get('flag', '')}
+              <td style="padding:6px 10px; font-size:12px; font-weight:bold; color:{accent};">
+                {g['flag']}
+              </td>
+              <td style="padding:6px 10px; font-size:11px; color:#888; text-align:center; width:40px;">
+                {count}
               </td>
             </tr>"""
     return rows
@@ -1454,7 +1555,7 @@ def _build_infrastructure_section(
     ntp_servers = (ntp_results or {}).get("ntp_servers", [])
     nac_info = nac_results or {}
 
-    if not ntp_servers and not nac_info:
+    if not ntp_servers and nac_results is None:
         return ""
 
     # NTP table
@@ -2362,6 +2463,7 @@ def _build_eol_section(eol_results: dict, company_color: str) -> str:
         key=lambda p: (severity_order.get(p["severity"], 9), p["product"]),
     )
 
+    now = datetime.now(timezone.utc)
     rows = ""
     for i, p in enumerate(sorted_products):
         bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
@@ -2377,6 +2479,35 @@ def _build_eol_section(eol_results: dict, company_color: str) -> str:
             f'font-size:10px; padding:1px 5px; border-radius:2px;">{sev}</span>'
         )
 
+        # Compute time-left urgency for EOL date
+        eol_date_str = p["eol_date"]
+        urgency_html = ""
+        try:
+            eol_dt = datetime.strptime(eol_date_str[:10], "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            months_left = (eol_dt.year - now.year) * 12 + (eol_dt.month - now.month)
+            if months_left < 0:
+                urgency_color = "#dc3545"
+                urgency_label = f"{abs(months_left)}mo overdue"
+                eol_date_style = f"color:{urgency_color}; font-weight:bold;"
+            elif months_left <= 3:
+                urgency_color = "#dc3545"
+                urgency_label = f"{months_left}mo left"
+                eol_date_style = f"color:{urgency_color}; font-weight:bold;"
+            elif months_left <= 12:
+                urgency_color = "#fd7e14"
+                urgency_label = f"{months_left}mo left"
+                eol_date_style = f"color:{urgency_color};"
+            else:
+                urgency_color = "#28a745"
+                urgency_label = f"{months_left}mo left"
+                eol_date_style = "color:#555;"
+            urgency_html = (
+                f'<br><span style="background:{urgency_color}22; color:{urgency_color}; '
+                f'font-size:9px; padding:1px 4px; border-radius:2px;">{urgency_label}</span>'
+            )
+        except Exception:
+            eol_date_style = "color:#555;"
+
         ips_display = ", ".join(p["ips"][:4])
         if len(p["ips"]) > 4:
             ips_display += f" +{len(p['ips']) - 4} more"
@@ -2385,7 +2516,7 @@ def _build_eol_section(eol_results: dict, company_color: str) -> str:
         <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
           <td style="padding:5px 8px; font-size:11px;">{sev_badge}</td>
           <td style="padding:5px 8px; font-size:12px; font-weight:bold;">{p['product']}</td>
-          <td style="padding:5px 8px; font-size:11px; color:#555;">{p['eol_date']}</td>
+          <td style="padding:5px 8px; font-size:11px; {eol_date_style}">{eol_date_str}{urgency_html}</td>
           <td style="padding:5px 8px; font-size:11px; text-align:center; font-weight:bold;">{len(p['ips'])}</td>
           <td style="padding:5px 8px; font-size:11px; font-family:monospace; color:#555;">{ips_display}</td>
           <td style="padding:5px 8px; font-size:10px; color:#888;">{p['notes'][:60]}</td>
@@ -2405,7 +2536,7 @@ def _build_eol_section(eol_results: dict, company_color: str) -> str:
         <tr style="background:#e8f4fb; color:#00628a;">
           <th style="padding:5px 8px; text-align:left; font-size:10px; width:65px;">Severity</th>
           <th style="padding:5px 8px; text-align:left; font-size:10px;">Product</th>
-          <th style="padding:5px 8px; text-align:left; font-size:10px; width:80px;">EOL Date</th>
+          <th style="padding:5px 8px; text-align:left; font-size:10px; width:110px;">EOL Date</th>
           <th style="padding:5px 8px; text-align:center; font-size:10px; width:50px;">Count</th>
           <th style="padding:5px 8px; text-align:left; font-size:10px;">Affected Devices</th>
           <th style="padding:5px 8px; text-align:left; font-size:10px;">Notes</th>
@@ -3046,6 +3177,190 @@ def _build_ai_insights_section(ai_insights: str, company_color: str) -> str:
 """
 
 
+def _build_subnet_breakdown_section(hosts: list, recon: dict, summary: dict, company_color: str) -> str:
+    """Build per-subnet device count and risk breakdown table."""
+    if not hosts:
+        return ""
+
+    # Aggregate hosts by subnet (use subnet_label + cidr combo as key)
+    subnet_map: dict = {}
+    for host in hosts:
+        label = host.get("subnet_label", "") or ""
+        cidr = host.get("subnet_cidr", "") or ""
+        key = cidr or label or "Primary"
+        display = f"{cidr} ({label})" if cidr and label else cidr or label or "Primary Subnet"
+        if key not in subnet_map:
+            subnet_map[key] = {"display": display, "hosts": [], "flags": 0}
+        subnet_map[key]["hosts"].append(host)
+        subnet_map[key]["flags"] += len(host.get("security_flags", []))
+
+    # Also pull additional subnets from recon (may have 0 hosts if discovered but not yet scanned)
+    for sn in recon.get("additional_subnets", []):
+        cidr = sn.get("cidr", "")
+        if cidr and cidr not in subnet_map:
+            subnet_map[cidr] = {"display": cidr, "hosts": [], "flags": 0}
+
+    if len(subnet_map) < 2:
+        return ""  # Don't show for single-subnet networks
+
+    rows = ""
+    for i, (key, data) in enumerate(
+        sorted(subnet_map.items(), key=lambda x: -len(x[1]["hosts"]))
+    ):
+        bg = "#ffffff" if i % 2 == 0 else "#f9fbfd"
+        host_list = data["hosts"]
+        count = len(host_list)
+        flag_count = data["flags"]
+
+        # Category mini-breakdown
+        cat_counts: dict = {}
+        for h in host_list:
+            c = h.get("category", "Unknown")
+            cat_counts[c] = cat_counts.get(c, 0) + 1
+        cat_html = " ".join(
+            f'<span style="background:#e8f0fe; color:#1a56db; font-size:9px; '
+            f'padding:1px 4px; border-radius:2px; margin-right:2px;">'
+            f'{_cat_icon(c)} {n}</span>'
+            for c, n in sorted(cat_counts.items(), key=lambda x: -x[1])[:4]
+        )
+
+        # Risk badge for subnet
+        if flag_count == 0:
+            subnet_risk_html = '<span style="color:#28a745; font-size:11px;">&#10003; Clean</span>'
+        elif flag_count <= 3:
+            subnet_risk_html = f'<span style="color:#fd7e14; font-size:11px;">&#9888; {flag_count} flag(s)</span>'
+        else:
+            subnet_risk_html = f'<span style="color:#dc3545; font-size:11px; font-weight:bold;">&#9888; {flag_count} flags</span>'
+
+        rows += f"""
+        <tr style="background:{bg}; border-bottom:1px solid #eef2f7;">
+          <td style="padding:6px 10px; font-size:12px; font-family:monospace; color:#333;">{data['display']}</td>
+          <td style="padding:6px 10px; font-size:13px; font-weight:bold; color:{company_color}; text-align:center; width:50px;">{count}</td>
+          <td style="padding:6px 10px; font-size:11px;">{cat_html}</td>
+          <td style="padding:6px 10px; font-size:11px; width:100px;">{subnet_risk_html}</td>
+        </tr>"""
+
+    return f"""
+  <!-- ═══ SUBNET BREAKDOWN ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#9655; Subnet Breakdown
+      </h2>
+      <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
+        <tr style="background:#e8f4fb; color:#00628a;">
+          <th style="padding:6px 10px; text-align:left; font-size:10px;">Subnet</th>
+          <th style="padding:6px 10px; text-align:center; font-size:10px; width:50px;">Devices</th>
+          <th style="padding:6px 10px; text-align:left; font-size:10px;">Device Types</th>
+          <th style="padding:6px 10px; text-align:left; font-size:10px; width:100px;">Security</th>
+        </tr>
+        {rows}
+      </table>
+    </td>
+  </tr>"""
+
+
+def _build_quick_wins_section(hosts: list, scan_results: dict, company_color: str) -> str:
+    """Build a Quick Wins action box — top 3-5 prioritized actions for the SE."""
+    wins: list = []  # (priority, icon, text, detail)
+
+    # CRITICAL / HIGH security flags → top priority
+    critical_hosts = [h for h in hosts if any(
+        f.get("severity") in ("CRITICAL", "HIGH") for f in h.get("security_flags", [])
+    )]
+    if critical_hosts:
+        ips = ", ".join(h.get("ip", "") for h in critical_hosts[:3])
+        extra = f" +{len(critical_hosts) - 3} more" if len(critical_hosts) > 3 else ""
+        wins.append((1, "&#128308;", "Address critical security findings",
+                     f"Devices with HIGH/CRITICAL flags: {ips}{extra}"))
+
+    # EOL devices
+    eol_results = scan_results.get("eol_detection", {})
+    eol_count = len(eol_results.get("eol_devices", []))
+    if eol_count:
+        wins.append((2, "&#128308;", f"Replace or patch {eol_count} end-of-life product(s)",
+                     "EOL systems no longer receive security updates — patch cycle proposal opportunity"))
+
+    # No NAC detected
+    nac = scan_results.get("nac", {})
+    if nac is not None and not nac.get("nac_detected", True):
+        wins.append((3, "&#128993;", "Propose 802.1X / NAC deployment",
+                     "No network access control detected — any device can connect to the network"))
+
+    # Expired or soon-expiring SSL certs
+    ssl_audit = scan_results.get("ssl_audit", {})
+    expired_certs = [c for c in ssl_audit.get("certificates", [])
+                     if c.get("status") in ("Expired", "Expiring Soon")]
+    if expired_certs:
+        wins.append((3, "&#128993;", f"Renew {len(expired_certs)} SSL certificate(s)",
+                     "Expired certs cause browser warnings and service outages"))
+
+    # Default credentials / telnet / open management
+    weak_flags = []
+    for h in hosts:
+        for f in h.get("security_flags", []):
+            flag_text = f.get("flag", "").lower()
+            if any(kw in flag_text for kw in ("default cred", "telnet", "open management", "snmp public")):
+                weak_flags.append(h.get("ip", ""))
+    if weak_flags:
+        wins.append((2, "&#128308;", "Harden management access on network devices",
+                     f"Default credentials or unsecured management access: {', '.join(weak_flags[:4])}"))
+
+    # Old Windows / Server 2008 / 2012
+    old_windows = [h for h in hosts if any(
+        kw in (h.get("os_guess", "") or "").lower()
+        for kw in ("2008", "2012", "windows 7", "xp")
+    )]
+    if old_windows:
+        wins.append((2, "&#128308;", f"Upgrade {len(old_windows)} legacy Windows device(s)",
+                     f"Outdated OS versions detected: {', '.join(h.get('ip','') for h in old_windows[:3])}"))
+
+    # Backup
+    backup = scan_results.get("backup_posture", {})
+    if backup and not backup.get("backup_detected"):
+        wins.append((4, "&#128994;", "Implement a backup solution",
+                     "No backup service detected on this network"))
+
+    if not wins:
+        return ""
+
+    # Sort by priority, cap at 5
+    wins.sort(key=lambda x: x[0])
+    wins = wins[:5]
+
+    priority_style = {
+        1: ("background:#fff5f5; border-left:4px solid #dc3545;", "#dc3545"),
+        2: ("background:#fff8f0; border-left:4px solid #fd7e14;", "#fd7e14"),
+        3: ("background:#fffbf0; border-left:4px solid #ffc107;", "#856404"),
+        4: ("background:#f0f9f4; border-left:4px solid #28a745;", "#155724"),
+    }
+
+    items_html = ""
+    for priority, icon, text, detail in wins:
+        box_style, text_color = priority_style.get(priority, priority_style[4])
+        items_html += f"""
+      <div style="{box_style} border-radius:3px; padding:10px 14px; margin-bottom:8px;">
+        <div style="font-size:13px; font-weight:bold; color:{text_color};">{icon} {text}</div>
+        <div style="font-size:11px; color:#555; margin-top:3px;">{detail}</div>
+      </div>"""
+
+    return f"""
+  <!-- ═══ QUICK WINS ═══ -->
+  <tr>
+    <td style="padding:24px 36px 0 36px;">
+      <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0;
+                 border-bottom:2px solid {company_color}; padding-bottom:8px;">
+        &#9889; Quick Wins &amp; Recommended Actions
+      </h2>
+      <p style="font-size:12px; color:#555; margin:0 0 10px 0;">
+        Top prioritized actions identified from this scan — ready to present to the client.
+      </p>
+      {items_html}
+    </td>
+  </tr>"""
+
+
 def build_discovery_report(scan_results: dict, config: dict, ai_insights: Optional[str] = None) -> tuple:
     """
     Build subject + full HTML email report from scan_results dict.
@@ -3126,6 +3441,8 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
     device_rows = _build_device_rows(display_hosts, company_color)
     security_rows = _build_security_section(hosts, company_color)
     category_cards = _build_category_cards(summary, company_color)
+    subnet_breakdown_section = _build_subnet_breakdown_section(hosts, recon, summary, company_color)
+    quick_wins_section = _build_quick_wins_section(hosts, scan_results, company_color)
     services_table = _build_services_table(summary)
     msp_summary = _build_msp_summary(hosts, summary, recon, company_color)
     ai_insights_section = _build_ai_insights_section(ai_insights or "", company_color)
@@ -3217,6 +3534,8 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
 
   {ai_insights_section}
 
+  {quick_wins_section}
+
   <!-- ═══ EXECUTIVE SUMMARY ═══ -->
   <tr>
     <td style="padding:28px 36px 0 36px;">
@@ -3288,6 +3607,8 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
       </table>
     </td>
   </tr>
+
+  {subnet_breakdown_section}
 
   <!-- ─── GROUP DIVIDER: NETWORK INFRASTRUCTURE ─── -->
   <tr>
@@ -3365,9 +3686,10 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
 
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse;">
         <tr style="background:#c0392b; color:#fff;">
-          <th style="padding:8px 10px; text-align:left; font-size:12px; width:120px;">IP Address</th>
-          <th style="padding:8px 10px; text-align:left; font-size:12px; width:160px;">Hostname</th>
+          <th style="padding:8px 10px; text-align:left; font-size:12px; width:160px;">Affected Device(s)</th>
+          <th style="padding:8px 10px; text-align:left; font-size:12px; width:80px;">Severity</th>
           <th style="padding:8px 10px; text-align:left; font-size:12px;">Observation</th>
+          <th style="padding:8px 10px; text-align:center; font-size:12px; width:40px;">#</th>
         </tr>
         {security_rows}
       </table>
@@ -3430,11 +3752,12 @@ def build_discovery_report(scan_results: dict, config: dict, ai_insights: Option
       <table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse; font-size:12px;">
         <tr style="background:{company_color}; color:#fff;">
           <th style="padding:8px 10px; text-align:left; width:100px;">IP Address</th>
-          <th style="padding:8px 10px; text-align:left; width:140px;">Type</th>
-          <th style="padding:8px 10px; text-align:left; width:140px;">Hostname</th>
-          <th style="padding:8px 10px; text-align:left; width:130px;">MAC / Vendor</th>
+          <th style="padding:8px 10px; text-align:left; width:130px;">Type</th>
+          <th style="padding:8px 10px; text-align:left; width:130px;">Hostname</th>
+          <th style="padding:8px 10px; text-align:left; width:120px;">MAC / Vendor</th>
           <th style="padding:8px 10px; text-align:left;">Open Ports</th>
-          <th style="padding:8px 10px; text-align:left; width:80px;">Flags</th>
+          <th style="padding:8px 10px; text-align:left; width:70px;">Flags</th>
+          <th style="padding:8px 10px; text-align:center; width:65px;">Risk</th>
         </tr>
         {device_rows}
       </table>
