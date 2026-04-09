@@ -170,6 +170,40 @@ fi
 chmod +x "${INSTALL_DIR}/bin/"*.py 2>/dev/null || true
 chmod +x "${INSTALL_DIR}/bin/"*.sh 2>/dev/null || true
 
+# ── Update systemd service files if they changed ──────────────────────────────
+# If any .service files in systemd/ changed, copy them into /etc/systemd/system/
+# and run daemon-reload so the updated unit definitions take effect on the next
+# service start.  This requires root; silently skip if not running as root.
+SYSTEMD_SRC="${INSTALL_DIR}/systemd"
+SYSTEMD_DEST="/etc/systemd/system"
+if [[ $EUID -eq 0 ]] && [[ -d "${SYSTEMD_SRC}" ]]; then
+    SERVICE_CHANGED=0
+    for svc in "${SYSTEMD_SRC}"/*.service; do
+        [[ -f "${svc}" ]] || continue
+        svc_name="$(basename "${svc}")"
+        dest_file="${SYSTEMD_DEST}/${svc_name}"
+        if [[ ! -f "${dest_file}" ]] || ! diff -q "${svc}" "${dest_file}" &>/dev/null; then
+            if cp "${svc}" "${dest_file}"; then
+                log_ok "Service file updated: ${svc_name}"
+                SERVICE_CHANGED=1
+            else
+                log_warn "Could not update ${svc_name} in ${SYSTEMD_DEST}"
+            fi
+        fi
+    done
+    if [[ "${SERVICE_CHANGED}" -eq 1 ]]; then
+        if systemctl daemon-reload 2>/dev/null; then
+            log_ok "systemctl daemon-reload completed."
+        else
+            log_warn "systemctl daemon-reload failed."
+        fi
+    fi
+else
+    if [[ $EUID -ne 0 ]]; then
+        log "Not running as root — skipping service file update (needs manual: sudo cp + daemon-reload)."
+    fi
+fi
+
 # ── Refresh OUI vendor database ──────────────────────────────────────────────
 # The IEEE MA-L database grows as new vendors register OUIs.  Refresh it on
 # every successful code update so vendor identification stays current.

@@ -480,9 +480,6 @@ def main():
     logger.info(f"Network up. Waiting {_SETTLE_DELAY}s for DNS and routing to settle...")
     time.sleep(_SETTLE_DELAY)
 
-    # Auto-update from GitHub before proceeding (non-fatal if it fails)
-    _run_self_update()
-
     checkin_start = time.time()
 
     # Gather system info
