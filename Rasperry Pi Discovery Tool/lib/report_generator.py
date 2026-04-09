@@ -1543,6 +1543,7 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
     shodan = osint_results.get("shodan", {})
     dns_security = osint_results.get("dns_security", [])
     crtsh = osint_results.get("crtsh_subdomains", {})
+    ai_enrichment = osint_results.get("ai_enrichment", "")
 
     # Quick check: if we have essentially no data, skip the section
     has_data = (
@@ -1889,6 +1890,61 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
           {crtsh_rows}
         </table>"""
 
+    # ── AI enrichment card (company profile + exposure brief) ─────────────
+    ai_enrichment_html = ""
+    if ai_enrichment:
+        import re as _re2
+        ae_lines = ai_enrichment.splitlines()
+        ae_parts = []
+        in_ul = False
+        for ln in ae_lines:
+            s = ln.strip()
+            if not s:
+                if in_ul:
+                    ae_parts.append("</ul>")
+                    in_ul = False
+                ae_parts.append('<div style="height:5px;"></div>')
+                continue
+            if s.startswith("## "):
+                if in_ul:
+                    ae_parts.append("</ul>")
+                    in_ul = False
+                ae_parts.append(
+                    f'<div style="font-size:12px; font-weight:bold; color:{company_color}; '
+                    f'margin:10px 0 4px 0; border-bottom:1px solid #f0f0f0; padding-bottom:3px;">'
+                    f'{html.escape(s[3:])}</div>'
+                )
+            elif s.startswith(("- ", "* ", "• ")):
+                if not in_ul:
+                    ae_parts.append(
+                        '<ul style="margin:3px 0; padding-left:18px; '
+                        'color:#444; font-size:12px;">'
+                    )
+                    in_ul = True
+                ae_parts.append(f'<li style="padding:1px 0;">{html.escape(s[2:])}</li>')
+            else:
+                if in_ul:
+                    ae_parts.append("</ul>")
+                    in_ul = False
+                ae_parts.append(
+                    f'<p style="margin:3px 0; color:#444; font-size:12px;">'
+                    f'{html.escape(s)}</p>'
+                )
+        if in_ul:
+            ae_parts.append("</ul>")
+
+        ai_enrichment_html = f"""
+        <div style="margin-top:14px; background:#f5f9f5; border:1px solid #c8dfc8;
+                    border-radius:5px; padding:12px 16px;">
+          <div style="font-size:12px; font-weight:bold; color:#555; margin-bottom:8px;">
+            &#129302; AI Intelligence Brief
+            <span style="font-size:10px; font-weight:normal; color:#888; margin-left:6px;">
+              Powered by Hatz AI
+            </span>
+          </div>
+          {"".join(ae_parts)}
+        </div>"""
+
     return f"""
   <!-- ═══ OSINT / EXTERNAL RECONNAISSANCE ═══ -->
   <tr>
@@ -1901,6 +1957,7 @@ def _build_osint_section(osint_results: dict, company_color: str) -> str:
       {shodan_html}
       {dns_html}
       {crtsh_html}
+      {ai_enrichment_html}
     </td>
   </tr>"""
 
@@ -2976,9 +3033,9 @@ def _build_ai_insights_section(ai_insights: str, company_color: str) -> str:
   <tr>
     <td style="padding:24px 36px 0 36px;">
       <h2 style="color:{company_color}; font-size:17px; margin:0 0 12px 0; border-bottom:2px solid {company_color}; padding-bottom:8px;">
-        &#129302; AI Insights
+        &#129302; Sales Engineer Briefing
         <span style="font-size:11px; font-weight:normal; color:#888; margin-left:8px;">
-          Powered by Hatz AI &bull; {html.escape("claude-opus-4-6")}
+          AI Analysis &bull; Powered by Hatz AI
         </span>
       </h2>
       <div style="background:#f8f9ff; border:1px solid #dde2ff; border-radius:6px; padding:16px 20px;">

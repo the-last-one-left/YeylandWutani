@@ -141,7 +141,7 @@ def cleanup_after_send(timestamp_str: str):
     """
     removed = 0
     for suffix in (".csv", ".json", "_Summary_Report.pdf", "_Detail_Report.pdf",
-                   "_Product_Recommendations.pdf"):
+                   "_Product_Recommendations.pdf", "_Topology.html"):
         path = DATA_DIR / f"scan_{timestamp_str}{suffix}"
         try:
             if path.exists():
@@ -636,12 +636,42 @@ def main():
         else:
             logger.info("Product recommendations disabled in config.")
 
-        # Send report with CSV, JSON, and PDF attachments
+        # ── Generate topology map HTML (optional) ──────────────────────────
+        topo_path = None
+        if rep_cfg.get("enable_topology_map", True):
+            topo_path = DATA_DIR / f"scan_{timestamp_str}_Topology.html"
+            logger.info("Generating topology map...")
+            topo_start = time.time()
+            try:
+                from topology_generator import build_topology_html
+                topo_html = build_topology_html(scan_results, config)
+                topo_path.write_text(topo_html, encoding="utf-8")
+                logger.info(
+                    f"Topology map: {len(topo_html) // 1024:.0f} KB "
+                    f"({topo_path.name})  [{time.time() - topo_start:.1f}s]"
+                )
+            except ImportError:
+                logger.warning("topology_generator module not found — skipping topology map.")
+                topo_path = None
+            except Exception as e:
+                logger.error(f"Topology map generation failed: {e}", exc_info=True)
+                logger.info("Continuing without topology map.")
+                topo_path = None
+        else:
+            logger.info("Topology map disabled in config (reporting.enable_topology_map = false).")
+
+        # Send report with CSV, JSON, PDF, and topology attachments
         total_attach_kb = (gz_size + json_gz_path.stat().st_size) / 1024
         if pdf_paths:
             total_attach_kb += sum(Path(p).stat().st_size for p in pdf_paths) / 1024
+        if topo_path and topo_path.exists():
+            total_attach_kb += topo_path.stat().st_size / 1024
         logger.info(f"Sending discovery report email ({total_attach_kb:.0f} KB attachments)...")
-        attachment_paths = [str(csv_gz_path), str(json_gz_path)] + pdf_paths
+        attachment_paths = (
+            [str(csv_gz_path), str(json_gz_path)]
+            + pdf_paths
+            + ([str(topo_path)] if topo_path and topo_path.exists() else [])
+        )
         email_start = time.time()
         try:
             mailer.send_email(

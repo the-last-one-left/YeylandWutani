@@ -20,9 +20,11 @@ Options:
   --summary         Generate Summary Report PDF  (default: all three)
   --detail          Generate Detail Report PDF   (default: all three)
   --products        Generate Product Recommendations PDF  (default: all three)
+  --topology        Generate Topology Map HTML  (default: all)
   --no-summary      Skip Summary Report
   --no-detail       Skip Detail Report
   --no-products     Skip Product Recommendations Report
+  --no-topology     Skip Topology Map
 
 Examples:
   # Generate all three reports from the latest scan
@@ -133,26 +135,31 @@ def main() -> int:
     parser.add_argument("--color",       metavar="HEX",
                         help="Override brand color (e.g. '#00A0D9')")
     parser.add_argument("--summary",      action="store_true",
-                        help="Generate Summary Report (default: all three)")
+                        help="Generate Summary Report (default: all)")
     parser.add_argument("--detail",       action="store_true",
-                        help="Generate Detail Report (default: all three)")
+                        help="Generate Detail Report (default: all)")
     parser.add_argument("--products",     action="store_true",
-                        help="Generate Product Recommendations Report (default: all three)")
+                        help="Generate Product Recommendations Report (default: all)")
+    parser.add_argument("--topology",     action="store_true",
+                        help="Generate Topology Map HTML (default: all)")
     parser.add_argument("--no-summary",   action="store_true",
                         help="Skip Summary Report")
     parser.add_argument("--no-detail",    action="store_true",
                         help="Skip Detail Report")
     parser.add_argument("--no-products",  action="store_true",
                         help="Skip Product Recommendations Report")
+    parser.add_argument("--no-topology",  action="store_true",
+                        help="Skip Topology Map")
     args = parser.parse_args()
 
     # Decide which reports to generate.
     # If any explicit --X flag is given, only those reports are generated.
     # --no-X flags suppress specific reports regardless.
-    any_explicit = args.summary or args.detail or args.products
+    any_explicit = args.summary or args.detail or args.products or args.topology
     want_summary  = (not args.no_summary)  and (not any_explicit or args.summary)
     want_detail   = (not args.no_detail)   and (not any_explicit or args.detail)
     want_products = (not args.no_products) and (not any_explicit or args.products)
+    want_topology = (not args.no_topology) and (not any_explicit or args.topology)
 
     # ── Locate scan file ───────────────────────────────────────────────────
     if args.json:
@@ -291,13 +298,29 @@ def main() -> int:
         except Exception as e:
             logger.error(f"Product Recommendations generation failed: {e}", exc_info=True)
 
+    # ── Topology Map ───────────────────────────────────────────────────────
+    if want_topology:
+        out_path = out_dir / f"{stem}_Topology.html"
+        logger.info(f"Generating Topology Map -> {out_path}")
+        try:
+            from topology_generator import build_topology_html
+            topo_html = build_topology_html(scan_results, config)
+            out_path.write_text(topo_html, encoding="utf-8")
+            logger.info(f"  Topology Map: {len(topo_html)//1024:.0f} KB  ({out_path})")
+            logger.info(f"  Open in browser: file://{out_path}")
+            generated.append(str(out_path))
+        except ImportError as e:
+            logger.warning(f"topology_generator not available: {e} — skipping.")
+        except Exception as e:
+            logger.error(f"Topology Map generation failed: {e}", exc_info=True)
+
     if generated:
-        logger.info(f"Done. {len(generated)} PDF(s) generated:")
+        logger.info(f"Done. {len(generated)} file(s) generated:")
         for p in generated:
             logger.info(f"  {p}")
         return 0
     else:
-        logger.error("No PDFs were generated.")
+        logger.error("No reports were generated.")
         return 1
 
 

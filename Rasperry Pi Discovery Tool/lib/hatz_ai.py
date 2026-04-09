@@ -271,50 +271,56 @@ def get_hatz_insights(scan_results: dict, api_key: str) -> Optional[str]:
     )
 
     system_prompt = (
-        "You are a senior network security engineer performing an MSP security assessment. "
-        "Analyze the provided network discovery scan data and produce a concise, actionable "
-        "AI Insights summary for the client report.\n\n"
-        "Structure your response with these sections (use markdown headers):\n"
-        "## Key Findings\n"
-        "Bullet list of the 5-8 most significant security risks or observations. "
-        "When Active Directory enrichment data is present, integrate it — reference "
-        "domain functional level, stale accounts, password policy weaknesses, BitLocker "
-        "gaps, unusual local admins, 3rd-party services, trust relationships, and AD "
-        "security findings alongside network-level findings.\n\n"
-        "## Recommended Actions\n"
-        "Numbered list of prioritized remediation steps (most critical first). "
-        "Where AD data shows specific gaps (e.g. BitLocker off on a server, "
-        "excessive Domain Admins, missing account lockout), include targeted AD "
-        "hygiene recommendations alongside network hardening steps.\n\n"
-        "## Positive Observations\n"
-        "Brief note on what the network is doing well (1-3 items).\n\n"
-        "Keep the total response under 700 words. Be specific — reference actual IPs, "
-        "hostnames, domain names, account names, device types, or service names from "
-        "the data. Avoid generic advice that doesn't apply to the specific findings.\n\n"
+        "You are a technical sales consultant at an IT managed services and cybersecurity firm. "
+        "A sales engineer has just run an automated network discovery tool at a prospective "
+        "client site. Your job is to analyze the scan data and produce a concise briefing that "
+        "helps the sales engineer understand the environment and have a confident, informed "
+        "conversation with the client's decision maker.\n\n"
+        "Frame everything through a business lens — risks are business risks, gaps are "
+        "opportunities to add value, and findings should lead naturally toward managed "
+        "services, security, or technology refresh conversations.\n\n"
+        "Structure your response with these sections (use markdown headers):\n\n"
+        "## Environment Snapshot\n"
+        "2-4 sentences describing the environment: size, complexity, technology mix, and "
+        "notable infrastructure (AD domain, VoIP, wireless, servers, segmented subnets). "
+        "This is what the SE says when asked 'what did you find?' — keep it sharp.\n\n"
+        "## Technology Gaps & Opportunities\n"
+        "Bullet list of 5-8 observations framed as business risk or service opportunity. "
+        "Examples: 'End-of-life devices on X nodes create unpatched exposure and a hardware "
+        "refresh conversation', 'No visible backup infrastructure — data loss risk', "
+        "'Open management ports suggest flat network with no segmentation'. "
+        "When Active Directory enrichment data is present, include domain hygiene gaps "
+        "(stale accounts, weak password policy, BitLocker gaps, excessive admins) framed "
+        "as IT governance and compliance risk.\n\n"
+        "## Recommended Services\n"
+        "Numbered list of 3-6 service conversations to open, most impactful first. "
+        "Map each directly to a gap above. Examples: Managed Security / MDR, Hardware "
+        "Refresh, Network Segmentation Design, Backup & DR Assessment, Microsoft 365 "
+        "Security Hardening, AD Health & Hygiene Remediation. Be specific enough to be "
+        "credible but generic enough to apply to any MSP.\n\n"
+        "## What They're Doing Well\n"
+        "1-3 genuine positive observations. Credibility with the client depends on "
+        "acknowledging what works, not just problems.\n\n"
+        "Keep the total response under 650 words. Reference actual IPs, hostnames, "
+        "domain names, device counts, or product names from the data — generic statements "
+        "that could apply to any network undermine the SE's credibility.\n\n"
         "ACTIVE DIRECTORY DATA GUIDANCE:\n"
-        "- If ACTIVE DIRECTORY ENRICHMENT data is present, treat it as authoritative — "
-        "it comes from a credentialed scan of the domain controller. Domain mode, user "
-        "counts, and security findings are reliable.\n"
-        "- Stale accounts (>90 days inactive) represent an attack surface even if they "
-        "appear benign — flag them.\n"
-        "- If BitLocker is off on any server, this is a HIGH priority finding.\n"
-        "- Kerberoastable service accounts should be flagged and tied to an offline "
-        "password cracking risk.\n"
+        "- If ACTIVE DIRECTORY ENRICHMENT data is present, treat it as authoritative.\n"
+        "- Stale accounts (>90 days inactive, still enabled) signal poor IT hygiene — "
+        "frame as a compliance and insider risk.\n"
+        "- BitLocker off on servers is a data protection gap worth highlighting.\n"
+        "- Excessive Domain Admins or Kerberoastable SPNs signal privilege hygiene issues.\n"
         "- Domain functional level below Windows Server 2016 limits modern security "
-        "controls (e.g. Protected Users group, Credential Guard).\n"
-        "- External AD trusts expand the authentication boundary and should be reviewed.\n"
-        "- 3rd-party auto-start services are valuable context for the client — "
-        "mention backup agents, AV, RMM tools, or LOB software discovered.\n\n"
-        "IMPORTANT — OS fingerprint limitations:\n"
-        "- nmap cannot reliably distinguish Windows 10 from Windows 11 via passive TCP/IP "
-        "fingerprinting. Phrase as 'Windows 10/11 endpoints' unless AD or service banners "
-        "confirm the version.\n"
-        "- Windows Server classification from ports is generally reliable but individual "
-        "hosts may be misclassified — treat as indicative.\n"
-        "- Vendor/OUI data identifies the NIC manufacturer, not necessarily the device "
-        "type — do not over-interpret.\n"
-        "- Multi-OS nmap guesses (e.g. 'Windows 11 / FreeBSD') are low-confidence; "
-        "use device category as authoritative."
+        "controls — frame as a modernization conversation.\n"
+        "- 3rd-party auto-start services reveal the existing toolchain (RMM, AV, backup "
+        "agents, LOB apps) — reference when discussing the incumbent vendor landscape.\n\n"
+        "IMPORTANT — scan data limitations:\n"
+        "- nmap cannot reliably distinguish Windows 10 from Windows 11. Say 'Windows 10/11 "
+        "endpoints' unless AD or service banners confirm the version.\n"
+        "- Device category (endpoint/server/switch) is more reliable than OS version guesses.\n"
+        "- Vendor/OUI identifies NIC manufacturer, not device type — don't over-interpret.\n"
+        "- Absence of evidence is not evidence of absence: missing backup ports doesn't "
+        "mean no backup exists, it may be agent-based or off-network."
     )
 
     body = {
@@ -324,13 +330,13 @@ def get_hatz_insights(scan_results: dict, api_key: str) -> Optional[str]:
             {
                 "role": "user",
                 "content": (
-                    "Analyze this network discovery scan and provide AI insights "
-                    "for the security report:\n\n" + scan_text
+                    "Here is the network discovery scan data from a prospective client site. "
+                    "Produce the sales engineer briefing:\n\n" + scan_text
                 ),
             },
         ],
         "stream": False,
-        "temperature": 0.3,
+        "temperature": 0.4,
     }
 
     body_bytes = json.dumps(body).encode("utf-8")
@@ -375,4 +381,143 @@ def get_hatz_insights(scan_results: dict, api_key: str) -> Optional[str]:
             f"Hatz AI: unexpected error — {e}. "
             "Report will be generated without AI insights."
         )
+        return None
+
+
+def _build_osint_summary_text(osint_data: dict, recon: dict) -> str:
+    """Compact text representation of OSINT data for the enrichment call."""
+    lines = []
+
+    pub_ip = osint_data.get("public_ip", "")
+    ci     = osint_data.get("company_identification", {})
+    whois  = osint_data.get("whois", {})
+    dwhois = osint_data.get("domain_whois", {})
+    shodan = osint_data.get("shodan", {})
+    dns_sec = osint_data.get("dns_security", [])
+    crtsh  = osint_data.get("crtsh_subdomains", {})
+    ht_hostnames = osint_data.get("hackertarget_hostnames", [])
+
+    lines.append(f"Public IP: {pub_ip}")
+    lines.append(f"ISP/Org: {ci.get('isp', 'N/A')}  Location: {ci.get('city', '')}, {ci.get('region', '')}, {ci.get('country', '')}")
+    lines.append(f"Domains discovered: {', '.join(ci.get('domains', []))}")
+
+    if ci.get("domain_registrant"):
+        lines.append(f"Domain registrant: {ci['domain_registrant']}")
+    if ci.get("domain_registrar"):
+        lines.append(f"Domain registrar:  {ci['domain_registrar']}")
+
+    if whois:
+        lines.append(f"IP WHOIS org: {whois.get('org', whois.get('organization', 'N/A'))}")
+        lines.append(f"IP WHOIS netblock: {whois.get('cidr', whois.get('network', 'N/A'))}")
+
+    if dwhois:
+        lines.append(f"Domain created: {dwhois.get('created', 'N/A')}  expires: {dwhois.get('expires', 'N/A')}")
+
+    if ht_hostnames:
+        lines.append(f"Reverse-IP hostnames ({len(ht_hostnames)}): {', '.join(ht_hostnames[:12])}")
+
+    if shodan:
+        ports  = shodan.get("ports", [])
+        vulns  = shodan.get("vulns", [])
+        tags   = shodan.get("tags", [])
+        lines.append(f"Shodan exposed ports: {ports}")
+        if vulns:
+            lines.append(f"Shodan CVEs: {', '.join(vulns[:10])}")
+        if tags:
+            lines.append(f"Shodan tags: {', '.join(tags)}")
+
+    if dns_sec:
+        lines.append("DNS security checks:")
+        for check in dns_sec[:20]:
+            status = check.get("status", "")
+            name   = check.get("check", check.get("name", ""))
+            detail = check.get("detail", check.get("value", ""))
+            lines.append(f"  [{status}] {name}: {str(detail)[:120]}")
+
+    if crtsh:
+        total_subs = sum(len(v) for v in crtsh.values())
+        lines.append(f"Certificate transparency subdomains: {total_subs} across {len(crtsh)} domain(s)")
+        for domain, subs in list(crtsh.items())[:3]:
+            lines.append(f"  {domain}: {', '.join(list(subs)[:8])}")
+
+    recon_dns = recon.get("dns_servers", [])
+    if recon_dns:
+        lines.append(f"Internal DNS servers: {', '.join(recon_dns)}")
+
+    return "\n".join(lines)
+
+
+def get_hatz_osint_enrichment(osint_data: dict, recon: dict, api_key: str) -> Optional[str]:
+    """
+    Send OSINT scan data to Hatz AI for a focused company profile and internet
+    exposure summary.  Called at the end of Phase 13.
+
+    Returns a markdown string with two sections:
+      ## Company Profile
+      ## Internet Exposure Summary
+
+    Returns None on failure (logged as warning, does not abort workflow).
+    """
+    if not api_key or not api_key.strip():
+        return None
+
+    osint_text = _build_osint_summary_text(osint_data, recon)
+    if not osint_text.strip():
+        return None
+
+    logger.info(f"Hatz AI: requesting OSINT enrichment ({len(osint_text):,} chars)...")
+
+    system_prompt = (
+        "You are a technical sales consultant preparing a brief for a sales engineer "
+        "who is about to meet with a prospective client. Based on publicly available "
+        "OSINT data gathered about the client's internet presence, produce a concise "
+        "intelligence brief with exactly two sections.\n\n"
+        "## Company Profile\n"
+        "2-3 sentences identifying the organization: who they likely are, what industry "
+        "or sector they appear to be in (infer from domain name, registrant, ISP, "
+        "and hostnames), approximate size or maturity indicators from their internet "
+        "footprint. If you cannot make a confident identification, say so briefly.\n\n"
+        "## Internet Exposure Summary\n"
+        "Bullet list of 3-6 items covering: externally visible services or ports, "
+        "any CVEs or vulnerabilities flagged by Shodan, DNS hygiene gaps (missing SPF, "
+        "DMARC, DKIM), certificate transparency findings, and overall exposure risk "
+        "level (Low / Medium / High). Frame each item as a talking point the SE can "
+        "use in conversation — not raw technical data.\n\n"
+        "Keep the total response under 300 words. Be specific and reference actual "
+        "domain names, IPs, or service names from the data provided."
+    )
+
+    body = {
+        "model": HATZ_MODEL,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {
+                "role": "user",
+                "content": "OSINT data for the prospective client:\n\n" + osint_text,
+            },
+        ],
+        "stream": False,
+        "temperature": 0.3,
+    }
+
+    body_bytes = json.dumps(body).encode("utf-8")
+    req = urllib.request.Request(
+        HATZ_API_URL,
+        data=body_bytes,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "X-API-Key": api_key.strip(),
+        },
+        method="POST",
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            raw = resp.read().decode("utf-8")
+        parsed      = json.loads(raw)
+        enrichment  = parsed["choices"][0]["message"]["content"]
+        logger.info(f"Hatz AI: OSINT enrichment received — {len(enrichment):,} chars.")
+        return enrichment
+    except Exception as e:
+        logger.warning(f"Hatz AI: OSINT enrichment failed — {e}. Continuing without it.")
         return None

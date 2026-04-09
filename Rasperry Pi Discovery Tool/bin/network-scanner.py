@@ -164,6 +164,7 @@ DEFAULT_CONFIG = {
     "enable_crtsh_lookup": True,       # certificate transparency
     "enable_dns_security": True,       # MX, SPF, DKIM, DMARC analysis
     "enable_whois_lookup": True,       # WHOIS via RDAP / whois CLI
+    "enable_hatz_osint_enrichment": True,  # Hatz AI company profile + exposure brief
     # ── SSL/TLS Certificate Health Audit ──────────────────────────────────
     "enable_ssl_audit": True,
     "ssl_audit_timeout": 5,
@@ -210,6 +211,26 @@ DEFAULT_CONFIG = {
     # ── Kismet passive wireless IDS ───────────────────────────────────────
     "enable_kismet": False,           # opt-in: requires monitor-mode adapter + Pi 4+
     "kismet_duration": 90,
+    # ── Multi-subnet: SNMP gateway harvest ────────────────────────────────
+    # Walk the gateway's ARP table (ipNetToMediaTable) and routing table
+    # (ipRouteTable) via SNMP.  Seeds all devices the gateway has seen —
+    # including those on remote VLANs that don't respond to ICMP — directly
+    # into Phase 2 with their MAC addresses.
+    "enable_snmp_gateway_harvest": True,
+    # ── Multi-subnet: CDP/LLDP neighbor discovery ─────────────────────────
+    # Passively captures CDP (Cisco) and LLDP (IEEE 802.1AB) frames on the
+    # local interface.  Reveals neighboring switch management IPs and VLANs
+    # without any active probing.
+    "enable_cdp_lldp_discovery": True,
+    "cdp_lldp_timeout": 65,          # seconds to listen (CDP broadcasts every 60s)
+    # ── Multi-subnet: nmap host discovery on remote subnets ───────────────
+    # Use nmap -sn (ICMP + TCP SYN 80/443) in addition to fping when scanning
+    # additional subnets.  Catches hosts that block ICMP but respond to TCP.
+    "enable_nmap_remote_discovery": True,
+    # ── Multi-subnet: DNS PTR reverse-zone walk ────────────────────────────
+    # Batch PTR lookups for discovered subnets (≤/22).  Finds hosts with DNS
+    # records even if they don't respond to any probe.
+    "enable_dns_ptr_walk": True,
 }
 
 
@@ -758,6 +779,228 @@ def phase1c_dhcp_subnet_seeding(recon: dict, config: dict) -> dict:
     return recon
 
 
+# ── Phase 1d: SNMP Gateway Harvest ───────────────────────────────────────
+
+def phase1d_snmp_gateway_harvest(recon: dict, config: dict) -> dict:
+    """Walk the gateway's ARP table and routing table via SNMP.
+
+    ipNetToMediaTable (OID 1.3.6.1.2.1.4.22) maps IP->MAC for every host the
+    gateway has seen — including hosts on remote VLANs unreachable by ARP from
+    the Pi.  ipRouteTable (OID 1.3.6.1.2.1.4.21) reveals other subnets routed
+    through this gateway.
+
+    Results stored in:
+      recon["snmp_seeded_hosts"]  — {ip: mac_str} for all harvested ARP entries
+      recon["additional_subnets"] — new CIDRs appended from routing table
+    """
+    logger.info("[Phase 1d] SNMP gateway ARP/route harvest...")
+
+    gw = recon.get("default_gateway")
+    if not gw:
+        logger.info("  No default gateway — skipping SNMP harvest.")
+        return recon
+
+    communities = config.get("snmp_community_strings",
+                             ["public", "private", "community", "admin", "cisco", "snmp"])
+    timeout     = config.get("snmp_timeout", 2)
+
+    # Find a working community string via a quick sysDescr probe
+    working_community = None
+    for community in communities:
+        test = _snmp_walk(gw, "1.3.6.1.2.1.1.1.0", community, timeout=timeout)
+        if test:
+            working_community = community
+            logger.info(f"  SNMP community '{community}' accepted by {gw}")
+            break
+
+    if not working_community:
+        logger.info(f"  SNMP: no working community string for {gw} — skipping.")
+        return recon
+
+    # ── ARP table: ipNetToMediaPhysAddress ────────────────────────────────
+    seeded: dict = {}
+    arp_rows = _snmp_walk(gw, "1.3.6.1.2.1.4.22.1.2", working_community, timeout=timeout)
+    for oid_str, val_type, val in arp_rows:
+        # OID suffix: <ifIndex>.<a>.<b>.<c>.<d>  — last 4 octets = IP
+        parts = oid_str.split(".")
+        if len(parts) < 4:
+            continue
+        ip = ".".join(parts[-4:])
+        try:
+            ipaddress.IPv4Address(ip)
+        except ValueError:
+            continue
+        if val_type == "Hex-STRING":
+            mac = _parse_mac_from_hex(val)
+        elif val_type == "STRING" and ":" in val:
+            mac = val.strip().lower()
+        else:
+            mac = ""
+        seeded[ip] = mac
+
+    logger.info(f"  ARP table: {len(seeded)} entries harvested from {gw}")
+    recon.setdefault("snmp_seeded_hosts", {}).update(seeded)
+
+    # ── Routing table: ipRouteTable — discover new subnets ────────────────
+    known_nets = []
+    for cidr in recon.get("subnets", []):
+        try:
+            known_nets.append(ipaddress.IPv4Network(cidr, strict=False))
+        except ValueError:
+            pass
+
+    # Walk ipRouteDest (col 1) and ipRouteMask (col 11) together
+    route_dest: dict = {}   # dest_ip -> mask
+    for col, col_label in [("1.3.6.1.2.1.4.21.1.1", "dest"),
+                           ("1.3.6.1.2.1.4.21.1.11", "mask")]:
+        rows = _snmp_walk(gw, col, working_community, timeout=timeout)
+        for oid_str, _vt, val in rows:
+            parts = oid_str.split(".")
+            if len(parts) < 4:
+                continue
+            dest_key = ".".join(parts[-4:])
+            if col_label == "dest":
+                route_dest.setdefault(dest_key, {})["dest"] = val
+            else:
+                route_dest.setdefault(dest_key, {})["mask"] = val
+
+    new_subnets = 0
+    for dest_key, info in route_dest.items():
+        dest = info.get("dest", dest_key)
+        mask = info.get("mask", "")
+        if not mask:
+            continue
+        try:
+            net = ipaddress.IPv4Network(f"{dest}/{mask}", strict=False)
+        except ValueError:
+            continue
+        if net.prefixlen == 0 or net.is_loopback or net.prefixlen >= 32:
+            continue
+        if any(net.overlaps(kn) for kn in known_nets):
+            continue
+        recon["additional_subnets"].append({"cidr": str(net), "discovered_via": f"snmp-route:{gw}"})
+        recon["subnets"].append(str(net))
+        known_nets.append(net)
+        logger.info(f"  Routing table: new subnet {net} queued for scanning")
+        new_subnets += 1
+
+    logger.info(f"  Phase 1d complete: {len(seeded)} ARP entries, {new_subnets} new subnet(s).")
+    return recon
+
+
+# ── Phase 1e: CDP / LLDP Neighbor Discovery ──────────────────────────────
+
+def phase1e_cdp_lldp_discovery(recon: dict, config: dict) -> dict:
+    """Passively sniff CDP and LLDP frames to discover neighboring switch IPs.
+
+    CDP  (Cisco Discovery Protocol) broadcasts every 60 s to 01:00:0c:cc:cc:cc
+    LLDP (IEEE 802.1AB) broadcasts every 30 s to 01:80:c2:00:00:0e
+
+    Results stored in:
+      recon["cdp_lldp_neighbors"]  — list of neighbor dicts (protocol/device_id/mgmt_ip/port_id)
+      recon["additional_subnets"]  — /24 of each neighbor mgmt IP appended if new
+    """
+    logger.info("[Phase 1e] CDP/LLDP neighbor discovery...")
+
+    try:
+        from scapy.all import sniff, Ether
+    except ImportError:
+        logger.warning("  scapy not available — skipping CDP/LLDP discovery.")
+        return recon
+
+    # Pick the first interface that has a CIDR (primary scanning interface)
+    iface_name = None
+    for iface in recon.get("interfaces", []):
+        if iface.get("cidr"):
+            iface_name = iface.get("name")
+            break
+
+    if not iface_name:
+        logger.info("  No usable interface found — skipping CDP/LLDP.")
+        return recon
+
+    timeout = config.get("cdp_lldp_timeout", 65)
+    logger.info(f"  Sniffing CDP/LLDP on {iface_name} for {timeout}s...")
+
+    frames_seen: list = []
+
+    try:
+        sniff(
+            iface=iface_name,
+            filter="ether dst 01:80:c2:00:00:0e or ether dst 01:00:0c:cc:cc:cc",
+            prn=lambda p: frames_seen.append(p),
+            timeout=timeout,
+            store=False,
+        )
+    except Exception as e:
+        logger.warning(f"  CDP/LLDP sniff error: {e}")
+        return recon
+
+    known_nets = []
+    for cidr in recon.get("subnets", []):
+        try:
+            known_nets.append(ipaddress.IPv4Network(cidr, strict=False))
+        except ValueError:
+            pass
+
+    neighbors: list = []
+    new_subnets = 0
+
+    for pkt in frames_seen:
+        try:
+            dst = pkt[Ether].dst.lower() if pkt.haslayer(Ether) else ""
+        except Exception:
+            continue
+
+        if dst == "01:80:c2:00:00:0e":
+            info     = _parse_lldp_frame(pkt)
+            protocol = "LLDP"
+        elif dst == "01:00:0c:cc:cc:cc":
+            info     = _parse_cdp_frame(pkt)
+            protocol = "CDP"
+        else:
+            continue
+
+        if not info:
+            continue
+
+        mgmt_ip = info.get("mgmt_ip") or (info.get("addresses") or [None])[0]
+        device_id = info.get("device_id") or info.get("system_name", "")
+
+        if mgmt_ip and any(n.get("mgmt_ip") == mgmt_ip for n in neighbors):
+            continue  # deduplicate
+
+        neighbor_entry = {
+            "protocol":  protocol,
+            "device_id": device_id,
+            "port_id":   info.get("port_id", ""),
+            "mgmt_ip":   mgmt_ip,
+        }
+        neighbors.append(neighbor_entry)
+        logger.info(f"  {protocol} neighbor: {device_id} @ {mgmt_ip}")
+
+        if mgmt_ip:
+            try:
+                net = ipaddress.IPv4Network(f"{mgmt_ip}/24", strict=False)
+                if not any(net.overlaps(kn) for kn in known_nets):
+                    recon["additional_subnets"].append({
+                        "cidr":           str(net),
+                        "discovered_via": f"{protocol.lower()}:{device_id}",
+                    })
+                    recon["subnets"].append(str(net))
+                    known_nets.append(net)
+                    new_subnets += 1
+                    logger.info(f"  New subnet {net} queued from {protocol} neighbor")
+            except ValueError:
+                pass
+
+    recon.setdefault("cdp_lldp_neighbors", []).extend(neighbors)
+    logger.info(
+        f"  Phase 1e complete: {len(neighbors)} neighbor(s), {new_subnets} new subnet(s)."
+    )
+    return recon
+
+
 # ── Phase 2: Host Discovery ────────────────────────────────────────────────
 
 def _run_netdiscover(subnet: str, iface: str = None) -> list:
@@ -871,6 +1114,143 @@ def _nmap_ping_scan(subnet: str) -> list:
     return live
 
 
+def _snmp_walk(host: str, oid: str, community: str, timeout: int = 10) -> list:
+    """Run snmpwalk against host:oid. Returns list of (oid_str, type_str, value_str) tuples."""
+    results = []
+    try:
+        proc = subprocess.run(
+            ["snmpwalk", "-v2c", "-c", community, "-t", str(timeout), "-r", "1", host, oid],
+            capture_output=True, text=True, timeout=timeout + 5,
+        )
+        for line in proc.stdout.splitlines():
+            m = re.match(r"^([\w.:/-]+)\s*=\s*([\w-]+):\s*(.*)$", line)
+            if m:
+                results.append((m.group(1), m.group(2), m.group(3).strip()))
+    except FileNotFoundError:
+        logger.debug("snmpwalk not found")
+    except Exception as e:
+        logger.debug(f"snmpwalk error: {e}")
+    return results
+
+
+def _parse_mac_from_hex(hex_str: str) -> str:
+    """Convert snmpwalk Hex-STRING '00 1A 2B 3C 4D 5E' to '00:1a:2b:3c:4d:5e'."""
+    try:
+        parts = hex_str.strip().split()
+        if len(parts) == 6:
+            return ":".join(p.lower().zfill(2) for p in parts)
+    except Exception:
+        pass
+    return ""
+
+
+def _parse_lldp_frame(pkt) -> dict:
+    """Extract system_name, mgmt_ip, port_id from an LLDP Ethernet frame."""
+    info: dict = {}
+    try:
+        payload = bytes(pkt.load) if hasattr(pkt, "load") else b""
+        if not payload:
+            return info
+        offset = 0
+        while offset + 2 <= len(payload):
+            header  = int.from_bytes(payload[offset:offset + 2], "big")
+            tlv_type = (header >> 9) & 0x7F
+            tlv_len  = header & 0x01FF
+            offset  += 2
+            if tlv_type == 0:
+                break
+            if offset + tlv_len > len(payload):
+                break
+            value   = payload[offset:offset + tlv_len]
+            offset += tlv_len
+            if tlv_type == 5:    # System Name
+                info["system_name"] = value.decode("utf-8", errors="replace").strip()
+            elif tlv_type == 2:  # Port ID (subtype byte + value)
+                if len(value) > 1:
+                    info["port_id"] = value[1:].decode("utf-8", errors="replace").strip()
+            elif tlv_type == 8:  # Management Address
+                # byte 0 = addr string length, byte 1 = addr subtype (1=IPv4)
+                if len(value) >= 6 and value[1] == 1:
+                    info["mgmt_ip"] = ".".join(str(b) for b in value[2:6])
+    except Exception as e:
+        logger.debug(f"LLDP parse error: {e}")
+    return info
+
+
+def _parse_cdp_frame(pkt) -> dict:
+    """Extract device_id, addresses, port_id from a CDP Ethernet frame."""
+    info: dict = {"addresses": []}
+    try:
+        raw    = bytes(pkt)
+        offset = 26  # 14 Ethernet + 8 LLC/SNAP + 4 CDP header
+        while offset + 4 <= len(raw):
+            tlv_type = int.from_bytes(raw[offset:offset + 2], "big")
+            tlv_len  = int.from_bytes(raw[offset + 2:offset + 4], "big")
+            if tlv_len < 4:
+                break
+            value   = raw[offset + 4:offset + tlv_len]
+            offset += tlv_len
+            if tlv_type == 0x0001:  # Device ID
+                info["device_id"] = value.decode("utf-8", errors="replace").strip()
+            elif tlv_type == 0x0002:  # Addresses
+                if len(value) >= 4:
+                    num_addrs = int.from_bytes(value[0:4], "big")
+                    pos = 4
+                    for _ in range(num_addrs):
+                        if pos + 3 > len(value):
+                            break
+                        proto_type = value[pos]
+                        proto_len  = value[pos + 1]
+                        pos += 2 + proto_len
+                        if pos + 2 > len(value):
+                            break
+                        addr_len = int.from_bytes(value[pos:pos + 2], "big")
+                        pos += 2
+                        if proto_type == 1 and addr_len == 4 and pos + 4 <= len(value):
+                            info["addresses"].append(
+                                ".".join(str(b) for b in value[pos:pos + 4])
+                            )
+                        pos += addr_len
+            elif tlv_type == 0x0003:  # Port ID
+                info["port_id"] = value.decode("utf-8", errors="replace").strip()
+    except Exception as e:
+        logger.debug(f"CDP parse error: {e}")
+    return info
+
+
+def _dns_ptr_walk(cidr: str, dns_servers: list, timeout: int = 3) -> dict:
+    """Batch reverse PTR lookups for all hosts in cidr. Returns {ip: hostname}."""
+    import dns.resolver
+    import dns.reversename
+
+    results: dict = {}
+    resolver = dns.resolver.Resolver()
+    if dns_servers:
+        resolver.nameservers = dns_servers
+    resolver.timeout  = timeout
+    resolver.lifetime = timeout
+
+    try:
+        network    = ipaddress.IPv4Network(cidr, strict=False)
+        hosts_list = [str(h) for h in list(network.hosts())[:254]]
+    except ValueError:
+        return results
+
+    def _ptr_one(ip_str):
+        try:
+            rev = dns.reversename.from_address(ip_str)
+            ans = resolver.resolve(rev, "PTR")
+            return ip_str, str(ans[0]).rstrip(".")
+        except Exception:
+            return ip_str, None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=50) as ex:
+        for ip_str, hostname in ex.map(_ptr_one, hosts_list):
+            if hostname:
+                results[ip_str] = hostname
+    return results
+
+
 def _make_empty_host(ip: str, subnet_source: str = "direct") -> dict:
     return {
         "ip": ip,
@@ -933,14 +1313,83 @@ def phase2_host_discovery(recon: dict, config: dict) -> list:
             if ip not in our_ips and ip not in all_hosts:
                 all_hosts[ip] = _make_empty_host(ip, "direct")
 
-    # ── Additional subnets found by phase1b (fping only - ARP won't cross router) ──
+    # ── Inject SNMP-seeded hosts for direct subnets (gateway ARP cache may ──
+    # ── include hosts that are offline or rate-limit ARP/ICMP)            ──
+    snmp_seeds = recon.get("snmp_seeded_hosts", {})
+    if snmp_seeds:
+        direct_nets = []
+        for iface in recon.get("interfaces", []):
+            cidr = iface.get("cidr")
+            if cidr:
+                try:
+                    direct_nets.append(ipaddress.IPv4Network(cidr, strict=False))
+                except ValueError:
+                    pass
+        for s_ip, s_mac in snmp_seeds.items():
+            if s_ip in our_ips or s_ip in all_hosts:
+                continue
+            try:
+                addr = ipaddress.IPv4Address(s_ip)
+            except ValueError:
+                continue
+            if any(addr in net for net in direct_nets):
+                all_hosts[s_ip] = {
+                    **_make_empty_host(s_ip, "direct"),
+                    "mac":    s_mac,
+                    "vendor": get_mac_vendor(s_mac) if s_mac else "Unknown",
+                }
+
+    # ── Additional subnets: multi-vector scan (ARP won't cross router) ───
     for extra in recon.get("additional_subnets", []):
         cidr = extra["cidr"]
-        logger.info(f"  Scanning additional subnet: {cidr} (discovered via {extra['discovered_via']})")
+        logger.info(f"  Scanning additional subnet: {cidr} (via {extra['discovered_via']})")
+
+        try:
+            net_obj = ipaddress.IPv4Network(cidr, strict=False)
+        except ValueError:
+            net_obj = None
+
+        # Inject SNMP-seeded hosts for this subnet first (already have MACs)
+        if snmp_seeds and net_obj:
+            for s_ip, s_mac in snmp_seeds.items():
+                if s_ip in our_ips or s_ip in all_hosts:
+                    continue
+                try:
+                    if ipaddress.IPv4Address(s_ip) in net_obj:
+                        all_hosts[s_ip] = {
+                            **_make_empty_host(s_ip, "additional"),
+                            "mac":    s_mac,
+                            "vendor": get_mac_vendor(s_mac) if s_mac else "Unknown",
+                        }
+                except ValueError:
+                    pass
+
+        # fping — fast ICMP sweep
         live_ips = _run_fping(cidr)
         for ip in live_ips:
             if ip not in our_ips and ip not in all_hosts:
                 all_hosts[ip] = _make_empty_host(ip, "additional")
+
+        # nmap -sn — catches hosts that block ICMP but answer TCP SYN 80/443
+        if config.get("enable_nmap_remote_discovery", True):
+            nmap_ips = _nmap_ping_scan(cidr)
+            for ip in nmap_ips:
+                if ip not in our_ips and ip not in all_hosts:
+                    all_hosts[ip] = _make_empty_host(ip, "additional")
+
+        # DNS PTR walk — reveals hosts registered in DNS that don't respond to pings
+        if config.get("enable_dns_ptr_walk", True):
+            dns_servers = recon.get("dns_servers", [])
+            ptr_map = _dns_ptr_walk(cidr, dns_servers)
+            for ip, hostname in ptr_map.items():
+                if ip not in our_ips and ip not in all_hosts:
+                    h = _make_empty_host(ip, "additional")
+                    h["hostname"]        = hostname
+                    h["hostname_source"] = "DNS-PTR"
+                    all_hosts[ip] = h
+                elif ip in all_hosts and not all_hosts[ip].get("hostname"):
+                    all_hosts[ip]["hostname"]        = hostname
+                    all_hosts[ip]["hostname_source"] = "DNS-PTR"
 
     # ── DNS lookups (parallel) ────────────────────────────────────────────
     if config.get("enable_dns_enumeration", True):
@@ -4138,6 +4587,18 @@ def phase13_osint(recon: dict, hosts: list, dhcp_results: dict,
     logger.info(f"  OSINT complete: {len(domains)} domain(s), "
                 f"{result['summary']['external_ports']} external port(s), "
                 f"{total_subs} subdomain(s)")
+
+    # ── Hatz AI OSINT enrichment (optional) ──────────────────────────────
+    hatz_key = config.get("hatz_ai", {}).get("api_key", "")
+    if hatz_key and config.get("enable_hatz_osint_enrichment", True):
+        try:
+            from hatz_ai import get_hatz_osint_enrichment
+            enrichment = get_hatz_osint_enrichment(result, recon, hatz_key)
+            if enrichment:
+                result["ai_enrichment"] = enrichment
+        except Exception as _hatz_err:
+            logger.warning(f"  Hatz OSINT enrichment error: {_hatz_err}")
+
     return result
 
 
@@ -5818,6 +6279,14 @@ def run_discovery(progress_callback=None) -> dict:
     recon = _run_phase("1c", "DHCP subnet seeding",
                        phase1c_dhcp_subnet_seeding, recon, config,
                        config_key="enable_dhcp_analysis")
+
+    recon = _run_phase("1d", "SNMP gateway harvest",
+                       phase1d_snmp_gateway_harvest, recon, config,
+                       config_key="enable_snmp_gateway_harvest")
+
+    recon = _run_phase("1e", "CDP/LLDP neighbor discovery",
+                       phase1e_cdp_lldp_discovery, recon, config,
+                       config_key="enable_cdp_lldp_discovery")
 
     hosts = _run_phase("2", "Host discovery",
                        phase2_host_discovery, recon, config, default=[])
