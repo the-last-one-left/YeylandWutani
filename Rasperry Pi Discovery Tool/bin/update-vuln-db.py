@@ -78,7 +78,7 @@ def _print_stats(stats: dict):
         age_str = "N/A"
 
     stale = stats.get("stale", False)
-    stale_str = "YES (>3 days)" if stale else "No"
+    stale_str = "YES (>7 days)" if stale else "No"
 
     sep = "-" * 52
     print(sep)
@@ -302,17 +302,9 @@ Examples:
             print(f"  KEV update FAILED: {e}")
             errors += 1
 
-        print()
-        print("  [3/3] Updating OSV database (incremental)...")
-        logger.info("Updating OSV database (incremental)...")
-        osv_start = time.time()
-        try:
-            osv_count = update_osv_cache()
-            _print_update_summary("OSV Database", {"total": osv_count, "duration_s": time.time() - osv_start})
-        except Exception as e:
-            logger.error("OSV update failed: %s", e, exc_info=True)
-            print(f"  OSV update FAILED: {e}")
-            errors += 1
+        # OSV (PyPI/npm bulk zips) is skipped on incremental updates — the bulk
+        # downloads are large, slow, and irrelevant for network device scanning.
+        # OSV is only refreshed during --init.
 
         total_duration = time.time() - run_start
         print()

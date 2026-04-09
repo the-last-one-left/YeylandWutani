@@ -26,6 +26,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -223,49 +224,63 @@ def manage_disk_space(config: dict):
 VULN_DB_PATH = BASE_DIR / "data" / "vuln-db" / "vuln-db.sqlite"
 
 
-def update_vuln_db_if_due(config: dict):
-    """Run update-vuln-db.py --update if the NVD cache is older than the configured interval."""
-    interval_days = config.get("vuln_db_update_interval_days", 1)
+def update_vuln_db_if_due(config: dict) -> threading.Thread | None:
+    """Start a background update of the vuln DB if it is due, and return the thread.
+
+    Runs update-vuln-db.py as a subprocess in a daemon thread so discovery starts
+    immediately. The existing DB is used throughout; the update commits incrementally
+    via SQLite transactions so any data written mid-scan is visible to Phase 16.
+
+    Returns the Thread object (already started) so the caller can optionally join it
+    before Phase 16 runs. Returns None if no update is needed or scheduled.
+    """
+    interval_days = config.get("vuln_db_update_interval_days", 7)
 
     if VULN_DB_PATH.exists():
-        age_days = (time.time() - VULN_DB_PATH.stat().st_mtime) / 86400
-        if age_days < interval_days:
-            logger.info(
-                "Vuln DB is current (%.1f days old, threshold: %d days). Skipping update.",
-                age_days, interval_days,
-            )
-            return
-        logger.info(
-            "Vuln DB is %.1f days old (threshold: %d days). Triggering update...",
-            age_days, interval_days,
-        )
+        try:
+            sys.path.insert(0, str(Path(__file__).parent.parent / "lib"))
+            from vuln_db import is_db_stale
+            due = is_db_stale(max_age_days=interval_days)
+        except Exception:
+            age_days = (time.time() - VULN_DB_PATH.stat().st_mtime) / 86400
+            due = age_days >= interval_days
+
+        if not due:
+            logger.info("Vuln DB is current (threshold: %d days). Skipping update.", interval_days)
+            return None
+        logger.info("Vuln DB is due for update (threshold: %d days). Starting background update...", interval_days)
     else:
-        logger.info("Vuln DB not found — triggering initial seed (this runs once and may take a while)...")
+        logger.info("Vuln DB not found — starting background initial seed (may take a while)...")
 
     updater = Path(__file__).parent / "update-vuln-db.py"
     if not updater.exists():
         logger.warning("update-vuln-db.py not found at %s — skipping.", updater)
-        return
+        return None
 
     cmd = [sys.executable, str(updater)]
     cmd += ["--init"] if not VULN_DB_PATH.exists() else ["--update"]
 
-    try:
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=3600,  # --init can take up to an hour without an API key
-        )
-        if result.returncode == 0:
-            logger.info("Vuln DB updated successfully.")
-        else:
-            logger.warning("update-vuln-db.py exited %d: %s",
-                           result.returncode, result.stderr.strip()[:300])
-    except subprocess.TimeoutExpired:
-        logger.warning("Vuln DB update timed out. Continuing with existing DB.")
-    except Exception as e:
-        logger.warning("Vuln DB update failed: %s. Continuing with existing DB.", e)
+    def _run():
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=3600,
+            )
+            if result.returncode == 0:
+                logger.info("Vuln DB background update complete.")
+            else:
+                logger.warning("update-vuln-db.py exited %d: %s",
+                               result.returncode, result.stderr.strip()[:300])
+        except subprocess.TimeoutExpired:
+            logger.warning("Vuln DB background update timed out.")
+        except Exception as e:
+            logger.warning("Vuln DB background update failed: %s", e)
+
+    t = threading.Thread(target=_run, name="vuln-db-update", daemon=True)
+    t.start()
+    return t
 
 
 # ── Starting notification email ────────────────────────────────────────────
@@ -392,8 +407,10 @@ def main():
     # Prune oldest archives if disk space is low (before we generate new data)
     manage_disk_space(config)
 
-    # Update NVD vulnerability database if due (incremental daily; full seed on first run)
-    update_vuln_db_if_due(config)
+    # Start vuln DB update in background — discovery proceeds immediately with existing DB.
+    # We join the thread before the scan result is used (report generation) so the
+    # freshest data is in place if Phase 16 (EOL) or CVE lookup ran while it was updating.
+    _vuln_db_thread = update_vuln_db_if_due(config)
 
     mailer = None
     scan_results = None
@@ -496,6 +513,13 @@ def main():
                     pass
         host_count = len(scan_results.get("hosts", []))
         logger.info(f"Network scan completed in {scan_duration:.1f}s — {host_count} host(s) found")
+
+        # Wait for background vuln DB update to finish (scan already done, so no rush cost)
+        if _vuln_db_thread is not None and _vuln_db_thread.is_alive():
+            logger.info("Waiting for background vuln DB update to finish...")
+            _vuln_db_thread.join(timeout=300)
+            if _vuln_db_thread.is_alive():
+                logger.warning("Vuln DB update still running after 5 min — report uses existing DB.")
 
         if _shutdown_requested:
             logger.warning("Shutdown requested during scan. Sending partial results...")
