@@ -25,7 +25,7 @@ TimeoutStartSec=300
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
-ReadWritePaths=/opt/network-discovery/logs /opt/network-discovery/data
+ReadWritePaths=/opt/network-discovery /opt/network-discovery-src
 ProtectHome=yes
 CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
 
