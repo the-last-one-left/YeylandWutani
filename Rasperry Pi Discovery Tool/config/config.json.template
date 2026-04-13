@@ -42,6 +42,12 @@
     "enable_ad_probing": true,
     "ad_probe_timeout": 10
   },
+  "vuln_db": {
+    "nvd_api_key": "",
+    "auto_update_vuln_db": true,
+    "vuln_db_update_interval_days": 1,
+    "vuln_db_max_age_years": 5
+  },
   "reporting": {
     "company_name": "Yeyland Wutani LLC",
     "company_color": "#FF6600",
