@@ -754,6 +754,15 @@ def classify_device(
                                             "cctv", "hikvision", "dahua", "axis")):
         return "IP Camera / NVR"
 
+    # ── Wireless Access Point — vendor check first (before hostname-based NAS) ──
+    # Must run before NAS hostname matching so that APs with location names
+    # containing "storage" (e.g. AP26-PartsStorage) are not misclassified.
+    if any(kw in vendor for kw in _AP_VENDORS):
+        # Distinguish AP from switch/router: APs typically only have 80/443/22
+        non_ap_ports = ports_set - {22, 80, 443, 8080, 8443}
+        if len(non_ap_ports) <= 2:
+            return "Wireless Access Point"
+
     # ── NAS / Storage ──────────────────────────────────────────────────────
     if any(kw in vendor for kw in _NAS_VENDORS):
         return "NAS / Storage"
@@ -778,12 +787,7 @@ def classify_device(
     if "vmware" in vendor and ports_set & {902, 443}:
         return "Hypervisor"
 
-    # ── Wireless Access Point ──────────────────────────────────────────────
-    if any(kw in vendor for kw in _AP_VENDORS):
-        # Distinguish AP from switch/router: APs typically only have 80/443/22
-        non_ap_ports = ports_set - {22, 80, 443, 8080, 8443}
-        if len(non_ap_ports) <= 2:
-            return "Wireless Access Point"
+    # ── Wireless Access Point — hostname fallback ──────────────────────────
     if any(kw in hostname_lower for kw in ("ap-", "-ap", "wap", "wifi", "wireless",
                                             "unifi", "meraki", "airmax", "ruckus",
                                             "aruba-ap")):

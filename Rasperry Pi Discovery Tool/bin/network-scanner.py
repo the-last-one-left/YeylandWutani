@@ -3060,14 +3060,20 @@ def phase6_security(hosts: list) -> list:
                 "severity": "MEDIUM",
             })
 
-        # SSL cert expiring soon (within 30 days)
+        # SSL cert expiring soon (within 30 days) or already expired
         ssl_cert = services.get("ssl_cert", {})
         days_left = _check_ssl_expiry(ssl_cert)
         if days_left is not None and days_left <= 30:
-            flags.append({
-                "flag": f"SSL certificate expiring in {days_left} day(s)",
-                "severity": "HIGH" if days_left <= 7 else "MEDIUM",
-            })
+            if days_left < 0:
+                cert_flag = f"SSL certificate expired {abs(days_left)} day(s) ago"
+                cert_sev = "HIGH"
+            elif days_left <= 7:
+                cert_flag = f"SSL certificate expiring in {days_left} day(s)"
+                cert_sev = "HIGH"
+            else:
+                cert_flag = f"SSL certificate expiring in {days_left} day(s)"
+                cert_sev = "MEDIUM"
+            flags.append({"flag": cert_flag, "severity": cert_sev})
 
         # Outdated SSH version
         ssh_banner = (services.get(22) or {}).get("banner", "")
@@ -5425,6 +5431,23 @@ def phase17_testssl(hosts: list, config: dict) -> dict:
                         severity = entry.get("severity", "").upper()
                         finding = entry.get("finding", "")
                         if severity in ("CRITICAL", "HIGH", "MEDIUM", "WARN") and finding:
+                            # Skip findings that indicate a connection/setup failure
+                            # rather than an actual vulnerability on the target.
+                            _finding_lower = finding.lower()
+                            if any(noise in _finding_lower for noise in (
+                                "couldn't connect",
+                                "couldn't connect",          # ascii apostrophe variant
+                                "handshake didn't succeed",
+                                "handshake didn't succeed",
+                                "no server certificate could be retrieved",
+                                "doesn't seem to be a tls/ssl enabled server",
+                                "doesn't seem to be a tls/ssl enabled server",
+                                "not supported by local openssl",
+                                "no engine or gost support via engine",
+                                "check failed",
+                                "client problem:",
+                            )):
+                                continue
                             mapped_sev = "CRITICAL" if severity == "CRITICAL" else \
                                          "HIGH" if severity in ("HIGH", "WARN") else "MEDIUM"
                             host_findings.append({
@@ -5516,10 +5539,12 @@ def phase18_nikto(hosts: list, config: dict) -> dict:
                     # Nikto finding lines start with "+ "
                     if line.startswith("+ "):
                         finding_text = line[2:].strip()
-                        # Skip purely informational lines
+                        # Skip purely informational lines and clean/no-finding results
                         if any(s in finding_text.lower() for s in
                                ("server:", "target ip:", "target hostname:", "target port:",
-                                "start time:", "end time:", "requests made:", "error count:")):
+                                "start time:", "end time:", "requests made:", "error count:",
+                                "no web server found", "0 error(s) and 0 item(s)",
+                                "host(s) tested")):
                             continue
                         severity = "HIGH" if any(
                             s in finding_text.lower() for s in
