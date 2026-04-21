@@ -5,12 +5,12 @@
     existing PFX file.
 
 .DESCRIPTION
-    MODE 1 — Generate new cert (default, no -ExistingPfxPath):
+    MODE 1 - Generate new cert (default, no -ExistingPfxPath):
       Creates a code-signing certificate in LocalMachine\My, exports it as a
       PFX and a public CER, and prints the Base64 strings to paste into
       Sign-RdpFiles.ps1. Run once on your admin workstation.
 
-    MODE 2 — Use existing PFX (-ExistingPfxPath):
+    MODE 2 - Use existing PFX (-ExistingPfxPath):
       Reads a PFX you already have, extracts the public certificate, and
       outputs both Base64 strings ready to paste into Sign-RdpFiles.ps1.
       No new certificate is created; no changes are made to the cert store.
@@ -56,7 +56,7 @@
     Purpose: One-time cert preparation for RDP file signing deployment
 
     SECURITY: Sign-RdpFiles.ps1 will contain the private key once populated.
-    Treat that script like a credential file — restrict access accordingly.
+    Treat that script like a credential file - restrict access accordingly.
 #>
 
 #Requires -Version 5.1
@@ -102,7 +102,7 @@ function Show-YWBanner {
 
 Show-YWBanner
 
-#region Mode 2 — Existing PFX
+#region Mode 2 - Existing PFX
 if ($PSCmdlet.ParameterSetName -eq 'Existing') {
     Write-Host "[*] Mode: extracting from existing PFX" -ForegroundColor Cyan
     Write-Host "    Path: $ExistingPfxPath" -ForegroundColor Gray
@@ -111,21 +111,21 @@ if ($PSCmdlet.ParameterSetName -eq 'Existing') {
     try {
         $securePass = ConvertTo-SecureString $PfxPassword -AsPlainText -Force
 
-        # Load the PFX — Exportable flag needed to pull the public bytes back out
+        # Load the PFX - Exportable flag needed to pull the public bytes back out
         $keyFlags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
         $cert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new(
             $ExistingPfxPath, $securePass, $keyFlags
         )
     }
     catch {
-        Write-Host "[!] Failed to open PFX — wrong password or corrupt file: $_" -ForegroundColor Red
+        Write-Host "[!] Failed to open PFX - wrong password or corrupt file: $_" -ForegroundColor Red
         exit 1
     }
 
-    # PFX base64 — read the file bytes directly (preserves original packaging)
+    # PFX base64 - read the file bytes directly (preserves original packaging)
     $pfxBase64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes($ExistingPfxPath))
 
-    # CER base64 — public cert only (no private key)
+    # CER base64 - public cert only (no private key)
     $cerBytes  = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
     $cerBase64 = [Convert]::ToBase64String($cerBytes)
 
@@ -140,7 +140,7 @@ if ($PSCmdlet.ParameterSetName -eq 'Existing') {
 }
 #endregion
 
-#region Mode 1 — Generate New Cert
+#region Mode 1 - Generate New Cert
 else {
     #Requires -RunAsAdministrator
 
@@ -206,6 +206,6 @@ Write-Host ("=" * 75) -ForegroundColor DarkYellow
 Write-Host ""
 Write-Host "[!] SECURITY REMINDER" -ForegroundColor Red
 Write-Host "    Sign-RdpFiles.ps1 will contain the private key once populated." -ForegroundColor Yellow
-Write-Host "    Treat it as a credential file — restrict access accordingly." -ForegroundColor Yellow
+Write-Host "    Treat it as a credential file - restrict access accordingly." -ForegroundColor Yellow
 Write-Host ""
 #endregion

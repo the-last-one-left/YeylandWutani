@@ -40,7 +40,7 @@
 $ErrorActionPreference = 'Stop'
 
 # ==============================================================================
-# CONFIGURATION — paste output from New-RdpSigningCert.ps1 here
+# CONFIGURATION - paste output from New-RdpSigningCert.ps1 here
 # ==============================================================================
 $PFX_BASE64   = ''
 $CER_BASE64   = ''
@@ -155,12 +155,12 @@ try {
     $cerBytes  = [Convert]::FromBase64String($CER_BASE64.Trim())
     $publicCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cerBytes)
 
-    # TrustedPublishers — marks this cert as a known/trusted software publisher
+    # TrustedPublishers - marks this cert as a known/trusted software publisher
     Install-CertToStore -Cert $publicCert `
         -StoreName "TrustedPublisher" `
         -StoreLocation ([System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
 
-    # Root — required for self-signed cert chain validation
+    # Root - required for self-signed cert chain validation
     Install-CertToStore -Cert $publicCert `
         -StoreName "Root" `
         -StoreLocation ([System.Security.Cryptography.X509Certificates.StoreLocation]::LocalMachine)
@@ -260,7 +260,7 @@ foreach ($profile in $userProfiles) {
             }
             else {
                 $countFailed++
-                Write-Host "    [FAILED] Exit $exitCode — $output" -ForegroundColor Red
+                Write-Host "    [FAILED] Exit $exitCode - $output" -ForegroundColor Red
             }
         }
     }
