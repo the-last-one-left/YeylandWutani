@@ -243,6 +243,11 @@ foreach ($profile in $userProfiles) {
                         -ErrorAction SilentlyContinue
 
         foreach ($file in $rdpFiles) {
+            if ($file.Name -ieq 'default.rdp') {
+                Write-Host "  Skipping: $($file.FullName) (default.rdp)" -ForegroundColor Gray
+                continue
+            }
+
             $countFound++
             Write-Host "  Signing: $($file.FullName)" -ForegroundColor Gray
 
