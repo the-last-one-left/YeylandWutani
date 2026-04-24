@@ -140,11 +140,9 @@ PowerShell tools for storage management, capacity reporting, and file server aud
 
 ## Requirements
 
-| Script | Requirements |
-|--------|-------------|
-| Both | PowerShell 5.1+ |
-| `Get-SPOStorageReport.ps1` | Microsoft.Graph SDK, SPO Management Shell, SharePoint Admin role |
-| `Get-FileServerPermissionsReport.ps1` | WMI access, read rights on file paths |
+- PowerShell 5.1+
+- **Get-SPOStorageReport**: Microsoft.Graph PowerShell SDK, SPO Management Shell, SharePoint Administrator or Global Administrator role
+- **Get-FileServerPermissionsReport**: WMI access to target server, read rights on all scanned paths
 
 ---
 
