@@ -32,10 +32,11 @@ Production-ready PowerShell tools and frameworks for enterprise IT administratio
 ```
 YeylandWutani/
 ├── ActiveDirectory/     # AD health, troubleshooting, DFSR recovery
-├── Automation/          # Cleanup, file management, conversions
+├── Automation/          # Deployment, file management, M365 automation
 ├── Monitoring/          # System health, disk, service monitoring
-├── Network/             # Discovery, connectivity testing
-└── Security/            # M365 security, SharePoint auditing
+├── Network/             # Discovery, IP conflict detection, SMTP validation
+├── Security/            # M365 security, SharePoint auditing, persistence detection
+└── Storage/             # File server and SharePoint Online storage management
 ```
 
 ---
