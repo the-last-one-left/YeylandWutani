@@ -2414,7 +2414,7 @@ function Invoke-GoDaddyFindZonePatch {
     }
 
     $moduleDir  = Split-Path $paModule.Path -Parent
-    $pluginFile = Join-Path $moduleDir 'Plugins' 'GoDaddy.ps1'
+    $pluginFile = Join-Path (Join-Path $moduleDir 'Plugins') 'GoDaddy.ps1'
     if (-not (Test-Path $pluginFile)) {
         Write-Log "GoDaddy plugin not found at '$pluginFile'; renewal will proceed without the zone-lookup patch (may fail for delegated-access domains)" -Level Warning
         return
