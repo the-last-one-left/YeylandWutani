@@ -2772,8 +2772,14 @@ function Install-RenewalTask {
             Write-Log "WARNING: -SendReport specified but no email_config.json found. Configure email reporting interactively first." -Level Warning
         }
     }
-    if ($script:EmailBodyNote)    { $argParts += "-EmailBodyNote `"$($script:EmailBodyNote -replace '"', '`"')`"" }
-    if ($script:EmailSubjectNote) { $argParts += "-EmailSubjectNote `"$($script:EmailSubjectNote -replace '"', '`"')`"" }
+    if ($script:EmailBodyNote) {
+        $noteEsc = $script:EmailBodyNote -replace "'", "''"
+        $argParts += "-EmailBodyNote '$noteEsc'"
+    }
+    if ($script:EmailSubjectNote) {
+        $subjEsc = $script:EmailSubjectNote -replace "'", "''"
+        $argParts += "-EmailSubjectNote '$subjEsc'"
+    }
 
     $action = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
