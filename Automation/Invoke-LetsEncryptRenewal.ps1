@@ -1538,13 +1538,16 @@ function Save-EmailConfig {
 
     Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
 
+    $storeSubjectNote = [string]$Config.SubjectNote
+    $storeBodyNote    = [string]$Config.BodyNote
+
     $store = [ordered]@{
         Enabled     = $Config.Enabled
         Method      = $Config.Method
         Sender      = $Config.Sender
         Recipient   = $Config.Recipient
-        SubjectNote = if ($Config.SubjectNote) { $Config.SubjectNote } else { '' }
-        BodyNote    = if ($Config.BodyNote)    { $Config.BodyNote }    else { '' }
+        SubjectNote = $storeSubjectNote
+        BodyNote    = $storeBodyNote
         SavedAt     = (Get-Date -Format 'o')
     }
 
@@ -1711,8 +1714,10 @@ function Send-RenewalReport {
     }
 
     # Notes: parameter override wins, then config, then empty
-    $subjectNote = if ($script:EmailSubjectNote) { $script:EmailSubjectNote } elseif ($config.SubjectNote) { $config.SubjectNote } else { '' }
-    $bodyNote    = if ($script:EmailBodyNote)    { $script:EmailBodyNote }    elseif ($config.BodyNote)    { $config.BodyNote }    else { '' }
+    $subjectNote = [string]$script:EmailSubjectNote
+    if (-not $subjectNote) { $subjectNote = [string]$config.SubjectNote }
+    $bodyNote = [string]$script:EmailBodyNote
+    if (-not $bodyNote) { $bodyNote = [string]$config.BodyNote }
 
     # Subject line
     $subject = "[YW] Let's Encrypt - $domain - $status"
