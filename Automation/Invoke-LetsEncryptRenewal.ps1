@@ -723,8 +723,10 @@ function Show-EmailReportMenu {
             return
         }
         if ($action -notmatch '^[Uu]') {
-            # Keep
+            # Keep — load saved notes into script scope so Send-RenewalReport picks them up
             $script:SendReport = $true
+            if ($existing.SubjectNote) { $script:EmailSubjectNote = $existing.SubjectNote }
+            if ($existing.BodyNote)    { $script:EmailBodyNote    = $existing.BodyNote }
             Write-Log "Email reporting: keeping existing config ($($existing.Method) -> $($existing.Recipient))" -Level Info
             return
         }
@@ -792,6 +794,22 @@ function Show-EmailReportMenu {
         finally { [System.Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
         $config.Sender = Read-Host "  FROM address (e.g. noreply@contoso.com)"
     }
+
+    Write-Host ""
+    Write-Host "  -- Email Customization (optional) ------------------------------------------" -ForegroundColor DarkGray
+    Write-Host "  Subject note: text appended to every report subject line." -ForegroundColor Gray
+    Write-Host "    Example: 'Contoso Ltd'  ->  '[YW] Let's Encrypt - domain - Success - Contoso Ltd'" -ForegroundColor Gray
+    $subjectNoteIn = Read-Host "  Subject note [leave blank to skip]"
+    $config.SubjectNote = $subjectNoteIn.Trim()
+
+    Write-Host ""
+    Write-Host "  Body note: text added as a Notes row in every report email." -ForegroundColor Gray
+    Write-Host "  Supports ConnectWise routing tags, e.g. !!contact@company.com!! Company Name" -ForegroundColor Gray
+    $bodyNoteIn = Read-Host "  Body note [leave blank to skip]"
+    $config.BodyNote = $bodyNoteIn.Trim()
+
+    if ($config.SubjectNote) { $script:EmailSubjectNote = $config.SubjectNote }
+    if ($config.BodyNote)    { $script:EmailBodyNote    = $config.BodyNote }
 
     Save-EmailConfig -Config $config
     $script:SendReport = $true
@@ -1521,11 +1539,13 @@ function Save-EmailConfig {
     Add-Type -AssemblyName System.Security -ErrorAction SilentlyContinue
 
     $store = [ordered]@{
-        Enabled   = $Config.Enabled
-        Method    = $Config.Method
-        Sender    = $Config.Sender
-        Recipient = $Config.Recipient
-        SavedAt   = (Get-Date -Format 'o')
+        Enabled     = $Config.Enabled
+        Method      = $Config.Method
+        Sender      = $Config.Sender
+        Recipient   = $Config.Recipient
+        SubjectNote = if ($Config.SubjectNote) { $Config.SubjectNote } else { '' }
+        BodyNote    = if ($Config.BodyNote)    { $Config.BodyNote }    else { '' }
+        SavedAt     = (Get-Date -Format 'o')
     }
 
     if ($Config.Method -eq 'SMTP') {
@@ -1690,9 +1710,13 @@ function Send-RenewalReport {
         default   { $status }
     }
 
+    # Notes: parameter override wins, then config, then empty
+    $subjectNote = if ($script:EmailSubjectNote) { $script:EmailSubjectNote } elseif ($config.SubjectNote) { $config.SubjectNote } else { '' }
+    $bodyNote    = if ($script:EmailBodyNote)    { $script:EmailBodyNote }    elseif ($config.BodyNote)    { $config.BodyNote }    else { '' }
+
     # Subject line
     $subject = "[YW] Let's Encrypt - $domain - $status"
-    if ($script:EmailSubjectNote) { $subject += " - $($script:EmailSubjectNote)" }
+    if ($subjectNote) { $subject += " - $subjectNote" }
 
     # Build detail rows
     $tdL = "style=`"padding:9px 4px;color:#666;font-size:13px;white-space:nowrap;vertical-align:top`""
@@ -1721,8 +1745,8 @@ function Send-RenewalReport {
     }
     $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Started</td><td $tdR>$($startTime.ToString('yyyy-MM-dd HH:mm:ss'))</td></tr>`n"
     $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Log File</td><td $tdR style=`"font-size:11px;color:#888`">$LogFile</td></tr>`n"
-    if ($script:EmailBodyNote) {
-        $safeNote = ($script:EmailBodyNote -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;').Trim() -replace "`n", '<br>'
+    if ($bodyNote) {
+        $safeNote = ($bodyNote -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;').Trim() -replace "`n", '<br>'
         $rows += "<tr><td $tdL>Notes</td><td $tdR style=`"color:#555`">$safeNote</td></tr>`n"
     }
 
@@ -2790,15 +2814,6 @@ function Install-RenewalTask {
             Write-Log "WARNING: -SendReport specified but no email_config.json found. Configure email reporting interactively first." -Level Warning
         }
     }
-    if ($script:EmailBodyNote) {
-        $noteEsc = $script:EmailBodyNote -replace "'", "''"
-        $argParts += "-EmailBodyNote '$noteEsc'"
-    }
-    if ($script:EmailSubjectNote) {
-        $subjEsc = $script:EmailSubjectNote -replace "'", "''"
-        $argParts += "-EmailSubjectNote '$subjEsc'"
-    }
-
     $action = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
         -Argument ($argParts -join ' ')
