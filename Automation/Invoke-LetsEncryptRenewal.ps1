@@ -2293,11 +2293,12 @@ function Build-DnsChallengeParams {
 
     # Resolve plugin credentials:
     #   1. Use args passed on the command line
-    #   2. If interactive (menu-driven run), prompt the user with provider instructions
-    #   3. If non-interactive (scheduled task), load from the DPAPI-encrypted credential store
+    #   2. Human at a terminal (UserInteractive) -> prompt with provider instructions
+    #      (true even when -InstallScheduledTask is passed; that flag skips menus, not prompts)
+    #   3. Non-interactive session (scheduled task as SYSTEM) -> load from encrypted store
     $resolvedPluginArgs = $script:DnsPluginArgs
     if (-not $resolvedPluginArgs) {
-        if ($script:isInteractive) {
+        if ([Environment]::UserInteractive) {
             $resolvedPluginArgs = Get-DnsPluginArgsInteractive -Plugin $script:DnsPlugin
         }
         else {
@@ -2796,7 +2797,7 @@ function Install-RenewalTask {
             # order path (which collects and saves creds) was never reached. Prompt now so
             # the scheduled task can renew unattended when the cert eventually expires.
             Write-Log "No saved DNS plugin credentials found - collecting now so the scheduled task can renew unattended..." -Level Warning
-            if ($script:isInteractive) {
+            if ([Environment]::UserInteractive) {
                 $collectedArgs = Get-DnsPluginArgsInteractive -Plugin $script:DnsPlugin
                 if ($collectedArgs) {
                     $script:DnsPluginArgs = $collectedArgs
