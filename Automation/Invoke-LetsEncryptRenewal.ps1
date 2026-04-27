@@ -2276,6 +2276,12 @@ function Build-DnsChallengeParams {
 
     Write-Log "Using DNS-01 challenge with plugin: $($script:DnsPlugin)"
 
+    # GoDaddy delegated-access workaround: patch Find-GDZone to use direct API
+    # fallback for domains that don't appear in the /v1/domains listing endpoint.
+    if ($script:DnsPlugin -ieq 'GoDaddy') {
+        Invoke-GoDaddyFindZonePatch
+    }
+
     # Validate the plugin exists in Posh-ACME (only in interactive mode to avoid overhead on scheduled runs)
     if ($script:isInteractive) {
         $availablePlugins = $null
@@ -2384,6 +2390,119 @@ function Remove-StaleAcmeOrder {
             }
             catch { }
         }
+}
+
+function Invoke-GoDaddyFindZonePatch {
+    <#
+    Patches Posh-ACME's GoDaddy plugin (GoDaddy.ps1) on disk to add a direct
+    domain access fallback in Find-GDZone.  The standard implementation only
+    searches the /v1/domains listing, which excludes domains managed via GoDaddy
+    Delegated Access / reseller accounts (the domain is accessible via the API
+    but does not appear in the account's own listing results).
+
+    The patch inserts a second loop that tries GET /v1/domains/{zone} directly
+    for each candidate zone name, so those delegated domains are found even when
+    the listing omits them.  A sentinel comment ('YWN_DirectFallback') prevents
+    double-patching.  After patching, the module is reloaded so the change takes
+    effect immediately.
+    #>
+
+    $paModule = Get-Module Posh-ACME -ErrorAction SilentlyContinue
+    if (-not $paModule) {
+        Write-Log "Posh-ACME not loaded; skipping GoDaddy zone-lookup patch" -Level Warning
+        return
+    }
+
+    $moduleDir  = Split-Path $paModule.Path -Parent
+    $pluginFile = Join-Path $moduleDir 'Plugins' 'GoDaddy.ps1'
+    if (-not (Test-Path $pluginFile)) {
+        Write-Log "GoDaddy plugin not found at '$pluginFile'; renewal will proceed without the zone-lookup patch (may fail for delegated-access domains)" -Level Warning
+        return
+    }
+
+    $content = Get-Content $pluginFile -Raw -Encoding UTF8
+    if ($content -match 'YWN_DirectFallback') {
+        Write-Log "GoDaddy Find-GDZone patch already applied" -Level Info
+        return
+    }
+
+    # Locate the Find-GDZone function and find the 'return $null' that closes it.
+    # In Posh-ACME 4.x the function ends with exactly one 4-space-indented 'return $null'
+    # followed by the closing brace.  We insert our fallback loop immediately before it.
+    $funcStart = $content.IndexOf('function Find-GDZone')
+    if ($funcStart -lt 0) {
+        Write-Log "GoDaddy plugin: Find-GDZone function not found in '$pluginFile' - cannot patch" -Level Warning
+        return
+    }
+
+    # Search for '    return $null' starting from inside Find-GDZone
+    $marker      = '    return $null'
+    $markerIndex = $content.IndexOf($marker, $funcStart)
+    if ($markerIndex -lt 0) {
+        Write-Log "GoDaddy plugin: 'return `$null' marker not found in Find-GDZone - plugin format may have changed, skipping patch" -Level Warning
+        return
+    }
+
+    $fallback = @'
+
+    # YWN_DirectFallback: handles GoDaddy Delegated Access / reseller accounts
+    # where the zone is manageable via the API but NOT returned by the listing
+    # endpoint (/v1/domains?limit=500).  Try direct GET /v1/domains/{zone} for
+    # each candidate zone name and accept the first one that responds successfully.
+    for ($i=0; $i -lt ($pieces.Count-1); $i++) {
+        $zone = $pieces[$i..($pieces.Count-1)] -join '.'
+        try {
+            $domInfo = Invoke-RestMethod "https://api.godaddy.com/v1/domains/$zone" `
+                -Headers (Get-GDAuthHeader $GDKey $GDSecret) @script:UseBasic -EA Stop
+            if ($domInfo.domain -or $domInfo.domainId) {
+                Write-Debug "GoDaddy Find-GDZone: zone '$zone' found via direct lookup (not in listing)"
+                return $zone
+            }
+        }
+        catch { }
+    }
+'@
+
+    $patched = $content.Substring(0, $markerIndex) + $fallback + "`n" + $content.Substring($markerIndex)
+
+    try {
+        [System.IO.File]::WriteAllText($pluginFile, $patched, [System.Text.Encoding]::UTF8)
+        Write-Log "GoDaddy plugin patched: direct-domain fallback added to Find-GDZone in '$pluginFile'" -Level Success
+
+        # Capture current server/account selection before reloading so we can restore
+        # them afterwards (Import-Module -Force resets all in-memory module state).
+        $savedHome      = $env:POSHACME_HOME
+        $savedServer    = $null
+        $savedAccountId = $null
+        try {
+            $srv = Get-PAServer -ErrorAction SilentlyContinue
+            if ($srv) {
+                $savedServer = $srv.Name   # e.g. 'LE_PROD' or 'LE_STAGE'
+                $acc = Get-PAAccount -ErrorAction SilentlyContinue
+                if ($acc) { $savedAccountId = $acc.id }
+            }
+        }
+        catch { }
+
+        Import-Module Posh-ACME -Force -ErrorAction Stop
+
+        # Restore environment variable and active server/account
+        if ($savedHome) { $env:POSHACME_HOME = $savedHome }
+        if ($savedServer) {
+            try {
+                Set-PAServer $savedServer -ErrorAction SilentlyContinue | Out-Null
+                if ($savedAccountId) {
+                    Set-PAAccount $savedAccountId -ErrorAction SilentlyContinue | Out-Null
+                }
+            }
+            catch { }
+        }
+
+        Write-Log "Posh-ACME reloaded with patched GoDaddy plugin (server/account state restored)" -Level Info
+    }
+    catch {
+        Write-Log "Failed to write GoDaddy plugin patch: $($_.Exception.Message)" -Level Warning
+    }
 }
 
 function Add-ChallengeToMatchingSites {
