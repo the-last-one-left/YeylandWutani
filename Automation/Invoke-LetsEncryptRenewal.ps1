@@ -2792,7 +2792,24 @@ function Install-RenewalTask {
             Write-Log "DNS plugin credentials on file: $credFile (DPAPI/LocalMachine encrypted)" -Level Info
         }
         else {
-            Write-Log "WARNING: No saved DNS plugin credentials found. The scheduled task will fail on renewal unless credentials are saved first by running this script interactively." -Level Warning
+            # No saved credentials yet — the cert may have already been valid so the ACME
+            # order path (which collects and saves creds) was never reached. Prompt now so
+            # the scheduled task can renew unattended when the cert eventually expires.
+            Write-Log "No saved DNS plugin credentials found - collecting now so the scheduled task can renew unattended..." -Level Warning
+            if ($script:isInteractive) {
+                $collectedArgs = Get-DnsPluginArgsInteractive -Plugin $script:DnsPlugin
+                if ($collectedArgs) {
+                    $script:DnsPluginArgs = $collectedArgs
+                    Save-PluginCredentials -Plugin $script:DnsPlugin -PluginArgs $collectedArgs
+                    Write-Log "DNS plugin credentials saved for scheduled task use" -Level Success
+                }
+                else {
+                    Write-Log "WARNING: No credentials entered. The scheduled task will fail on renewal - re-run interactively with -ForceRenewal to save credentials." -Level Warning
+                }
+            }
+            else {
+                Write-Log "WARNING: No saved DNS plugin credentials found. The scheduled task will fail on renewal unless credentials are saved first by running this script interactively." -Level Warning
+            }
         }
     }
 
