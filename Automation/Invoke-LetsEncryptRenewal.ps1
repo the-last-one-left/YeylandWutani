@@ -1924,6 +1924,24 @@ function Invoke-AcmeCertificateOrder {
                 $matchedSites = Add-ChallengeToMatchingSites -Domains $Domains -ChallengePath $challengeDir
             }
 
+            # Pre-check: if Posh-ACME has a cached order for this domain with no
+            # AuthURLs, the order is stale (LE already expired or removed those
+            # authorizations). Remove it now so New-PACertificate creates a fresh
+            # order. Posh-ACME swallows the internal Get-PAAuthorization exception
+            # and returns $null, so we cannot detect this reliably in the catch block.
+            if ($script:ChallengeType -in @('Dns', 'DnsManual')) {
+                try {
+                    $existingOrder = Get-PAOrder -MainDomain $Domains[0] -ErrorAction SilentlyContinue
+                    if ($existingOrder -and
+                        $existingOrder.status -in @('pending', 'processing') -and
+                        (-not $existingOrder.AuthURLs -or $existingOrder.AuthURLs.Count -eq 0)) {
+                        Write-Log "Stale ACME order detected (status=$($existingOrder.status), AuthURLs empty) - removing before attempt $attempt so a fresh order is created..." -Level Warning
+                        Remove-StaleAcmeOrder -Domains $Domains
+                    }
+                }
+                catch { }
+            }
+
             if ($script:ChallengeType -eq 'Dns') {
                 Write-Host ""
                 Write-Host "  `u{231B} DNS propagation wait (~${DnsSleep}s) - do not interrupt..." -ForegroundColor Yellow
