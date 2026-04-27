@@ -266,6 +266,12 @@ param(
     [switch]$SendReport,   # Enable email status reports (settings loaded from email_config.json)
 
     [Parameter()]
+    [string]$EmailBodyNote,   # Custom text appended to report email body (supports !!contact@co.com!! ConnectWise routing tags)
+
+    [Parameter()]
+    [string]$EmailSubjectNote,   # Text appended to the report email subject line
+
+    [Parameter()]
     [string]$CertStorePath = "Cert:\LocalMachine\WebHosting",
 
     [Parameter(ParameterSetName = 'RemoveTask')]
@@ -281,8 +287,10 @@ $script:FireboxLocalIP = $FireboxLocalIP
 $script:FireboxFtpPort = $FireboxFtpPort
 $script:SkipCertOrder  = $false
 $script:WgCredential   = $null
-$script:SendReport     = $SendReport.IsPresent
-$script:ReportSent     = $false
+$script:SendReport       = $SendReport.IsPresent
+$script:EmailBodyNote    = $EmailBodyNote
+$script:EmailSubjectNote = $EmailSubjectNote
+$script:ReportSent       = $false
 $script:ChallengeType  = $ChallengeType
 $script:DnsPlugin      = $DnsPlugin
 $script:DnsPluginArgs  = $DnsPluginArgs
@@ -1684,6 +1692,7 @@ function Send-RenewalReport {
 
     # Subject line
     $subject = "[YW] Let's Encrypt - $domain - $status"
+    if ($script:EmailSubjectNote) { $subject += " - $($script:EmailSubjectNote)" }
 
     # Build detail rows
     $tdL = "style=`"padding:9px 4px;color:#666;font-size:13px;white-space:nowrap;vertical-align:top`""
@@ -1711,7 +1720,11 @@ function Send-RenewalReport {
         $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Details</td><td $tdR style=`"color:$statusColor`">$safeMsg</td></tr>`n"
     }
     $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Started</td><td $tdR>$($startTime.ToString('yyyy-MM-dd HH:mm:ss'))</td></tr>`n"
-    $rows += "<tr><td $tdL>Log File</td><td $tdR style=`"font-size:11px;color:#888`">$LogFile</td></tr>`n"
+    $rows += "<tr style=`"border-bottom:1px solid #f0f0f0`"><td $tdL>Log File</td><td $tdR style=`"font-size:11px;color:#888`">$LogFile</td></tr>`n"
+    if ($script:EmailBodyNote) {
+        $safeNote = ($script:EmailBodyNote -replace '&','&amp;' -replace '<','&lt;' -replace '>','&gt;').Trim() -replace "`n", '<br>'
+        $rows += "<tr><td $tdL>Notes</td><td $tdR style=`"color:#555`">$safeNote</td></tr>`n"
+    }
 
     # HTML email body
     $html = @"
@@ -1952,6 +1965,10 @@ function Invoke-AcmeCertificateOrder {
             }
             elseif ($msg -match 'unauthorized|Incorrect TXT') {
                 Write-Log "AUTHORIZATION FAILED: The challenge response was rejected. For DNS-01, verify your API credentials and that the TXT record was created in the correct zone." -Level Error
+            }
+            elseif ($msg -match 'AuthURLs|No such authorization|Authorization not found') {
+                Write-Log "Stale ACME order detected - the cached authorization has expired on Let's Encrypt's server. Removing the stale order so the next attempt creates a fresh one..." -Level Warning
+                Remove-StaleAcmeOrder -Domains $Domains
             }
 
             if ($attempt -lt $maxAttempts) {
@@ -2282,6 +2299,43 @@ function Build-DnsManualChallengeParams {
         DnsSleep   = $DnsSleep
         Verbose    = $false
     }
+}
+
+function Remove-StaleAcmeOrder {
+    param([string[]]$Domains)
+
+    $mainDomain = $Domains[0]
+    Write-Log "Removing stale ACME order for: $mainDomain" -Level Info
+
+    # Posh-ACME 4.x provides Remove-PAOrder
+    try {
+        if (Get-Command Remove-PAOrder -ErrorAction SilentlyContinue) {
+            Remove-PAOrder -MainDomain $mainDomain -Force -ErrorAction Stop
+            Write-Log "Stale order removed via Remove-PAOrder" -Level Info
+            return
+        }
+    }
+    catch {
+        Write-Log "Remove-PAOrder failed ($($_.Exception.Message)) - falling back to filesystem cleanup" -Level Warning
+    }
+
+    # Fallback: find and delete the order.json + directory from Posh-ACME's data store
+    $acmeHome = if ($env:POSH_ACME_HOME) { $env:POSH_ACME_HOME } else {
+        Join-Path $env:ProgramData 'Posh-ACME'
+    }
+    if (-not (Test-Path $acmeHome)) { return }
+
+    Get-ChildItem -Path $acmeHome -Recurse -Filter 'order.json' -ErrorAction SilentlyContinue |
+        ForEach-Object {
+            try {
+                $orderData = Get-Content $_.FullName -Raw | ConvertFrom-Json
+                if ($orderData.MainDomain -eq $mainDomain) {
+                    Remove-Item -Path $_.DirectoryName -Recurse -Force -ErrorAction SilentlyContinue
+                    Write-Log "Removed stale order directory: $($_.DirectoryName)" -Level Info
+                }
+            }
+            catch { }
+        }
 }
 
 function Add-ChallengeToMatchingSites {
@@ -2718,6 +2772,8 @@ function Install-RenewalTask {
             Write-Log "WARNING: -SendReport specified but no email_config.json found. Configure email reporting interactively first." -Level Warning
         }
     }
+    if ($script:EmailBodyNote)    { $argParts += "-EmailBodyNote `"$($script:EmailBodyNote -replace '"', '`"')`"" }
+    if ($script:EmailSubjectNote) { $argParts += "-EmailSubjectNote `"$($script:EmailSubjectNote -replace '"', '`"')`"" }
 
     $action = New-ScheduledTaskAction `
         -Execute "powershell.exe" `
