@@ -2010,6 +2010,15 @@ function Invoke-AcmeCertificateOrder {
             if ($msg -match 'rateLimited') {
                 Write-Log "RATE LIMITED: Let's Encrypt rate limit reached. Wait at least 1 hour before retrying. Use -Staging for testing." -Level Error
             }
+            elseif ($msg -match 'UNABLE_TO_AUTHENTICATE') {
+                Write-Log "GoDaddy API credentials rejected (UNABLE_TO_AUTHENTICATE). The saved key/secret are stale." -Level Error
+                $credFile = Join-Path $LogDir "plugin_creds.json"
+                if (Test-Path $credFile) {
+                    Remove-Item $credFile -Force -ErrorAction SilentlyContinue
+                    Write-Log "Deleted stale credential file '$credFile'. Re-run the script to enter fresh credentials." -Level Warning
+                }
+                $script:DnsPluginArgs = $null
+            }
             elseif ($msg -match 'unauthorized|Incorrect TXT') {
                 Write-Log "AUTHORIZATION FAILED: The challenge response was rejected. For DNS-01, verify your API credentials and that the TXT record was created in the correct zone." -Level Error
             }
@@ -2320,6 +2329,16 @@ function Build-DnsChallengeParams {
         $script:DnsPluginArgs = $resolvedPluginArgs
     }
 
+    # For GoDaddy: verify the API credentials actually authenticate before handing
+    # them to Posh-ACME.  The GoDaddy plugin's own Find-GDZone uses catch{throw}
+    # on the listing call, so a bad key doesn't surface until deep inside the ACME
+    # flow.  By testing here we can clear stale saved credentials and re-prompt
+    # rather than failing with a cryptic UNABLE_TO_AUTHENTICATE inside the plugin.
+    if ($script:DnsPlugin -ieq 'GoDaddy' -and $resolvedPluginArgs) {
+        $resolvedPluginArgs = Assert-GoDaddyCredentials -PluginArgs $resolvedPluginArgs
+        $script:DnsPluginArgs = $resolvedPluginArgs
+    }
+
     $certParams = @{
         Domain     = $Domains
         AcceptTOS  = $true
@@ -2390,6 +2409,153 @@ function Remove-StaleAcmeOrder {
             }
             catch { }
         }
+}
+
+function Assert-GoDaddyCredentials {
+    <#
+    Verifies GoDaddy API credentials can authenticate AND create DNS records
+    before handing them to Posh-ACME. On failure the function:
+      - Identifies whether the problem is bad credentials (UNABLE_TO_AUTHENTICATE)
+        or a write-access / account-ownership issue (404 / 422 on write test).
+      - Clears plugin_creds.json when the saved key is clearly invalid.
+      - Throws a specific error so the user knows exactly what to fix.
+
+    Returns the (possibly refreshed) PluginArgs hashtable on success.
+    #>
+    param([hashtable]$PluginArgs)
+
+    $key = [string]$PluginArgs.GDKey
+    $sec = $PluginArgs.GDSecret
+
+    if (-not $key -or -not $sec) { return $PluginArgs }  # nothing to test
+
+    # Unpack the SecureString for the API test
+    if ($sec -is [System.Security.SecureString]) {
+        $bstr  = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($sec)
+        try   { $plain = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($bstr) }
+        finally { [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($bstr) }
+    }
+    else {
+        $plain = [string]$sec
+    }
+
+    $authHeader = @{Authorization = "sso-key ${key}:${plain}"}
+    $plain = $null
+    $credFile = Join-Path $LogDir "plugin_creds.json"
+
+    # --- Step 1: authentication test (listing call, same as Find-GDZone uses) ---
+    Write-Log "GoDaddy: verifying API credentials..." -Level Info
+    $listOk = $false
+    try {
+        $null = Invoke-RestMethod "https://api.godaddy.com/v1/domains?limit=1&statuses=ACTIVE" `
+            -Headers $authHeader -UseBasicParsing -ErrorAction Stop
+        $listOk = $true
+    }
+    catch {
+        $errBody = $null
+        try { $errBody = $_.ErrorDetails.Message } catch {}
+
+        if ($errBody -match 'UNABLE_TO_AUTHENTICATE' -or
+            $_.Exception.Message -match 'UNABLE_TO_AUTHENTICATE|401') {
+
+            Write-Log "GoDaddy credentials FAILED authentication (UNABLE_TO_AUTHENTICATE)." -Level Error
+            Write-Log "The saved API key or secret is invalid. Clearing saved credentials." -Level Warning
+
+            if (Test-Path $credFile) {
+                Remove-Item $credFile -Force -ErrorAction SilentlyContinue
+                Write-Log "Deleted stale credential file: $credFile" -Level Warning
+            }
+            $script:DnsPluginArgs = $null
+
+            if ([Environment]::UserInteractive) {
+                Write-Host ""
+                Write-Host "  The saved GoDaddy API key/secret is invalid." -ForegroundColor Red
+                Write-Host "  Please re-enter your credentials." -ForegroundColor Yellow
+                Write-Host ""
+                $fresh = Get-DnsPluginArgsInteractive -Plugin $script:DnsPlugin
+                if ($fresh) { return $fresh }
+            }
+
+            throw "GoDaddy API credentials are invalid (UNABLE_TO_AUTHENTICATE). " +
+                  "Run the script interactively to enter a valid API key and secret from developer.godaddy.com."
+        }
+        # Network or unknown error - don't block renewal
+        Write-Log "GoDaddy credential test (listing): $($_.Exception.Message) - proceeding anyway" -Level Warning
+        return $PluginArgs
+    }
+
+    Write-Log "GoDaddy: authentication OK." -Level Info
+
+    # --- Step 2: write-access test (PUT a dummy TXT record) ---
+    # We need to know which zone to test against.  Extract the zone from the domain list
+    # we're renewing (first domain gives us the zone to probe).
+    # Use a recognisable subdomain that won't interfere with real records.
+    # We test PUT rather than PATCH because Posh-ACME's Add-DnsTxt uses PUT/PATCH internally.
+    # Any 200/204 means write access is OK; 404 means the domain is in a different account.
+    $testDomain = $null
+    if ($script:DomainName) { $testDomain = $script:DomainName -replace '^\*\.', '' }
+
+    if ($testDomain) {
+        # Walk from most-specific to least-specific to find the registrable zone
+        $pieces = $testDomain.Split('.')
+        $writeTestZone = $null
+        $writeOk = $false
+        $writeErrBody = $null
+        $writeErrCode = $null
+
+        for ($i = 0; $i -lt ($pieces.Count - 1) -and -not $writeTestZone; $i++) {
+            $candidate = ($pieces[$i..($pieces.Count-1)]) -join '.'
+            try {
+                $authHeader2 = @{Authorization = $authHeader.Authorization}
+                $null = Invoke-RestMethod `
+                    "https://api.godaddy.com/v1/domains/$candidate/records/TXT/_acme-ywn-writetest" `
+                    -Method Put -Headers $authHeader2 -UseBasicParsing -ErrorAction Stop `
+                    -Body '[{"data":"ywn-write-test-delete-me","ttl":600}]' `
+                    -ContentType 'application/json'
+                $writeTestZone = $candidate
+                $writeOk = $true
+
+                # Clean up the test record
+                try {
+                    Invoke-RestMethod `
+                        "https://api.godaddy.com/v1/domains/$candidate/records/TXT/_acme-ywn-writetest" `
+                        -Method Delete -Headers $authHeader2 -UseBasicParsing -ErrorAction SilentlyContinue | Out-Null
+                }
+                catch { }
+            }
+            catch {
+                $writeErrBody = $null
+                try { $writeErrBody = $_.ErrorDetails.Message } catch {}
+                $writeErrCode = $_.Exception.Message
+                # 404 = domain not in this account; try next (shorter) candidate
+                if ($_.Exception.Message -match '404') { continue }
+                # Any other error on the first reasonable candidate = stop
+                break
+            }
+        }
+
+        if ($writeTestZone) {
+            Write-Log "GoDaddy: write access confirmed for zone '$writeTestZone'." -Level Success
+        }
+        else {
+            # Write test failed for all candidates
+            $is404 = $writeErrCode -match '404' -or $writeErrBody -match 'NOT_FOUND'
+            if ($is404) {
+                $msg  = "GoDaddy write access DENIED for '$testDomain' (HTTP 404 Not Found)."
+                $msg += " This API key belongs to a DIFFERENT GoDaddy account than the one that owns '$testDomain'."
+                $msg += " GoDaddy Delegated Access only grants READ permissions via the partner API key."
+                $msg += " FIX: Log in to the '$testDomain' GoDaddy account directly, go to developer.godaddy.com,"
+                $msg += " create a Production API key there, and use those credentials instead."
+                Write-Log $msg -Level Error
+                throw $msg
+            }
+            else {
+                Write-Log "GoDaddy write test for '$testDomain' returned: $writeErrCode | $writeErrBody - proceeding anyway" -Level Warning
+            }
+        }
+    }
+
+    return $PluginArgs
 }
 
 function Invoke-GoDaddyFindZonePatch {
