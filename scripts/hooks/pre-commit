@@ -1,0 +1,61 @@
+#!/bin/sh
+# Pre-commit hook: reject non-ASCII characters in staged .ps1, .sh, .py files
+#
+# SETUP (run once after cloning):
+#   Linux/Mac:
+#     ln -s ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+#   Windows (Git Bash, run as admin or with Developer Mode enabled):
+#     ln -s ../../scripts/hooks/pre-commit .git/hooks/pre-commit
+#
+#   Windows (PowerShell, run as admin):
+#     New-Item -ItemType SymbolicLink -Path .git\hooks\pre-commit -Target ..\..\scripts\hooks\pre-commit
+#
+#   Or just copy it:
+#     cp scripts/hooks/pre-commit .git/hooks/pre-commit
+
+if git rev-parse --verify HEAD >/dev/null 2>&1
+then
+    against=HEAD
+else
+    against=$(git hash-object -t tree /dev/null)
+fi
+
+exec 1>&2
+
+staged=$(git diff --cached --name-only --diff-filter=ACM "$against" | grep -E '\.(ps1|sh|py)$')
+
+if [ -z "$staged" ]; then
+    exit 0
+fi
+
+python3 - "$staged" <<'PYEOF'
+import sys, os
+
+files = [f for f in sys.argv[1].splitlines() if f]
+found = False
+
+for filepath in files:
+    if not os.path.isfile(filepath):
+        continue
+    try:
+        with open(filepath, encoding='utf-8') as fh:
+            for i, line in enumerate(fh, 1):
+                bad = [(j, hex(ord(c)), repr(c)) for j, c in enumerate(line) if ord(c) > 127]
+                if bad:
+                    if not found:
+                        print("ERROR: Non-ASCII characters found in staged files:")
+                    print(f"  {filepath}:{i}: {repr(line.rstrip())}")
+                    for col, hexval, char in bad[:3]:
+                        print(f"    col {col}: {hexval} {char}")
+                    found = True
+    except Exception as e:
+        print(f"  Could not read {filepath}: {e}")
+        found = True
+
+if found:
+    print("")
+    print("Commit blocked. Replace em dashes (--), curly quotes, and other non-ASCII")
+    print("characters with plain ASCII equivalents before committing.")
+    sys.exit(1)
+PYEOF
