@@ -4050,9 +4050,10 @@ function Get-TenantSignInData {
             }
             
             # Check if the error indicates lack of premium license or B2C tenant
-            if ($errorMessage -match "Authentication_RequestFromNonPremiumTenantOrB2CTenant" -or 
-                $errorMessage -match "premium license" -or 
+            if ($errorMessage -match "Authentication_RequestFromNonPremiumTenantOrB2CTenant" -or
+                $errorMessage -match "premium license" -or
                 $errorMessage -match "B2C tenant" -or
+                $errorMessage -match "HttpClient.Timeout" -or
                 ($errorMessage -match "403" -and $errorMessage -match "Forbidden")) {
                 
                 $isPremiumTenant = $false
