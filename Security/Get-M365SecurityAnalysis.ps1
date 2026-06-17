@@ -3976,6 +3976,51 @@ function Get-SignInStatusDescription {
     }
 }
 
+function Get-AdaptiveGraphTimeoutSec {
+    <#
+    .SYNOPSIS
+        Computes a wall-clock timeout (seconds) for the premium Graph sign-in query, scaled to
+        tenant size and the requested look-back window.
+    .DESCRIPTION
+        The Graph SDK uses a fixed 300s HttpClient timeout. On a small or non-premium tenant
+        (whose signIns endpoint hangs instead of erroring) that means a 5-minute wait before the
+        Exchange Online fallback kicks in. Scaling the timeout to user count + day window lets
+        small tenants fail fast while large tenants still get enough time.
+    #>
+    [CmdletBinding()]
+    param(
+        [int]$DaysBack = 14
+    )
+
+    # Tuning constants (local so the behaviour is easy to see and adjust).
+    $baseSec    = 30      # baseline even for a tiny tenant
+    $perUserSec = 0.3     # extra seconds per user account
+    $perDaySec  = 3       # extra seconds per day of look-back
+    $minSec     = 40
+    $maxSec     = 480
+    $unknownSec = 120     # moderate default when tenant size can't be determined
+
+    $userCount = $null
+    try {
+        $userCount = [int](Get-MgUserCount -ConsistencyLevel eventual -ErrorAction Stop)
+        Write-Log "Tenant size probe: $userCount users" -Level "Info"
+    }
+    catch {
+        Write-Log "Could not determine tenant user count ($($_.Exception.Message)); using moderate default timeout" -Level "Warning"
+    }
+
+    if ($null -eq $userCount) {
+        $timeout = $unknownSec
+    } else {
+        $computed = $baseSec + [int]($userCount * $perUserSec) + ($DaysBack * $perDaySec)
+        $timeout  = [int][Math]::Max($minSec, [Math]::Min($maxSec, $computed))
+    }
+
+    $sizeText = if ($null -eq $userCount) { "unknown" } else { $userCount }
+    Write-Log "Adaptive premium Graph timeout: $timeout s (users=$sizeText, days=$DaysBack)" -Level "Info"
+    return $timeout
+}
+
 function Get-TenantSignInData {
     <#
     .SYNOPSIS
@@ -4088,11 +4133,46 @@ function Get-TenantSignInData {
         
         # ATTEMPT 1: Premium Microsoft Graph API
         try {
-            Update-GuiStatus "Attempting premium Microsoft Graph API..." ([System.Drawing.Color]::Orange)
             $filter = "createdDateTime ge $filterDate"
+            $graphTimeoutSec = Get-AdaptiveGraphTimeoutSec -DaysBack $DaysBack
+            Update-GuiStatus "Attempting premium Microsoft Graph API (timeout ${graphTimeoutSec}s)..." ([System.Drawing.Color]::Orange)
             Write-Log "Trying premium Graph API with filter: $filter" -Level "Info"
-            
-            $signInLogs = Get-MgBetaAuditLogSignIn -Filter $filter -All -ErrorAction Stop
+
+            # Enforce our own wall-clock timeout so a non-premium tenant (whose signIns endpoint
+            # hangs rather than erroring) fails fast to the Exchange Online fallback instead of
+            # blocking on the SDK's fixed 300s HttpClient timeout. Start-ThreadJob runs in-process,
+            # so it shares the Microsoft Graph connection established on the main thread.
+            if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {
+                $graphJob = Start-ThreadJob -ScriptBlock {
+                    param($f) Get-MgBetaAuditLogSignIn -Filter $f -All -ErrorAction Stop
+                } -ArgumentList $filter
+                try {
+                    if (Wait-Job -Job $graphJob -Timeout $graphTimeoutSec) {
+                        $signInLogs = Receive-Job -Job $graphJob -ErrorAction Stop
+                    } else {
+                        throw "Premium Graph API exceeded the adaptive timeout of $graphTimeoutSec seconds"
+                    }
+                }
+                catch {
+                    # If the worker runspace could not see the Graph connection, retry inline so
+                    # premium tenants still work (no worse than the original direct call).
+                    if ($_.Exception.Message -match 'Authentication needed|Connect-MgGraph|not connected|InteractiveBrowserCredential') {
+                        Write-Log "Worker thread lacked Graph context; retrying premium query inline" -Level "Info"
+                        $signInLogs = Get-MgBetaAuditLogSignIn -Filter $filter -All -ErrorAction Stop
+                    } else {
+                        throw
+                    }
+                }
+                finally {
+                    Stop-Job   -Job $graphJob -ErrorAction SilentlyContinue
+                    Remove-Job -Job $graphJob -Force -ErrorAction SilentlyContinue
+                }
+            }
+            else {
+                # ThreadJob module unavailable (e.g. stock PowerShell 5.1) - direct call.
+                $signInLogs = Get-MgBetaAuditLogSignIn -Filter $filter -All -ErrorAction Stop
+            }
+
             Write-Log "Premium Graph API successful: $($signInLogs.Count) total records" -Level "Info"
             Update-GuiStatus "Premium Graph API successful - $($signInLogs.Count) records retrieved" ([System.Drawing.Color]::Green)
         }
@@ -4109,6 +4189,7 @@ function Get-TenantSignInData {
                 $errorMessage -match "premium license" -or
                 $errorMessage -match "B2C tenant" -or
                 $errorMessage -match "HttpClient.Timeout" -or
+                $errorMessage -match "adaptive timeout" -or
                 ($errorMessage -match "403" -and $errorMessage -match "Forbidden")) {
                 
                 $isPremiumTenant = $false
