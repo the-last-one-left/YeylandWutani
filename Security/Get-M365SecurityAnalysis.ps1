@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.11"
+$ScriptVer = "11.12"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -198,6 +198,8 @@ $Global:ExchangeOnlineState = @{
     IsConnected       = $false  # Is currently connected to EXO
     LastChecked       = $null   # Last connection verification time
     ConnectionAttempts = 0      # Number of connection attempts (for retry logic)
+    LastCollectionComplete = $true   # Did the most recent EXO data pull cover the full date range?
+    LastCollectionWarning  = $null   # Human-readable note describing any gaps in the last pull
 }
 
 #--------------------------------------------------------------
@@ -739,7 +741,7 @@ $ConfigData.ETRAnalysis = @{
         SpamKeywords      = 15   # Spam keywords in message subjects
         MassDistribution  = 15   # Same message sent to many recipients
         FailedDelivery    = 10   # High rate of delivery failures (spam detection)
-        SuspiciousTimiming = 8   # Unusual send time patterns
+        SuspiciousTiming = 8   # Unusual send time patterns (reserved - no consumer yet)
     }
 }
 
@@ -893,9 +895,12 @@ function Test-IPStackAPIKey {
         }
     }
     catch {
+        # Redact the API key in case a connection/DNS error echoed the request URI
+        # (containing access_key=...) into the exception message; this Message is logged.
+        $safeMessage = $_.Exception.Message -replace 'access_key=[^&\s"'']+', 'access_key=***REDACTED***'
         return [PSCustomObject]@{
             IsValid        = $false
-            Message        = "Connection error: $($_.Exception.Message)"
+            Message        = "Connection error: $safeMessage"
             ErrorCode      = $null
             QuotaRemaining = $null
         }
@@ -2172,7 +2177,10 @@ function Invoke-IPGeolocation {
                 }
             }
             catch {
-                $errorMsg = $_.Exception.Message
+                # Redact the API key: some connection/DNS errors echo the full request URI
+                # (which contains access_key=...) into the exception message, and this string
+                # is written to the log file below.
+                $errorMsg = $_.Exception.Message -replace 'access_key=[^&\s"'']+', 'access_key=***REDACTED***'
                 # Don't retry on auth or permanent errors
                 if ($errorMsg -match "401|403|invalid.*key|usage.*limit") {
                     Write-Log "IPStack permanent error for ${IPAddress}: $errorMsg" -Level "Warning"
@@ -4420,6 +4428,9 @@ function Get-TenantSignInData {
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
         Write-Log "SIGN-IN DATA COLLECTION COMPLETED" -Level "Info"
         Write-Log "Data Source: $(if ($isPremiumTenant) { "Premium Graph API" } else { "Exchange Online Fallback" })" -Level "Info"
+        if (-not $isPremiumTenant -and -not $Global:ExchangeOnlineState.LastCollectionComplete) {
+            Write-Log "DATA COMPLETENESS: INCOMPLETE - $($Global:ExchangeOnlineState.LastCollectionWarning)" -Level "Error"
+        }
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
         Write-Log "Total Sign-ins: $($results.Count)" -Level "Info"
         Write-Log "  IPv4 Addresses: $ipv4Count" -Level "Info"
@@ -4523,6 +4534,13 @@ function Get-SignInDataFromExchangeOnline {
         $currentStart = $startDate
         $chunkNumber = 0
         $totalRecords = 0
+        $failedChunks = 0
+        $failedRanges = [System.Collections.Generic.List[string]]::new()
+
+        # Assume complete until a chunk fails; reset here so a previous run's state
+        # does not bleed into this collection.
+        $Global:ExchangeOnlineState.LastCollectionComplete = $true
+        $Global:ExchangeOnlineState.LastCollectionWarning = $null
         
         # Process chunks with optimized pagination
         while ($currentStart -lt $endDate) {
@@ -4596,16 +4614,32 @@ function Get-SignInDataFromExchangeOnline {
                 }
             }
             catch {
-                Write-Log "Error in chunk ${chunkNumber}: $($_.Exception.Message)" -Level "Warning"
+                # A failed chunk means this time window is missing from the dataset.
+                # Track it so the caller/report can flag the results as incomplete rather
+                # than presenting a partial pull as if it covered the full range.
+                $failedChunks++
+                $rangeText = "$($currentStart.ToString('yyyy-MM-dd HH:mm')) to $($currentEnd.ToString('yyyy-MM-dd HH:mm'))"
+                $failedRanges.Add($rangeText)
+                Write-Log "Error in chunk ${chunkNumber} ($rangeText): $($_.Exception.Message)" -Level "Warning"
             }
-            
+
             Update-GuiStatus "Progress: $chunkNumber/$expectedChunks chunks. Total: $totalRecords records" ([System.Drawing.Color]::Green)
             [System.Windows.Forms.Application]::DoEvents()
             $currentStart = $currentEnd
         }
         
         Write-Log "Completed all $chunkNumber chunks: $totalRecords total audit log entries" -Level "Info"
-        
+
+        # If any chunk failed, the dataset has gaps. Make this loud rather than silent so
+        # downstream analysis and the report are not mistaken for full-coverage results.
+        if ($failedChunks -gt 0) {
+            $warning = "$failedChunks of $chunkNumber EXO chunks failed - sign-in data is INCOMPLETE for: $($failedRanges -join '; ')"
+            $Global:ExchangeOnlineState.LastCollectionComplete = $false
+            $Global:ExchangeOnlineState.LastCollectionWarning = $warning
+            Write-Log $warning -Level "Error"
+            Update-GuiStatus "WARNING: $failedChunks/$chunkNumber chunks failed - results are incomplete (see log)" ([System.Drawing.Color]::Red)
+        }
+
         # Remove duplicates (ReturnLargeSet returns unsorted data with dupes)
         if ($auditLogs.Count -gt 0) {
             Write-Log "Removing duplicate records..." -Level "Info"
@@ -5071,7 +5105,8 @@ function Get-MFAStatusAudit {
         # PRE-CACHE: Group memberships for Conditional Access evaluation
         # ═══════════════════════════════════════════════════════════════════════════
         $groupMembershipCache = @{}
-        
+        $failedGroupIds = [System.Collections.Generic.HashSet[string]]::new()
+
         if ($caPolicies.Count -gt 0) {
             Update-GuiStatus "Pre-caching group memberships for CA policy evaluation..." ([System.Drawing.Color]::Orange)
             Write-Log "Building group membership cache for Conditional Access policies..." -Level "Info"
@@ -5094,7 +5129,11 @@ function Get-MFAStatusAudit {
             
             foreach ($groupId in $allGroupIds) {
                 try {
-                    $members = Get-MgGroupMember -GroupId $groupId -All -ErrorAction SilentlyContinue
+                    # Use -ErrorAction Stop so a permission/throttle failure is caught and
+                    # tracked, rather than silently returning $null and being cached as an
+                    # empty group (which is indistinguishable from a genuinely empty group
+                    # and would make in-scope users look uncovered).
+                    $members = Get-MgGroupMember -GroupId $groupId -All -ErrorAction Stop
                     $memberIdSet = [System.Collections.Generic.HashSet[string]]::new()
                     foreach ($m in $members) {
                         [void]$memberIdSet.Add($m.Id)
@@ -5104,11 +5143,15 @@ function Get-MFAStatusAudit {
                 }
                 catch {
                     $groupMembershipCache[$groupId] = [System.Collections.Generic.HashSet[string]]::new()
+                    [void]$failedGroupIds.Add($groupId)
                     Write-Log "  Failed to cache group ${groupId}: $($_.Exception.Message)" -Level "Warning"
                 }
             }
-            
+
             Write-Log "Group membership cache built: $($groupMembershipCache.Count) groups cached" -Level "Info"
+            if ($failedGroupIds.Count -gt 0) {
+                Write-Log "WARNING: $($failedGroupIds.Count) CA group(s) could not be read. Conditional Access coverage for users in those groups may be reported as absent when it is not. Affected group IDs: $($failedGroupIds -join ', ')" -Level "Error"
+            }
         }
         
         foreach ($user in $users) {
@@ -5605,6 +5648,11 @@ function Get-FailedLoginPatterns {
         
         $ipGroups = $failedLogins | Group-Object -Property IP
         foreach ($ipGroup in $ipGroups) {
+            # Skip records with no source IP. EXO UAL fallback data frequently omits the IP,
+            # and an empty/null IP would otherwise collapse every IP-less failure across many
+            # users into a single phantom password-spray group.
+            if ([string]::IsNullOrWhiteSpace($ipGroup.Name)) { continue }
+
             $uniqueUsers = ($ipGroup.Group | Select-Object -Unique UserId).Count
             $totalAttempts = $ipGroup.Count
             
@@ -5619,6 +5667,7 @@ function Get-FailedLoginPatterns {
                 $patterns.Add([PSCustomObject]@{
                     PatternType = "Password Spray"
                     SourceIP = $ipGroup.Name
+                    SourceIPs = $ipGroup.Name
                     Location = ($ipGroup.Group | Select-Object -First 1).City + ", " + ($ipGroup.Group | Select-Object -First 1).Country
                     ISP = ($ipGroup.Group | Select-Object -First 1).ISP
                     TargetedUsers = $uniqueUsers
@@ -5643,9 +5692,18 @@ function Get-FailedLoginPatterns {
         
         $userGroups = $failedLogins | Group-Object -Property UserId
         foreach ($userGroup in $userGroups) {
+            # Skip records with no user. An empty/null UserId would otherwise collapse
+            # unrelated failures into one phantom brute-force pattern.
+            if ([string]::IsNullOrWhiteSpace($userGroup.Name)) { continue }
+
             $totalAttempts = $userGroup.Count
-            $uniqueIPs = ($userGroup.Group | Select-Object -Unique IP).Count
-            
+            # Capture the actual distinct source IPs (excluding blanks) so the executive
+            # summary can union real IPs instead of a fabricated count.
+            $bruteForceIPs = @($userGroup.Group |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_.IP) } |
+                Select-Object -ExpandProperty IP -Unique)
+            $uniqueIPs = $bruteForceIPs.Count
+
             if ($totalAttempts -ge 5) {
                 $timespan = 0
                 if ($userGroup.Group.Count -gt 1) {
@@ -5656,7 +5714,8 @@ function Get-FailedLoginPatterns {
                 
                 $patterns.Add([PSCustomObject]@{
                     PatternType = "Brute Force"
-                    SourceIP = if ($uniqueIPs -eq 1) { ($userGroup.Group | Select-Object -First 1).IP } else { "Multiple IPs ($uniqueIPs)" }
+                    SourceIP = if ($uniqueIPs -eq 1) { $bruteForceIPs[0] } else { "Multiple IPs ($uniqueIPs)" }
+                    SourceIPs = ($bruteForceIPs -join ";")
                     Location = if ($uniqueIPs -eq 1) { 
                         ($userGroup.Group | Select-Object -First 1).City + ", " + ($userGroup.Group | Select-Object -First 1).Country 
                     } else { "Multiple Locations" }
@@ -5738,6 +5797,7 @@ function Get-FailedLoginPatterns {
                     $patterns.Add([PSCustomObject]@{
                         PatternType = "Successful Breach"
                         SourceIP = $ip
+                        SourceIPs = $ip
                         Location = $attempts[0].City + ", " + $attempts[0].Country
                         ISP = $attempts[0].ISP
                         TargetedUsers = 1
@@ -5890,7 +5950,10 @@ function Get-RecentPasswordChanges {
                 $selfReset = ($events | Where-Object { $_.InitiatedBy -eq $_.TargetUser }).Count
                 $adminReset = ($events | Where-Object { $_.InitiatedBy -ne $_.TargetUser }).Count
                 
-                # Check for off-hours activity (before 6 AM or after 10 PM)
+                # Check for off-hours activity (before 6 AM or after 10 PM).
+                # NOTE: [DateTime]::Parse converts a UTC ('Z') timestamp to the LOCAL time of
+                # the machine running this analysis. The off-hours window therefore reflects the
+                # analyst's timezone, which may differ from the client tenant's business hours.
                 $offHoursChanges = 0
                 foreach ($event in $events) {
                     try {
@@ -6331,8 +6394,9 @@ function Get-MailboxRules {
         
         $allRulesArray = [System.Collections.Generic.List[PSCustomObject]]::new()
         $processedCount = 0
+        $skippedMailboxes = 0
         $startTime = Get-Date
-        
+
         foreach ($mailbox in $mailboxesToCheck) {
             $processedCount++
             
@@ -6359,10 +6423,33 @@ function Get-MailboxRules {
             
             try {
                 Write-Log "Checking rules for: $($mailbox.PrimarySmtpAddress)" -Level "Info"
-                
-                # Get rules for this mailbox
-                $rules = Get-InboxRule -Mailbox $mailbox.PrimarySmtpAddress -ErrorAction Stop
-                
+
+                # Get rules for this mailbox, retrying on Exchange Online throttling (429/503).
+                # Without this, a throttled mailbox is silently skipped and its rules go
+                # unreported - a real risk on large tenants where forwarding rules are the
+                # primary compromise indicator.
+                $rules = $null
+                $ruleAttempt = 0
+                $maxRuleAttempts = 4
+                while ($ruleAttempt -lt $maxRuleAttempts) {
+                    $ruleAttempt++
+                    try {
+                        $rules = Get-InboxRule -Mailbox $mailbox.PrimarySmtpAddress -ErrorAction Stop
+                        break
+                    }
+                    catch {
+                        $isThrottle = $_.Exception.Message -match '429|503|throttl|too many requests|ServerBusy'
+                        if ($isThrottle -and $ruleAttempt -lt $maxRuleAttempts) {
+                            $backoff = [Math]::Min(30, [Math]::Pow(2, $ruleAttempt))
+                            Write-Log "Throttled on $($mailbox.PrimarySmtpAddress) (attempt $ruleAttempt) - backing off $backoff s" -Level "Warning"
+                            Start-Sleep -Seconds $backoff
+                        }
+                        else {
+                            throw
+                        }
+                    }
+                }
+
                 if ($rules) {
                     Write-Log "Found $(@($rules).Count) rule(s) for $($mailbox.PrimarySmtpAddress)" -Level "Info"
                     
@@ -6451,10 +6538,17 @@ function Get-MailboxRules {
                 }
             }
             catch {
+                $skippedMailboxes++
                 Write-Log "Error getting rules for $($mailbox.PrimarySmtpAddress): $($_.Exception.Message)" -Level "Warning"
             }
         }
-        
+
+        # If any mailboxes could not be read, the rules dataset is incomplete - surface it.
+        if ($skippedMailboxes -gt 0) {
+            Write-Log "$skippedMailboxes of $($mailboxesToCheck.Count) mailboxes could not be read (errors/throttling) - inbox rule results are INCOMPLETE" -Level "Error"
+            Update-GuiStatus "WARNING: $skippedMailboxes mailbox(es) skipped - rule results incomplete (see log)" ([System.Drawing.Color]::Red)
+        }
+
         # ═══════════════════════════════════════════════════════════════════════════
         # STEP 5: EXPORT RESULTS
         # ═══════════════════════════════════════════════════════════════════════════
@@ -6931,7 +7025,14 @@ function Get-MessageTraceExchangeOnline {
         }
         
         Write-Log "Get-MessageTraceV2 returned $($allMessages.Count) messages" -Level "Info"
-        
+
+        # If the result hit the ResultSize ceiling, the trace is almost certainly truncated.
+        # Flag it so downstream spam/ETR analysis is not mistaken for a complete picture.
+        if ($allMessages.Count -ge $MaxMessages) {
+            Write-Log "Message trace hit the $MaxMessages-record cap - results are likely TRUNCATED. Narrow the date range for complete coverage." -Level "Warning"
+            Update-GuiStatus "WARNING: message trace capped at $MaxMessages records - results may be incomplete" ([System.Drawing.Color]::Red)
+        }
+
         if ($allMessages.Count -eq 0) {
             Update-GuiStatus "No messages found in date range" ([System.Drawing.Color]::Orange)
             Write-Log "No messages found for the specified date range" -Level "Warning"
@@ -9216,14 +9317,18 @@ if ($highCount -gt 0) {
                 $accountsUnderAttack++
                 foreach ($pattern in $user.FailedLoginPatterns) {
                     $totalBruteForceAttempts += $pattern.FailedAttempts
-                    # Extract IPs from "Multiple IPs (X)" format or single IP
-                    if ($pattern.SourceIP -match "Multiple IPs") {
-                        # Extract count from pattern
-                        if ($pattern.SourceIP -match '\((\d+)\)') {
-                            $ipCount = [int]$matches[1]
-                            $uniqueAttackIPs += @(1..$ipCount)
+                    # Prefer the SourceIPs field (semicolon-delimited list of the actual
+                    # distinct attacker IPs) so the unique count reflects real IPs. Fall back
+                    # to the single SourceIP for older data that predates this field, skipping
+                    # the "Multiple IPs (X)" summary string which carries no recoverable IPs.
+                    if (-not [string]::IsNullOrWhiteSpace($pattern.SourceIPs)) {
+                        foreach ($ipEntry in ($pattern.SourceIPs -split ';')) {
+                            if (-not [string]::IsNullOrWhiteSpace($ipEntry)) {
+                                $uniqueAttackIPs += $ipEntry.Trim()
+                            }
                         }
-                    } else {
+                    } elseif ($pattern.SourceIP -notmatch "Multiple IPs" -and
+                              -not [string]::IsNullOrWhiteSpace($pattern.SourceIP)) {
                         $uniqueAttackIPs += $pattern.SourceIP
                     }
                 }
@@ -9286,8 +9391,10 @@ if ($highCount -gt 0) {
                 $attackRisk = if ($pattern.RiskLevel -eq "Critical") { "danger" } else { "warning" }
             }
 
-            $mfaStatus = if ($user.MFAEnabled -eq "Yes") { "success" } else { "danger" }
-            $mfaBadge = if ($user.MFAEnabled -eq "Yes") { "✓ Enabled" } else { "✗ DISABLED" }
+            # Use MFAStatus (the property actually present on the result object). The old code
+            # referenced $user.MFAEnabled, which never existed, so every user rendered DISABLED.
+            $mfaStatus = switch ($user.MFAStatus) { "Yes" { "success" } "No" { "danger" } default { "warning" } }
+            $mfaBadge = switch ($user.MFAStatus) { "Yes" { "✓ Enabled" } "No" { "✗ DISABLED" } default { "Unknown" } }
 
             $riskBadgeClass = switch ($user.RiskLevel) {
                 "Critical" { "danger" }
@@ -9299,7 +9406,7 @@ if ($highCount -gt 0) {
                         <tr>
                             <td><strong>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</strong></td>
                             <td>$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</td>
-                            <td>$attackInfo</td>
+                            <td>$([System.Web.HttpUtility]::HtmlEncode($attackInfo))</td>
                             <td><span class="badge $attackRisk" style="font-size: 1.1em;">$attemptCount</span></td>
                             <td style="font-family: monospace; font-size: 0.9em;">$([System.Web.HttpUtility]::HtmlEncode($sourceIPs))</td>
                             <td><span class="badge $riskBadgeClass">$($user.RiskLevel)</span></td>
@@ -10865,7 +10972,7 @@ function Show-MainGUI {
                     if (Test-Path $signInDataPath) {
                         try {
                             $signInData = Import-Csv -Path $signInDataPath
-                            $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" } | 
+                            $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } |
                                        Select-Object -ExpandProperty IP -Unique
                         } catch { }
                     }
@@ -10950,11 +11057,11 @@ function Show-MainGUI {
                         if (Test-Path $signInDataPath) {
                             try {
                                 $signInData = Import-Csv -Path $signInDataPath
-                                $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" } | 
+                                $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } |
                                            Select-Object -ExpandProperty IP -Unique
                             } catch { }
                         }
-                        Analyze-ETRData -RiskyIPs $riskyIPs | Out-Null 
+                        Analyze-ETRData -RiskyIPs $riskyIPs | Out-Null
                     }
                 }
                 $completed++
