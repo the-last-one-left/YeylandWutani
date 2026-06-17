@@ -4021,6 +4021,49 @@ function Get-AdaptiveGraphTimeoutSec {
     return $timeout
 }
 
+function Test-PremiumSignInLicense {
+    <#
+    .SYNOPSIS
+        Determines whether the tenant holds an Azure AD Premium P1/P2 license, which the Graph
+        sign-in logs endpoint (auditLogs/signIns) requires.
+    .OUTPUTS
+        $true  - a premium plan is present (attempt Graph)
+        $false - SKUs read successfully and NO premium plan present (skip straight to fallback)
+        $null  - could not be determined (caller should still attempt Graph with a timeout)
+    .NOTES
+        Biased toward attempting Graph: a false negative would silently lose premium sign-in
+        data, whereas a false positive merely hits the adaptive timeout and falls back anyway.
+    #>
+    [CmdletBinding()]
+    param()
+
+    # AAD_PREMIUM = P1, AAD_PREMIUM_P2 = P2. Either one enables the sign-in logs API.
+    $premiumPlanNames = @('AAD_PREMIUM', 'AAD_PREMIUM_P2')
+    try {
+        $skus = Get-MgSubscribedSku -All -ErrorAction Stop
+        if (-not $skus) { return $null }
+
+        foreach ($sku in $skus) {
+            foreach ($plan in $sku.ServicePlans) {
+                # Match on plan name only (any status except an explicitly disabled plan) to
+                # avoid false negatives that would skip a working premium tenant.
+                if ($premiumPlanNames -contains $plan.ServicePlanName -and
+                    $plan.ProvisioningStatus -ne 'Disabled') {
+                    Write-Log "Premium sign-in license detected: $($plan.ServicePlanName) (SKU $($sku.SkuPartNumber))" -Level "Info"
+                    return $true
+                }
+            }
+        }
+
+        Write-Log "No Azure AD Premium (P1/P2) license found in tenant SKUs - sign-in logs API unavailable" -Level "Info"
+        return $false
+    }
+    catch {
+        Write-Log "Could not read subscribed SKUs ($($_.Exception.Message)); will attempt Graph with timeout" -Level "Warning"
+        return $null
+    }
+}
+
 function Get-TenantSignInData {
     <#
     .SYNOPSIS
@@ -4134,6 +4177,14 @@ function Get-TenantSignInData {
         # ATTEMPT 1: Premium Microsoft Graph API
         try {
             $filter = "createdDateTime ge $filterDate"
+
+            # Pre-flight: the signIns endpoint requires an Azure AD Premium P1/P2 license.
+            # If the tenant positively has none, skip the Graph attempt entirely and drop to
+            # the Exchange Online fallback immediately - no probe, no timeout wait.
+            if ((Test-PremiumSignInLicense) -eq $false) {
+                throw "Authentication_RequestFromNonPremiumTenantOrB2CTenant: no Azure AD Premium (P1/P2) license in tenant (pre-flight) - using Exchange Online fallback"
+            }
+
             $graphTimeoutSec = Get-AdaptiveGraphTimeoutSec -DaysBack $DaysBack
             Update-GuiStatus "Attempting premium Microsoft Graph API (timeout ${graphTimeoutSec}s)..." ([System.Drawing.Color]::Orange)
             Write-Log "Trying premium Graph API with filter: $filter" -Level "Info"
