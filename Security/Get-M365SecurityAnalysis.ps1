@@ -2433,6 +2433,49 @@ function Test-ExistingGraphConnection {
     return $false
 }
 
+function Show-ConsoleWindowBestEffort {
+    <#
+    .SYNOPSIS
+        Makes a console window visible (allocating one if needed) so console-only output
+        such as the Exchange Online device code is readable from a WinForms session.
+    .NOTES
+        Best-effort only - wrapped by the caller in try/catch. Returns $true if a console
+        window should now be visible.
+    #>
+    try {
+        if (-not ([System.Management.Automation.PSTypeName]'YW.ConsoleHelper').Type) {
+            Add-Type -Namespace YW -Name ConsoleHelper -MemberDefinition @'
+[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern System.IntPtr GetConsoleWindow();
+[System.Runtime.InteropServices.DllImport("kernel32.dll", SetLastError=true)] public static extern bool AllocConsole();
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool ShowWindow(System.IntPtr hWnd, int nCmdShow);
+[System.Runtime.InteropServices.DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);
+'@ -ErrorAction Stop
+        }
+
+        $hWnd = [YW.ConsoleHelper]::GetConsoleWindow()
+        if ($hWnd -eq [System.IntPtr]::Zero) {
+            # No console attached - allocate one and rewire Console.Out so native writes land there
+            if ([YW.ConsoleHelper]::AllocConsole()) {
+                $stdout = [System.Console]::OpenStandardOutput()
+                $writer = New-Object System.IO.StreamWriter($stdout)
+                $writer.AutoFlush = $true
+                [System.Console]::SetOut($writer)
+                $hWnd = [YW.ConsoleHelper]::GetConsoleWindow()
+            }
+        }
+
+        if ($hWnd -ne [System.IntPtr]::Zero) {
+            [YW.ConsoleHelper]::ShowWindow($hWnd, 5)  | Out-Null   # SW_SHOW
+            [YW.ConsoleHelper]::SetForegroundWindow($hWnd) | Out-Null
+            return $true
+        }
+    }
+    catch {
+        Write-Log "Could not reveal console window for device code: $($_.Exception.Message)" -Level "Warning"
+    }
+    return $false
+}
+
 function Connect-TenantServices {
     <#
     .SYNOPSIS
@@ -3018,35 +3061,29 @@ function Connect-TenantServices {
             if ($userPrincipalName) {
                 Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)" -Level "Info"
 
-                # WAM/RuntimeBroker crashes when MSAL is initialised from a WinForms GUI thread
-                # regardless of SynchronizationContext tricks (EXO 3.x / MSAL 4.x+).
-                # Detect WinForms context and skip WAM entirely; fall straight through to the
-                # enhanced device-code path which opens the browser and shows the user the code.
-                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
-                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
-                } else { "" }
-                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
-
+                # WAM/RuntimeBroker throws a NullReferenceException when MSAL initialises the
+                # broker from a WinForms GUI thread (EXO 3.x / MSAL 4.x+). The clean fix is
+                # -DisableWAM, which falls back to browser-based SSO - the same interactive flow
+                # that already works for Microsoft Graph in this app. Device code is kept only as
+                # a last resort for hosts where browser auth also fails (and it needs a console).
+                $supportsDisableWAM = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
                 $needsDeviceCode = $false
 
-                if ($isWinFormsCtx) {
-                    Write-Log "WinForms GUI context — skipping WAM (RuntimeBroker incompatible), using device code" -Level "Info"
-                    $needsDeviceCode = $true
-                } else {
-                    # Non-GUI context: try standard interactive auth
-                    Write-Log "Connecting to Exchange Online (interactive auth)..." -Level "Info"
-                    Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
-                    try {
-                        Connect-ExchangeOnline -UserPrincipalName $userPrincipalName -ShowBanner:$false -ErrorAction Stop
-                    }
-                    catch {
-                        $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
-                        if ($isWamError) {
-                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
-                            $needsDeviceCode = $true
-                        } else {
-                            throw
-                        }
+                Write-Log "Connecting to Exchange Online (browser auth$(if ($supportsDisableWAM) { ', WAM disabled' } else { '' }))..." -Level "Info"
+                Update-GuiStatus "Connecting to Exchange Online..." ([System.Drawing.Color]::Yellow)
+                try {
+                    $exoParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+                    if ($userPrincipalName)  { $exoParams.UserPrincipalName = $userPrincipalName }
+                    if ($supportsDisableWAM) { $exoParams.DisableWAM = $true }
+                    Connect-ExchangeOnline @exoParams
+                }
+                catch {
+                    $isWamError = $_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker'
+                    if ($isWamError) {
+                        Write-Log "Browser auth failed (WAM/broker) - falling back to device code" -Level "Warning"
+                        $needsDeviceCode = $true
+                    } else {
+                        throw
                     }
                 }
 
@@ -3059,11 +3096,20 @@ function Connect-TenantServices {
                     Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
                     Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
 
+                    # The device code is written to the console host. Make a console window
+                    # visible so it is readable when running as a GUI app with no console.
+                    $consoleShown = Show-ConsoleWindowBestEffort
+
                     # Open browser to device login page before the code is printed to console
                     try { Start-Process "https://microsoft.com/devicelogin" } catch {}
 
+                    $codeLocation = if ($consoleShown) {
+                        "The one-time code is shown in the console window that just opened."
+                    } else {
+                        "The one-time code appears in the PowerShell console/output."
+                    }
                     [System.Windows.Forms.MessageBox]::Show(
-                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`n$codeLocation`nEnter that code in the browser to authenticate.",
                         "Exchange Online Authentication",
                         [System.Windows.Forms.MessageBoxButtons]::OK,
                         [System.Windows.Forms.MessageBoxIcon]::Information
@@ -3349,33 +3395,24 @@ function Connect-ExchangeOnlineIfNeeded {
                 $graphContext = Get-MgContext
                 $userPrincipalName = $graphContext.Account
 
-                # Check for WinForms GUI context — WAM/RuntimeBroker crashes in this context
-                $syncCtxType = if ([System.Threading.SynchronizationContext]::Current) {
-                    [System.Threading.SynchronizationContext]::Current.GetType().FullName
-                } else { "" }
-                $isWinFormsCtx = $syncCtxType -match 'WindowsForms'
-
+                # WAM/RuntimeBroker crashes in a GUI context. Use -DisableWAM for browser-based
+                # SSO (works the same as the Graph connection); device code is the last resort.
+                $supportsDisableWAM = (Get-Command Connect-ExchangeOnline).Parameters.ContainsKey('DisableWAM')
                 $needsDeviceCode = $false
                 $connectUpn = if ($userPrincipalName) { $userPrincipalName } else { $null }
 
-                if ($isWinFormsCtx) {
-                    Write-Log "WinForms GUI context — skipping WAM, using device code" -Level "Info"
-                    $needsDeviceCode = $true
-                } else {
-                    try {
-                        if ($connectUpn) {
-                            Connect-ExchangeOnline -UserPrincipalName $connectUpn -ShowBanner:$false -ErrorAction Stop
-                        } else {
-                            Connect-ExchangeOnline -ShowBanner:$false -ErrorAction Stop
-                        }
-                    }
-                    catch {
-                        if ($_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker') {
-                            Write-Log "WAM unavailable — falling back to device code" -Level "Warning"
-                            $needsDeviceCode = $true
-                        } else {
-                            throw
-                        }
+                try {
+                    $exoParams = @{ ShowBanner = $false; ErrorAction = 'Stop' }
+                    if ($connectUpn)         { $exoParams.UserPrincipalName = $connectUpn }
+                    if ($supportsDisableWAM) { $exoParams.DisableWAM = $true }
+                    Connect-ExchangeOnline @exoParams
+                }
+                catch {
+                    if ($_.Exception.ToString() -match 'RuntimeBroker|NullReferenceException|broker') {
+                        Write-Log "Browser auth failed (WAM/broker) - falling back to device code" -Level "Warning"
+                        $needsDeviceCode = $true
+                    } else {
+                        throw
                     }
                 }
 
@@ -3385,10 +3422,20 @@ function Connect-ExchangeOnlineIfNeeded {
 
                     Write-Log "Starting device code authentication for Exchange Online" -Level "Info"
                     Update-GuiStatus "Exchange Online: Opening browser for sign-in..." ([System.Drawing.Color]::Yellow)
+
+                    # The device code is written to the console host. Make a console window
+                    # visible so it is readable when running as a GUI app with no console.
+                    $consoleShown = Show-ConsoleWindowBestEffort
+
                     try { Start-Process "https://microsoft.com/devicelogin" } catch {}
 
+                    $codeLocation = if ($consoleShown) {
+                        "The one-time code is shown in the console window that just opened."
+                    } else {
+                        "The one-time code appears in the PowerShell console/output."
+                    }
                     [System.Windows.Forms.MessageBox]::Show(
-                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`nA one-time code will appear in the script console/output.`nEnter that code in the browser to authenticate.",
+                        "Exchange Online sign-in required.`n`nA browser window has been opened to:`nhttps://microsoft.com/devicelogin`n`n$codeLocation`nEnter that code in the browser to authenticate.",
                         "Exchange Online Authentication",
                         [System.Windows.Forms.MessageBoxButtons]::OK,
                         [System.Windows.Forms.MessageBoxIcon]::Information
@@ -11450,6 +11497,15 @@ Write-Host ""
 # Connect before the WinForms message loop starts.  This avoids the
 # WindowsFormsSynchronizationContext that newer MSAL/EXO (3.9.2+) dereferences
 # inside RuntimeBroker..ctor, causing a NullReferenceException with WAM.
+#
+# Belt-and-suspenders: explicitly null out any SynchronizationContext that an
+# earlier control/MessageBox may have installed on this thread, so all auth runs
+# context-free. Form.ShowDialog() re-establishes its own context for the GUI later,
+# so this does not affect the running application.
+try {
+    [System.Threading.SynchronizationContext]::SetSynchronizationContext($null)
+} catch {}
+
 $preAuthSuccess = $false
 $preAuthAttempts = 0
 $maxPreAuthAttempts = 3
