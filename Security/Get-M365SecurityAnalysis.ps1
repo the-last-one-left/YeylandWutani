@@ -84,7 +84,7 @@
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
 # Record every change in Security/CHANGELOG-Get-M365SecurityAnalysis.md
-$ScriptVer = "11.18"
+$ScriptVer = "12.0"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -264,34 +264,43 @@ Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
 # Theme Color Configuration
 $script:ThemeColors = @{
-    # LIGHT MODE COLORS - Yeyland Wutani brand colors (Orange and Grey)
+    # Yeyland Wutani tokens. Neutral surfaces with a 1px hairline border; brand orange is reserved
+    # for the primary action and accents. Text on an orange fill is OnPrimary (white on orange fails
+    # contrast). Secondary and Accent are kept for older callers but no longer used for button fills.
     Light = @{
-        Primary         = [System.Drawing.Color]::FromArgb(255, 102, 0)     # Yeyland Wutani Orange
-        Secondary       = [System.Drawing.Color]::FromArgb(107, 114, 128)  # Yeyland Wutani Grey
-        Accent          = [System.Drawing.Color]::FromArgb(255, 152, 0)    # Orange
-        Success         = [System.Drawing.Color]::FromArgb(76, 175, 80)    # Green
-        Warning         = [System.Drawing.Color]::FromArgb(255, 152, 0)    # Orange
-        Danger          = [System.Drawing.Color]::FromArgb(244, 67, 54)    # Red
-        Background      = [System.Drawing.Color]::FromArgb(245, 245, 245)  # Light gray
-        Surface         = [System.Drawing.Color]::White                     # White
-        TextPrimary     = [System.Drawing.Color]::FromArgb(33, 33, 33)     # Dark text
-        TextSecondary   = [System.Drawing.Color]::FromArgb(117, 117, 117)  # Gray text
-        Border          = [System.Drawing.Color]::FromArgb(224, 224, 224)  # Light borders
+        Primary         = [System.Drawing.ColorTranslator]::FromHtml("#E85D00")   # Brand orange
+        OnPrimary       = [System.Drawing.ColorTranslator]::FromHtml("#1A0D00")   # Text on orange fills
+        Secondary       = [System.Drawing.Color]::FromArgb(107, 114, 128)         # Yeyland Wutani grey
+        Accent          = [System.Drawing.Color]::FromArgb(255, 152, 0)           # Orange
+        Success         = [System.Drawing.ColorTranslator]::FromHtml("#1F7A4D")   # Connected, done, low
+        Warning         = [System.Drawing.ColorTranslator]::FromHtml("#B45F00")   # High
+        Danger          = [System.Drawing.ColorTranslator]::FromHtml("#C62828")   # Critical, errors
+        Medium          = [System.Drawing.ColorTranslator]::FromHtml("#8A6D00")   # Medium risk
+        Ai              = [System.Drawing.ColorTranslator]::FromHtml("#4B45C4")   # AI button fill
+        Background      = [System.Drawing.ColorTranslator]::FromHtml("#F3F1ED")   # Form
+        Surface         = [System.Drawing.ColorTranslator]::FromHtml("#FFFFFF")   # Cards, status bar
+        Surface2        = [System.Drawing.ColorTranslator]::FromHtml("#F7F5F1")   # Hover fill
+        TextPrimary     = [System.Drawing.ColorTranslator]::FromHtml("#1B1D21")
+        TextSecondary   = [System.Drawing.ColorTranslator]::FromHtml("#5F6670")
+        Border          = [System.Drawing.ColorTranslator]::FromHtml("#E2DED6")
     }
-    
-    # DARK MODE COLORS — blue-tinted (GitHub Dark style, modern IDE feel)
+
     Dark = @{
-        Primary         = [System.Drawing.Color]::FromArgb(255, 133, 51)   # Brand orange
-        Secondary       = [System.Drawing.Color]::FromArgb(125, 133, 148)  # Cool slate gray
-        Accent          = [System.Drawing.Color]::FromArgb(255, 167, 38)   # Lighter orange
-        Success         = [System.Drawing.Color]::FromArgb(63, 185, 80)    # GitHub green
-        Warning         = [System.Drawing.Color]::FromArgb(255, 167, 38)   # Lighter orange
-        Danger          = [System.Drawing.Color]::FromArgb(218, 54, 51)    # Deeper red
-        Background      = [System.Drawing.Color]::FromArgb(13, 17, 23)     # GitHub dark canvas
-        Surface         = [System.Drawing.Color]::FromArgb(22, 27, 34)     # GitHub dark surface
-        TextPrimary     = [System.Drawing.Color]::FromArgb(230, 237, 243)  # Soft white (not pure)
-        TextSecondary   = [System.Drawing.Color]::FromArgb(139, 148, 158)  # Cool muted text
-        Border          = [System.Drawing.Color]::FromArgb(48, 54, 61)     # GitHub dark border
+        Primary         = [System.Drawing.ColorTranslator]::FromHtml("#FF6600")
+        OnPrimary       = [System.Drawing.ColorTranslator]::FromHtml("#1A0D00")
+        Secondary       = [System.Drawing.Color]::FromArgb(125, 133, 148)
+        Accent          = [System.Drawing.Color]::FromArgb(255, 167, 38)
+        Success         = [System.Drawing.ColorTranslator]::FromHtml("#4CC38A")
+        Warning         = [System.Drawing.ColorTranslator]::FromHtml("#FFA033")
+        Danger          = [System.Drawing.ColorTranslator]::FromHtml("#FF5C5C")
+        Medium          = [System.Drawing.ColorTranslator]::FromHtml("#F2C94C")
+        Ai              = [System.Drawing.ColorTranslator]::FromHtml("#5B55D6")
+        Background      = [System.Drawing.ColorTranslator]::FromHtml("#0C0E11")
+        Surface         = [System.Drawing.ColorTranslator]::FromHtml("#14171B")
+        Surface2        = [System.Drawing.ColorTranslator]::FromHtml("#1B1F25")
+        TextPrimary     = [System.Drawing.ColorTranslator]::FromHtml("#ECEFF3")
+        TextSecondary   = [System.Drawing.ColorTranslator]::FromHtml("#98A1AE")
+        Border          = [System.Drawing.ColorTranslator]::FromHtml("#282D35")
     }
 }
 
@@ -305,8 +314,8 @@ function Get-ThemeColor {
     #>
     param (
         [Parameter(Mandatory = $true)]
-        [ValidateSet("Primary", "Secondary", "Accent", "Success", "Warning", "Danger", 
-                     "Background", "Surface", "TextPrimary", "TextSecondary", "Border")]
+        [ValidateSet("Primary", "OnPrimary", "Secondary", "Accent", "Success", "Warning", "Danger",
+                     "Medium", "Ai", "Background", "Surface", "Surface2", "TextPrimary", "TextSecondary", "Border")]
         [string]$ColorName
     )
     
@@ -376,10 +385,10 @@ function Apply-ThemeToGui {
 
             foreach ($child in $Control.Controls) {
 
-                # ── Buttons: re-apply theme color via stored ColorType ──
+                # -- Buttons --
                 if ($child -is [System.Windows.Forms.Button]) {
                     if ($child.Tag -and $child.Tag.ColorType) {
-                        # Standard themed button — re-derive colors from current theme
+                        # Legacy themed button (New-GuiButton): re-derive colors from the current theme
                         $newBg = Get-ThemeColor -ColorName $child.Tag.ColorType
                         $newBorder = [System.Drawing.Color]::FromArgb(
                             [Math]::Max(0, $newBg.R - 25),
@@ -394,31 +403,43 @@ function Apply-ThemeToGui {
                             ColorType   = $child.Tag.ColorType
                         }
                     }
-                    # Buttons with no ColorType tag (e.g. AI button with hard-coded color,
-                    # or theme toggle) are left untouched.
+                    elseif ($child.Tag -and "$($child.Tag.Variant)" -like "Flat*") {
+                        # Neutral / primary flat buttons (theme toggle, dialog buttons)
+                        Set-GuiFlatButtonColors -Button $child
+                    }
                 }
 
-                # ── Panels ──
+                # -- Panels --
                 elseif ($child -is [System.Windows.Forms.Panel]) {
-                    if ($child.Tag -eq "separator") {
+                    if ($child.Tag -is [string] -and $child.Tag -eq "separator") {
                         # Hairline separators use Border color, not Surface
                         $child.BackColor = Get-ThemeColor -ColorName "Border"
-                    } else {
+                    }
+                    elseif ($child.Tag -and $child.Tag.BackRole) {
+                        # Self-painting controls (cards, tiles, pill, session block, status bar) read
+                        # their colors at paint time; only the backdrop and a repaint are needed
+                        $child.BackColor = Get-ThemeColor -ColorName $child.Tag.BackRole
+                        $child.Invalidate()
+                    }
+                    else {
                         $child.BackColor = Get-ThemeColor -ColorName "Surface"
                         # Force repaint so custom Paint-event borders redraw
                         $child.Invalidate()
                     }
                 }
 
-                # ── Labels: only update "generic" text labels ──
+                # -- Labels: Tag.ColorName pins a theme color; untagged labels are body text --
                 elseif ($child -is [System.Windows.Forms.Label]) {
-                    # Labels with a ColorType tag carry intentional color — skip them
-                    if (-not $child.Tag -or $child.Tag -notmatch "^(Primary|Secondary|Accent|Success|Warning|Danger)$") {
+                    if ($child.Tag -and $child.Tag.ColorName) {
+                        $child.ForeColor = Get-ThemeColor -ColorName $child.Tag.ColorName
+                    }
+                    # Legacy labels tagged with a semantic color name carry intentional color - skip them
+                    elseif (-not $child.Tag -or $child.Tag -notmatch "^(Primary|Secondary|Accent|Success|Warning|Danger)$") {
                         $child.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
                     }
                 }
 
-                # ── CheckBoxes ──
+                # -- CheckBoxes --
                 elseif ($child -is [System.Windows.Forms.CheckBox]) {
                     $child.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
                 }
@@ -563,6 +584,771 @@ function New-ThemeToggle {
     })
     
     return $toggleButton
+}
+
+#--------------------------------------------------------------
+# GUI PRIMITIVES: fonts, colors, glyphs, card buttons, collector tiles
+#--------------------------------------------------------------
+# The main window is built from neutral surfaces with a hairline border and a single orange
+# fill for the primary action of each step. Cards, tiles and the connection pill paint
+# themselves (rounded rectangle via GraphicsPath) and read their colors from the theme at
+# paint time, so a theme switch only has to Invalidate() them.
+#
+# Glyphs are built from code points so this section stays ASCII-only.
+$script:GlyphDot      = [string][char]0x00B7   # middle dot
+$script:GlyphBullet   = [string][char]0x25CF   # black circle
+$script:GlyphSparkle  = [string][char]0x2726   # four pointed star (AI button)
+$script:GlyphEllipsis = [string][char]0x2026
+
+$script:GuiFontCache = @{}
+$script:TilePulseHigh = $true
+
+function Get-GuiFont {
+    <#
+    .SYNOPSIS
+        Returns a cached Font. Paint handlers run constantly; creating a Font per paint leaks GDI handles.
+    #>
+    param (
+        [string]$Family = "Segoe UI",
+        [double]$Size = 9,
+        [string]$Style = "Regular"
+    )
+
+    $key = "$Family|$Size|$Style"
+    if (-not $script:GuiFontCache.ContainsKey($key)) {
+        $script:GuiFontCache[$key] = New-Object System.Drawing.Font($Family, [single]$Size, [System.Drawing.FontStyle]$Style)
+    }
+    return $script:GuiFontCache[$key]
+}
+
+function Get-BlendedColor {
+    <#
+    .SYNOPSIS
+        Mixes two colors. Amount 0 returns From, 1 returns To.
+    #>
+    param (
+        [System.Drawing.Color]$From,
+        [System.Drawing.Color]$To,
+        [double]$Amount
+    )
+
+    $mix = { param($a, $b) [int][Math]::Round($a + (($b - $a) * $Amount)) }
+    return [System.Drawing.Color]::FromArgb(
+        (& $mix $From.R $To.R),
+        (& $mix $From.G $To.G),
+        (& $mix $From.B $To.B)
+    )
+}
+
+function New-GuiRoundedPath {
+    param (
+        [System.Drawing.RectangleF]$Rect,
+        [single]$Radius
+    )
+
+    $diameter = [Math]::Min([double]($Radius * 2), [Math]::Min($Rect.Width, $Rect.Height))
+    $path = New-Object System.Drawing.Drawing2D.GraphicsPath
+    if ($diameter -le 0) {
+        $path.AddRectangle($Rect)
+        return $path
+    }
+    $d = [single]$diameter
+    $path.AddArc($Rect.X, $Rect.Y, $d, $d, 180, 90)
+    $path.AddArc(($Rect.Right - $d), $Rect.Y, $d, $d, 270, 90)
+    $path.AddArc(($Rect.Right - $d), ($Rect.Bottom - $d), $d, $d, 0, 90)
+    $path.AddArc($Rect.X, ($Rect.Bottom - $d), $d, $d, 90, 90)
+    $path.CloseFigure()
+    return $path
+}
+
+function Enable-GuiPaintStyle {
+    <#
+    .SYNOPSIS
+        Double-buffers a self-painting Panel and makes it focusable (both are protected members).
+    #>
+    param (
+        [System.Windows.Forms.Control]$Control
+    )
+
+    $flags = [System.Reflection.BindingFlags]"Instance,NonPublic"
+    [void]$Control.GetType().GetProperty("DoubleBuffered", $flags).SetValue($Control, $true)
+    [void]$Control.GetType().GetMethod("SetStyle", $flags).Invoke($Control, @([System.Windows.Forms.ControlStyles]::Selectable, $true))
+}
+
+function Invoke-GuiControlClick {
+    param (
+        [System.Windows.Forms.Control]$Control
+    )
+
+    $flags = [System.Reflection.BindingFlags]"Instance,NonPublic"
+    [void]$Control.GetType().GetMethod("OnClick", $flags).Invoke($Control, @([System.EventArgs]::Empty))
+}
+
+function Invoke-GuiCardPaint {
+    param (
+        [System.Windows.Forms.Control]$Control,
+        [System.Drawing.Graphics]$Graphics
+    )
+
+    $state = $Control.Tag
+    $scale = $Control.DeviceDpi / 96.0
+    $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+
+    $enabled = $Control.Enabled
+    $hover = $state.Hover -and $enabled
+    $pressed = $state.Pressed -and $enabled
+
+    switch ($state.Variant) {
+        "Primary" {
+            $fill = Get-ThemeColor -ColorName "Primary"
+            if ($pressed) { $fill = Get-BlendedColor $fill ([System.Drawing.Color]::Black) 0.08 }
+            elseif ($hover) { $fill = Get-BlendedColor $fill ([System.Drawing.Color]::White) 0.08 }
+            $border = $fill
+            $fore = Get-ThemeColor -ColorName "OnPrimary"
+        }
+        "Ai" {
+            $fill = Get-ThemeColor -ColorName "Ai"
+            if ($pressed) { $fill = Get-BlendedColor $fill ([System.Drawing.Color]::Black) 0.08 }
+            elseif ($hover) { $fill = Get-BlendedColor $fill ([System.Drawing.Color]::White) 0.08 }
+            $border = $fill
+            $fore = [System.Drawing.Color]::White
+        }
+        default {
+            $fill = Get-ThemeColor -ColorName $(if ($hover -or $pressed) { "Surface2" } else { "Surface" })
+            $border = Get-ThemeColor -ColorName $(if ($hover -or $pressed) { "Primary" } else { "Border" })
+            $fore = Get-ThemeColor -ColorName $(if ($state.Variant -eq "Muted") { "TextSecondary" } else { "TextPrimary" })
+        }
+    }
+    if ($Control.Focused -and $enabled -and $state.Variant -eq "Default") { $border = Get-ThemeColor -ColorName "Primary" }
+    $hintColor = Get-ThemeColor -ColorName "TextSecondary"
+    if (-not $enabled) {
+        $fore = Get-BlendedColor $fore $fill 0.5
+        $hintColor = Get-BlendedColor $hintColor $fill 0.5
+    }
+
+    $rect = New-Object System.Drawing.RectangleF(0.5, 0.5, ($Control.Width - 1), ($Control.Height - 1))
+    $path = New-GuiRoundedPath -Rect $rect -Radius (8 * $scale)
+    $brush = New-Object System.Drawing.SolidBrush($fill)
+    $pen = New-Object System.Drawing.Pen($border, 1)
+    $Graphics.FillPath($brush, $path)
+    $Graphics.DrawPath($pen, $path)
+    $brush.Dispose(); $pen.Dispose(); $path.Dispose()
+
+    $titleFont = Get-GuiFont -Family "Segoe UI Semibold" -Size $state.TitleSize
+    $flagsBase = [System.Windows.Forms.TextFormatFlags]"NoPadding, EndEllipsis, SingleLine"
+    $inset = [int](14 * $scale)
+    $textWidth = $Control.Width - (2 * $inset)
+
+    if ([string]::IsNullOrEmpty($state.Hint)) {
+        $titleRect = New-Object System.Drawing.Rectangle($inset, 0, $textWidth, $Control.Height)
+        $flags = $flagsBase -bor [System.Windows.Forms.TextFormatFlags]"HorizontalCenter, VerticalCenter"
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $Control.Text, $titleFont, $titleRect, $fore, $flags)
+    }
+    else {
+        $hintFont = Get-GuiFont -Family "Segoe UI" -Size 8.5
+        $titleH = $titleFont.Height
+        $hintH = $hintFont.Height
+        $top = [int](($Control.Height - ($titleH + 2 + $hintH)) / 2)
+        $flags = $flagsBase -bor [System.Windows.Forms.TextFormatFlags]::Left
+        $titleRect = New-Object System.Drawing.Rectangle($inset, $top, $textWidth, $titleH)
+        $hintRect = New-Object System.Drawing.Rectangle($inset, ($top + $titleH + 2), $textWidth, $hintH)
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $Control.Text, $titleFont, $titleRect, $fore, $flags)
+        [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $state.Hint, $hintFont, $hintRect, $hintColor, $flags)
+    }
+}
+
+function New-GuiCardButton {
+    <#
+    .SYNOPSIS
+        Self-painting button: a title with an optional hint line.
+
+    .DESCRIPTION
+        Returns a Panel (Cursor = Hand) that behaves like a Button: Text is the title, Enabled greys
+        it out and blocks clicks, Click runs -Action. The hint can be changed with Set-GuiCardHint.
+
+        Variants: Default (surface + hairline), Primary (orange fill), Muted (Default with secondary
+        text) and Ai (indigo fill).
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Title,
+        [string]$Hint = "",
+        [int]$X = 0,
+        [int]$Y = 0,
+        [int]$Width = 176,
+        [int]$Height = 56,
+        [ValidateSet("Default", "Primary", "Muted", "Ai")]
+        [string]$Variant = "Default",
+        [double]$TitleSize = 9.5,
+        [scriptblock]$Action
+    )
+
+    $card = New-Object System.Windows.Forms.Panel
+    $card.Text = $Title
+    $card.Location = New-Object System.Drawing.Point($X, $Y)
+    $card.Size = New-Object System.Drawing.Size($Width, $Height)
+    $card.BackColor = Get-ThemeColor -ColorName "Background"
+    $card.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $card.TabStop = $true
+    Enable-GuiPaintStyle -Control $card
+    $card.Tag = [PSCustomObject]@{
+        Kind      = "card"
+        BackRole  = "Background"
+        Variant   = $Variant
+        Hint      = $Hint
+        TitleSize = $TitleSize
+        Hover     = $false
+        Pressed   = $false
+    }
+
+    $card.Add_Paint({ param($sender, $e) Invoke-GuiCardPaint -Control $sender -Graphics $e.Graphics })
+    $card.Add_MouseEnter({ $this.Tag.Hover = $true; $this.Invalidate() })
+    $card.Add_MouseLeave({ $this.Tag.Hover = $false; $this.Tag.Pressed = $false; $this.Invalidate() })
+    $card.Add_MouseDown({ $this.Tag.Pressed = $true; $this.Invalidate() })
+    $card.Add_MouseUp({ $this.Tag.Pressed = $false; $this.Invalidate() })
+    $card.Add_TextChanged({ $this.Invalidate() })
+    $card.Add_EnabledChanged({ $this.Invalidate() })
+    $card.Add_GotFocus({ $this.Invalidate() })
+    $card.Add_LostFocus({ $this.Invalidate() })
+    $card.Add_KeyDown({
+        param($sender, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter -or $e.KeyCode -eq [System.Windows.Forms.Keys]::Space) {
+            $e.Handled = $true
+            if ($sender.Enabled) { Invoke-GuiControlClick -Control $sender }
+        }
+    })
+    if ($Action) { $card.Add_Click($Action) }
+
+    return $card
+}
+
+function Set-GuiCardHint {
+    param (
+        [System.Windows.Forms.Control]$Card,
+        [string]$Hint
+    )
+
+    if ($null -eq $Card -or $null -eq $Card.Tag) { return }
+    $Card.Tag.Hint = $Hint
+    $Card.Invalidate()
+}
+
+#--------------------------------------------------------------
+# COLLECTOR TILES
+#--------------------------------------------------------------
+
+# Key = tile id; Source = Source column in CollectionStatus.csv ($null when the collector does
+# not report one); Unit = word shown after the count.
+$script:GuiTileDefs = @(
+    @{ Key = "SignIns";           Title = "Sign-in data";        Source = "SignIns";           Unit = "records";  File = $null }
+    @{ Key = "AdminAudit";        Title = "Admin audits";        Source = "AdminAudit";        Unit = "records";  File = $null }
+    @{ Key = "InboxRules";        Title = "Inbox rules";         Source = "InboxRules";        Unit = "records";  File = $null }
+    @{ Key = "MailboxDelegation"; Title = "Delegations";         Source = "MailboxDelegation"; Unit = "records";  File = $null }
+    @{ Key = "AppRegistrations";  Title = "App registrations";   Source = "AppRegistrations";  Unit = "records";  File = $null }
+    @{ Key = "ConditionalAccess"; Title = "Conditional access";  Source = "ConditionalAccess"; Unit = "policies"; File = $null }
+    @{ Key = "ETR";               Title = "ETR files";           Source = $null;               Unit = "records";  File = "ETRSpamAnalysis.csv" }
+    @{ Key = "MessageTrace";      Title = "Message trace";       Source = "MessageTrace";      Unit = "records";  File = $null }
+)
+
+$Global:GuiTiles = @{}
+$Global:GuiToolTip = $null
+
+function Invoke-GuiTilePaint {
+    param (
+        [System.Windows.Forms.Control]$Control,
+        [System.Drawing.Graphics]$Graphics
+    )
+
+    $state = $Control.Tag
+    $scale = $Control.DeviceDpi / 96.0
+    $Graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+
+    $enabled = $Control.Enabled
+    $hover = ($state.Hover -or $state.Pressed) -and $enabled
+    $fill = Get-ThemeColor -ColorName $(if ($hover) { "Surface2" } else { "Surface" })
+    $border = Get-ThemeColor -ColorName $(if ($hover) { "Primary" } elseif ($Control.Focused) { "Primary" } else { "Border" })
+
+    $statusColor = switch ($state.State) {
+        "running"    { Get-ThemeColor -ColorName "Primary" }
+        "done"       { Get-ThemeColor -ColorName "Success" }
+        "incomplete" { Get-ThemeColor -ColorName "Warning" }
+        "error"      { Get-ThemeColor -ColorName "Danger" }
+        default      { Get-ThemeColor -ColorName "TextSecondary" }
+    }
+    $titleColor = Get-ThemeColor -ColorName "TextPrimary"
+    if (-not $enabled) {
+        $titleColor = Get-BlendedColor $titleColor $fill 0.5
+        $statusColor = Get-BlendedColor $statusColor $fill 0.5
+    }
+
+    $rect = New-Object System.Drawing.RectangleF(0.5, 0.5, ($Control.Width - 1), ($Control.Height - 1))
+    $path = New-GuiRoundedPath -Rect $rect -Radius (8 * $scale)
+    $brush = New-Object System.Drawing.SolidBrush($fill)
+    $pen = New-Object System.Drawing.Pen($border, 1)
+    $Graphics.FillPath($brush, $path)
+    $Graphics.DrawPath($pen, $path)
+    $brush.Dispose(); $pen.Dispose(); $path.Dispose()
+
+    $inset = [int](14 * $scale)
+    $flags = [System.Windows.Forms.TextFormatFlags]"NoPadding, EndEllipsis, SingleLine, Left"
+
+    # Status dot (top right). A running collector pulses by toggling the alpha.
+    $dotSize = [int](10 * $scale)
+    $dotColor = $statusColor
+    if ($state.State -eq "running" -and -not $script:TilePulseHigh) { $dotColor = [System.Drawing.Color]::FromArgb(90, $statusColor) }
+    $dotBrush = New-Object System.Drawing.SolidBrush($dotColor)
+    $dotX = $Control.Width - $inset - $dotSize
+    $dotY = [int](14 * $scale)
+    $Graphics.FillEllipse($dotBrush, $dotX, $dotY, $dotSize, $dotSize)
+    $dotBrush.Dispose()
+
+    $titleFont = Get-GuiFont -Family "Segoe UI Semibold" -Size 10
+    $titleRect = New-Object System.Drawing.Rectangle($inset, [int](11 * $scale), ($dotX - $inset - [int](8 * $scale)), $titleFont.Height)
+    [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $Control.Text, $titleFont, $titleRect, $titleColor, $flags)
+
+    $statusFont = Get-GuiFont -Family "Consolas" -Size 8.5
+    $statusTop = $Control.Height - [int](14 * $scale) - $statusFont.Height
+    $statusRect = New-Object System.Drawing.Rectangle($inset, $statusTop, ($Control.Width - (2 * $inset)), $statusFont.Height)
+    [System.Windows.Forms.TextRenderer]::DrawText($Graphics, $state.StatusText, $statusFont, $statusRect, $statusColor, $flags)
+}
+
+function New-GuiCollectorTile {
+    <#
+    .SYNOPSIS
+        Collector tile: name, status dot and a status line ("Not collected", "52 records", ...).
+        Clicking the tile runs the collector (-Action), like the button it replaces.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Key,
+        [Parameter(Mandatory = $true)] [string]$Title,
+        [int]$X = 0,
+        [int]$Y = 0,
+        [int]$Width = 219,
+        [int]$Height = 76,
+        [scriptblock]$Action
+    )
+
+    $tile = New-Object System.Windows.Forms.Panel
+    $tile.Text = $Title
+    $tile.Location = New-Object System.Drawing.Point($X, $Y)
+    $tile.Size = New-Object System.Drawing.Size($Width, $Height)
+    $tile.BackColor = Get-ThemeColor -ColorName "Background"
+    $tile.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $tile.TabStop = $true
+    Enable-GuiPaintStyle -Control $tile
+    $tile.Tag = [PSCustomObject]@{
+        Kind       = "tile"
+        BackRole   = "Background"
+        Key        = $Key
+        State      = "idle"
+        StatusText = "Not collected"
+        Note       = ""
+        Hover      = $false
+        Pressed    = $false
+    }
+
+    $tile.Add_Paint({ param($sender, $e) Invoke-GuiTilePaint -Control $sender -Graphics $e.Graphics })
+    $tile.Add_MouseEnter({ $this.Tag.Hover = $true; $this.Invalidate() })
+    $tile.Add_MouseLeave({ $this.Tag.Hover = $false; $this.Tag.Pressed = $false; $this.Invalidate() })
+    $tile.Add_MouseDown({ $this.Tag.Pressed = $true; $this.Invalidate() })
+    $tile.Add_MouseUp({ $this.Tag.Pressed = $false; $this.Invalidate() })
+    $tile.Add_EnabledChanged({ $this.Invalidate() })
+    $tile.Add_GotFocus({ $this.Invalidate() })
+    $tile.Add_LostFocus({ $this.Invalidate() })
+    $tile.Add_KeyDown({
+        param($sender, $e)
+        if ($e.KeyCode -eq [System.Windows.Forms.Keys]::Enter -or $e.KeyCode -eq [System.Windows.Forms.Keys]::Space) {
+            $e.Handled = $true
+            if ($sender.Enabled) { Invoke-GuiControlClick -Control $sender }
+        }
+    })
+    if ($Action) { $tile.Add_Click($Action) }
+
+    $Global:GuiTiles[$Key] = $tile
+    return $tile
+}
+
+function Set-GuiTileState {
+    <#
+    .SYNOPSIS
+        Sets a collector tile's status. Safe to call before the GUI exists.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Key,
+        [Parameter(Mandatory = $true)]
+        [ValidateSet("idle", "running", "done", "incomplete", "error")]
+        [string]$State,
+        [string]$Text = "",
+        [string]$Note = ""
+    )
+
+    $tile = $Global:GuiTiles[$Key]
+    if ($null -eq $tile) { return }
+    try {
+        $tile.Tag.State = $State
+        $tile.Tag.StatusText = $Text
+        $tile.Tag.Note = $Note
+        if ($null -ne $Global:GuiToolTip) { $Global:GuiToolTip.SetToolTip($tile, $Note) }
+        $tile.Invalidate()
+        # Collectors block the UI thread; repaint now instead of waiting for the message loop
+        $tile.Update()
+    }
+    catch {
+        Write-Log "Warning: Failed to update collector tile ${Key}: $($_.Exception.Message)" -Level "Warning"
+    }
+}
+
+function Get-GuiTileStatusRow {
+    <#
+    .SYNOPSIS
+        Latest CollectionStatus.csv row for a source, optionally only if it was written at or after -Since.
+    #>
+    param (
+        [string]$Source,
+        $Since = $null
+    )
+
+    if ([string]::IsNullOrEmpty($Source)) { return $null }
+    $row = @(Get-CollectionStatus | Where-Object { $_.Source -eq $Source }) | Select-Object -Last 1
+    if ($null -eq $row) { return $null }
+    if ($null -ne $Since) {
+        try {
+            $ranAt = [datetime]::Parse("$($row.RunTimeUtc)", [System.Globalization.CultureInfo]::InvariantCulture, [System.Globalization.DateTimeStyles]::RoundtripKind).ToUniversalTime()
+        }
+        catch { return $null }
+        if ($ranAt -lt ([datetime]$Since).ToUniversalTime().AddSeconds(-1)) { return $null }
+    }
+    return $row
+}
+
+function Set-GuiTileFromRow {
+    param (
+        [string]$Key,
+        $Row,
+        [string]$Unit,
+        $Count = $null
+    )
+
+    $records = $null
+    if ($null -ne $Row -and "$($Row.Records)" -match '^\d+$') { $records = [int]$Row.Records }
+    elseif ($null -ne $Count) { $records = [int]$Count }
+    if ($null -eq $records) { return $false }
+
+    $note = if ($null -ne $Row) { "$($Row.Note)" } else { "" }
+    if ($null -ne $Row -and "$($Row.Complete)" -ne "True") {
+        Set-GuiTileState -Key $Key -State "incomplete" -Text "$records $Unit $($script:GlyphDot) incomplete" -Note $note
+    }
+    else {
+        Set-GuiTileState -Key $Key -State "done" -Text "$records $Unit" -Note $note
+    }
+    return $true
+}
+
+function Complete-GuiTile {
+    <#
+    .SYNOPSIS
+        Sets a tile's final state after its collector ran: done, incomplete (the collector reported a
+        gap in CollectionStatus.csv) or error (nothing came back).
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Key,
+        [Parameter(Mandatory = $true)] [datetime]$Since,
+        $Count = $null
+    )
+
+    $def = $script:GuiTileDefs | Where-Object { $_.Key -eq $Key } | Select-Object -First 1
+    if ($null -eq $def) { return }
+    $row = Get-GuiTileStatusRow -Source $def.Source -Since $Since
+    if (-not (Set-GuiTileFromRow -Key $Key -Row $row -Unit $def.Unit -Count $Count)) {
+        Set-GuiTileState -Key $Key -State "error" -Text "No data returned" -Note "The collector finished without returning data. Check the log for details."
+    }
+}
+
+function Initialize-GuiTileStates {
+    <#
+    .SYNOPSIS
+        Fills every tile from what is already in the working directory (CollectionStatus.csv, plus
+        the ETR analysis file, which has no status row).
+    #>
+    foreach ($def in $script:GuiTileDefs) {
+        $row = Get-GuiTileStatusRow -Source $def.Source
+        if (Set-GuiTileFromRow -Key $def.Key -Row $row -Unit $def.Unit) { continue }
+
+        $count = $null
+        if ($def.File) {
+            $path = Join-Path -Path $ConfigData.WorkDir -ChildPath $def.File
+            if (Test-Path -Path $path) {
+                try { $count = @(Import-Csv -Path $path -ErrorAction Stop).Count } catch { $count = $null }
+            }
+        }
+        if ($null -eq $count -or -not (Set-GuiTileFromRow -Key $def.Key -Row $null -Unit $def.Unit -Count $count)) {
+            Set-GuiTileState -Key $def.Key -State "idle" -Text "Not collected"
+        }
+    }
+}
+
+function Invoke-GuiCollectorTile {
+    <#
+    .SYNOPSIS
+        Runs one collector from its tile: connection check, busy/running state, result, final state.
+
+    .PARAMETER Collect
+        Scriptblock that runs the collector and returns its result (records or $null).
+
+    .PARAMETER Success
+        Scriptblock receiving the result; returns the status-bar message for a non-empty result.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Key,
+        [Parameter(Mandatory = $true)] [scriptblock]$Collect,
+        [scriptblock]$Success,
+        [bool]$RequireConnection = $true
+    )
+
+    $tile = $Global:GuiTiles[$Key]
+    if ($RequireConnection -and -not $Global:ConnectionState.IsConnected) {
+        Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
+        return
+    }
+
+    $tile.Enabled = $false
+    $since = Get-Date
+    Set-GuiTileState -Key $Key -State "running" -Text "Collecting$($script:GlyphEllipsis)"
+    try {
+        $result = & $Collect
+        if ($result -and $Success) {
+            Update-GuiStatus (& $Success $result) (Get-ThemeColor -ColorName "Success")
+        }
+        Complete-GuiTile -Key $Key -Since $since -Count $(if ($result) { @($result).Count } else { $null })
+    }
+    catch {
+        Write-Log "Collector '$Key' failed: $($_.Exception.Message)" -Level "Error"
+        Set-GuiTileState -Key $Key -State "error" -Text "Failed" -Note $_.Exception.Message
+        Update-GuiStatus "[ERROR] $($_.Exception.Message)" (Get-ThemeColor -ColorName "Danger")
+    }
+    finally {
+        $tile.Enabled = $true
+    }
+}
+
+#--------------------------------------------------------------
+# CONNECTION PILL, SESSION BLOCK, SECTION HEADERS, STATUS BAR
+#--------------------------------------------------------------
+
+function New-GuiConnectionPill {
+    param (
+        [int]$X,
+        [int]$Y,
+        [int]$Width = 168,
+        [int]$Height = 28
+    )
+
+    $pill = New-Object System.Windows.Forms.Panel
+    $pill.Location = New-Object System.Drawing.Point($X, $Y)
+    $pill.Size = New-Object System.Drawing.Size($Width, $Height)
+    $pill.BackColor = Get-ThemeColor -ColorName "Background"
+    $pill.Text = "Not connected"
+    Enable-GuiPaintStyle -Control $pill
+    $pill.Tag = [PSCustomObject]@{ Kind = "pill"; BackRole = "Background"; Connected = $false }
+
+    $pill.Add_TextChanged({ $this.Invalidate() })
+    $pill.Add_Paint({
+        param($sender, $e)
+        $g = $e.Graphics
+        $scale = $sender.DeviceDpi / 96.0
+        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+        $color = Get-ThemeColor -ColorName $(if ($sender.Tag.Connected) { "Success" } else { "Danger" })
+
+        $rect = New-Object System.Drawing.RectangleF(0.5, 0.5, ($sender.Width - 1), ($sender.Height - 1))
+        $path = New-GuiRoundedPath -Rect $rect -Radius ($sender.Height / 2)
+        $fill = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(26, $color))
+        $pen = New-Object System.Drawing.Pen($color, 1)
+        $g.FillPath($fill, $path)
+        $g.DrawPath($pen, $path)
+        $fill.Dispose(); $pen.Dispose(); $path.Dispose()
+
+        $dot = [int](8 * $scale)
+        $dotBrush = New-Object System.Drawing.SolidBrush($color)
+        $g.FillEllipse($dotBrush, [int](14 * $scale), [int](($sender.Height - $dot) / 2), $dot, $dot)
+        $dotBrush.Dispose()
+
+        $font = Get-GuiFont -Family "Segoe UI Semibold" -Size 9
+        $textRect = New-Object System.Drawing.Rectangle([int](30 * $scale), 0, ($sender.Width - [int](40 * $scale)), $sender.Height)
+        $flags = [System.Windows.Forms.TextFormatFlags]"NoPadding, EndEllipsis, SingleLine, Left, VerticalCenter"
+        [System.Windows.Forms.TextRenderer]::DrawText($g, $sender.Text, $font, $textRect, $color, $flags)
+    })
+
+    return $pill
+}
+
+function New-GuiSessionCell {
+    <#
+    .SYNOPSIS
+        One cell of the session block: caption over value. Returns the value Label.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [System.Windows.Forms.Control]$Parent,
+        [Parameter(Mandatory = $true)] [string]$Caption,
+        [string]$Value = "",
+        [int]$X,
+        [int]$Y,
+        [int]$Width = 468
+    )
+
+    $captionLabel = New-Object System.Windows.Forms.Label
+    $captionLabel.Text = $Caption.ToUpper()
+    $captionLabel.Font = Get-GuiFont -Family "Consolas" -Size 7.5
+    $captionLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
+    $captionLabel.Tag = [PSCustomObject]@{ ColorName = "TextSecondary" }
+    $captionLabel.AutoSize = $false
+    $captionLabel.Location = New-Object System.Drawing.Point(($X + 16), ($Y + 9))
+    $captionLabel.Size = New-Object System.Drawing.Size(($Width - 32), 14)
+    $Parent.Controls.Add($captionLabel)
+
+    $valueLabel = New-Object System.Windows.Forms.Label
+    $valueLabel.Text = $Value
+    $valueLabel.Font = Get-GuiFont -Family "Segoe UI Semibold" -Size 10
+    $valueLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+    $valueLabel.AutoSize = $false
+    $valueLabel.AutoEllipsis = $true
+    $valueLabel.Location = New-Object System.Drawing.Point(($X + 16), ($Y + 26))
+    $valueLabel.Size = New-Object System.Drawing.Size(($Width - 32), 22)
+    $Parent.Controls.Add($valueLabel)
+
+    return $valueLabel
+}
+
+function New-GuiSectionHeader {
+    <#
+    .SYNOPSIS
+        "01  Title ----------" header row: mono number, semibold title, hairline filling the rest.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [System.Windows.Forms.Control]$Parent,
+        [Parameter(Mandatory = $true)] [string]$Number,
+        [Parameter(Mandatory = $true)] [string]$Title,
+        [int]$Y,
+        [int]$Left = 32,
+        [int]$Right = 968,
+        [int]$RightReserve = 0
+    )
+
+    $numberFont = Get-GuiFont -Family "Consolas" -Size 9 -Style "Bold"
+    $titleFont = Get-GuiFont -Family "Segoe UI Semibold" -Size 10.5
+    $noPad = [System.Windows.Forms.TextFormatFlags]::NoPadding
+    # Labels add their own internal padding; without the slack the text wraps and clips
+    $numberText = [System.Windows.Forms.TextRenderer]::MeasureText($Number, $numberFont, (New-Object System.Drawing.Size(200, 30)), $noPad).Width
+    $titleText = [System.Windows.Forms.TextRenderer]::MeasureText($Title, $titleFont, (New-Object System.Drawing.Size(400, 30)), $noPad).Width
+    $numberWidth = $numberText + 10
+    $titleWidth = $titleText + 12
+
+    $numberLabel = New-Object System.Windows.Forms.Label
+    $numberLabel.Text = $Number
+    $numberLabel.Font = $numberFont
+    $numberLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
+    $numberLabel.Tag = [PSCustomObject]@{ ColorName = "Primary" }
+    $numberLabel.AutoSize = $false
+    $numberLabel.Location = New-Object System.Drawing.Point($Left, ($Y + 3))
+    $numberLabel.Size = New-Object System.Drawing.Size($numberWidth, 18)
+    $Parent.Controls.Add($numberLabel)
+
+    $titleX = $Left + $numberText + 12
+    $titleLabel = New-Object System.Windows.Forms.Label
+    $titleLabel.Text = $Title
+    $titleLabel.Font = $titleFont
+    $titleLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+    $titleLabel.Tag = [PSCustomObject]@{ ColorName = "TextPrimary" }
+    $titleLabel.AutoSize = $false
+    $titleLabel.Location = New-Object System.Drawing.Point($titleX, ($Y + 1))
+    $titleLabel.Size = New-Object System.Drawing.Size($titleWidth, 22)
+    $Parent.Controls.Add($titleLabel)
+
+    $lineX = $titleX + $titleText + 16
+    $line = New-Object System.Windows.Forms.Panel
+    $line.Location = New-Object System.Drawing.Point($lineX, ($Y + 11))
+    $line.Size = New-Object System.Drawing.Size(($Right - $RightReserve - $lineX), 1)
+    $line.BackColor = Get-ThemeColor -ColorName "Border"
+    $line.Tag = "separator"
+    $Parent.Controls.Add($line)
+}
+
+function Update-GuiRiskSummary {
+    <#
+    .SYNOPSIS
+        Status-bar summary after an analysis: "Analysis complete  12 critical  23 high  0 medium  43 low".
+        The next Update-GuiStatus message replaces it.
+    #>
+    param (
+        [int]$Critical = 0,
+        [int]$High = 0,
+        [int]$Medium = 0,
+        [int]$Low = 0
+    )
+
+    if ($null -eq $Global:StatusSummaryPanel) { return }
+    try {
+        $Global:StatusSummaryPanel.Tag.Critical = $Critical
+        $Global:StatusSummaryPanel.Tag.High = $High
+        $Global:StatusSummaryPanel.Tag.Medium = $Medium
+        $Global:StatusSummaryPanel.Tag.Low = $Low
+        if ($null -ne $Global:StatusLabel) { $Global:StatusLabel.Visible = $false }
+        $Global:StatusSummaryPanel.Visible = $true
+        $Global:StatusSummaryPanel.Invalidate()
+        $Global:StatusSummaryPanel.Update()
+    }
+    catch {
+        Write-Log "Warning: Failed to update risk summary: $($_.Exception.Message)" -Level "Warning"
+    }
+    Write-Log "Analysis summary: $Critical critical, $High high, $Medium medium, $Low low" -Level "Info"
+}
+
+function New-GuiFlatButton {
+    <#
+    .SYNOPSIS
+        Standard Button in the neutral style, for dialogs. Primary = orange fill with dark text.
+    #>
+    param (
+        [Parameter(Mandatory = $true)] [string]$Text,
+        [int]$X = 0,
+        [int]$Y = 0,
+        [int]$Width = 110,
+        [int]$Height = 32,
+        [bool]$Primary = $false
+    )
+
+    $button = New-Object System.Windows.Forms.Button
+    $button.Text = $Text
+    $button.Location = New-Object System.Drawing.Point($X, $Y)
+    $button.Size = New-Object System.Drawing.Size($Width, $Height)
+    $button.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $button.Font = Get-GuiFont -Family "Segoe UI Semibold" -Size 9
+    $button.Cursor = [System.Windows.Forms.Cursors]::Hand
+    $button.FlatAppearance.BorderSize = 1
+    $button.UseVisualStyleBackColor = $false
+    $button.Tag = [PSCustomObject]@{ Variant = $(if ($Primary) { "FlatPrimary" } else { "Flat" }) }
+    Set-GuiFlatButtonColors -Button $button
+
+    $button.Add_MouseEnter({ $this.FlatAppearance.BorderColor = Get-ThemeColor -ColorName "Primary" })
+    $button.Add_MouseLeave({ Set-GuiFlatButtonColors -Button $this })
+    return $button
+}
+
+function Set-GuiFlatButtonColors {
+    param (
+        [System.Windows.Forms.Button]$Button
+    )
+
+    if ($Button.Tag.Variant -eq "FlatPrimary") {
+        $Button.BackColor = Get-ThemeColor -ColorName "Primary"
+        $Button.ForeColor = Get-ThemeColor -ColorName "OnPrimary"
+        $Button.FlatAppearance.BorderColor = Get-ThemeColor -ColorName "Primary"
+        $Button.FlatAppearance.MouseOverBackColor = Get-BlendedColor (Get-ThemeColor -ColorName "Primary") ([System.Drawing.Color]::White) 0.08
+    }
+    else {
+        $Button.BackColor = Get-ThemeColor -ColorName "Surface"
+        $Button.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+        $Button.FlatAppearance.BorderColor = Get-ThemeColor -ColorName "Border"
+        $Button.FlatAppearance.MouseOverBackColor = Get-ThemeColor -ColorName "Surface2"
+    }
 }
 
 #══════════════════════════════════════════════════════════════════════════════
@@ -1436,6 +2222,11 @@ function Update-GuiStatus {
     # Update GUI status label if it exists (GUI may not be initialized yet)
     if ($null -ne $Global:StatusLabel) {
         try {
+            # Free text replaces the structured analysis summary (Update-GuiRiskSummary)
+            if ($null -ne $Global:StatusSummaryPanel -and $Global:StatusSummaryPanel.Visible) {
+                $Global:StatusSummaryPanel.Visible = $false
+            }
+            $Global:StatusLabel.Visible = $true
             $Global:StatusLabel.Text = $Message
             $Global:StatusLabel.ForeColor = $Color
             $Global:StatusLabel.Refresh()
@@ -1465,11 +2256,10 @@ function Update-ConnectionStatus {
         • Tenant name and ID
         • Connected user account
         
-        The display is color-coded:
-        • Green - Connected successfully
-        • Red - Not connected
-        • Blue - Tenant information
-        • Gray - No connection info
+        The display is state-driven:
+        - Connection pill: green "Graph connected" or red "Not connected"
+        - Tenant and Account cells of the session block
+        - The Connect card switches between Connect and Reconnect
     
     .PARAMETER None
         This function does not accept parameters. It reads from the
@@ -1495,24 +2285,38 @@ function Update-ConnectionStatus {
     # Only update if GUI elements exist
     if ($null -ne $Global:ConnectionLabel -and $null -ne $Global:TenantInfoLabel) {
         try {
-            if ($Global:ConnectionState.IsConnected) {
-                # Connected state - show green with tenant details
-                $Global:ConnectionLabel.Text = "Microsoft Graph: Connected"
-                $Global:ConnectionLabel.ForeColor = [System.Drawing.Color]::Green
-                
-                # Format tenant info with account details
-                $tenantInfo = "Tenant: $($Global:ConnectionState.TenantName) | Account: $($Global:ConnectionState.Account)"
-                $Global:TenantInfoLabel.Text = $tenantInfo
-                $Global:TenantInfoLabel.ForeColor = [System.Drawing.Color]::FromArgb(0, 120, 212)  # Microsoft blue
+            $connected = [bool]$Global:ConnectionState.IsConnected
+
+            if ($connected) {
+                $tenant = "$($Global:ConnectionState.TenantName)"
+                $account = "$($Global:ConnectionState.Account)"
+                $Global:TenantInfoLabel.Text = $(if ([string]::IsNullOrWhiteSpace($tenant)) { "-" } else { $tenant })
+                $Global:ConnectionLabel.Text = $(if ([string]::IsNullOrWhiteSpace($account)) { "-" } else { $account })
+                $Global:TenantInfoLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+                $Global:ConnectionLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
             }
             else {
-                # Disconnected state - show red with no info
-                $Global:ConnectionLabel.Text = "Microsoft Graph: Not Connected"
-                $Global:ConnectionLabel.ForeColor = [System.Drawing.Color]::Red
-                $Global:TenantInfoLabel.Text = "Not connected to any tenant"
-                $Global:TenantInfoLabel.ForeColor = [System.Drawing.Color]::Gray
+                $Global:TenantInfoLabel.Text = "Not connected"
+                $Global:ConnectionLabel.Text = "-"
+                $Global:TenantInfoLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
+                $Global:ConnectionLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
             }
-            
+
+            # Connection pill: green "Graph connected" / red "Not connected"
+            if ($null -ne $Global:ConnectionPill) {
+                $Global:ConnectionPill.Tag.Connected = $connected
+                $Global:ConnectionPill.Text = $(if ($connected) { "Graph connected" } else { "Not connected" })
+                $Global:ConnectionPill.Invalidate()
+            }
+
+            # The Connect card doubles as Reconnect once a session exists
+            if ($null -ne $Global:ConnectButton) {
+                $Global:ConnectButton.Text = $(if ($connected) { "Reconnect" } else { "Connect to Microsoft Graph" })
+                # The long disconnected title needs a half point less to fit the 176 px card
+                $Global:ConnectButton.Tag.TitleSize = $(if ($connected) { 9.5 } else { 9 })
+                Set-GuiCardHint -Card $Global:ConnectButton -Hint $(if ($connected) { "Refresh Graph session" } else { "Sign in to your tenant" })
+            }
+
             # Force UI refresh to show changes immediately
             $Global:ConnectionLabel.Refresh()
             $Global:TenantInfoLabel.Refresh()
@@ -1575,8 +2379,10 @@ function Update-WorkingDirectoryDisplay {
     # Update GUI display if it exists
     if ($null -ne $Global:WorkDirLabel) {
         try {
-            $Global:WorkDirLabel.Text = "Working Directory: $NewWorkDir"
+            $Global:WorkDirLabel.Text = $NewWorkDir
             $Global:WorkDirLabel.Refresh()
+            # Collector tiles reflect the CollectionStatus.csv of the new directory
+            if ($Global:GuiTiles.Count -gt 0) { Initialize-GuiTileStates }
             [System.Windows.Forms.Application]::DoEvents()
             Write-Log "Updated GUI working directory display" -Level "Info"
         }
@@ -9827,1543 +10633,639 @@ function Invoke-CompromiseDetection {
     return $results
 }
 
-function Generate-HTMLReport {
-    <#
-    .SYNOPSIS
-        Generates a comprehensive HTML security report with Yeyland Wutani theme and dark mode
-    #>
-    
-    param (
-        [Parameter(Mandatory = $true)]
-        [array]$Data
-    )
-    
-    # Get current theme for default
-    $defaultDarkMode = if ($script:CurrentTheme -eq "Dark") { "true" } else { "false" }
-    
-    # Data coverage banner: gaps recorded by the collectors, plus stale/missing sources
-    # found by the analysis step. Empty string when everything reported complete.
-    $coverageBannerHtml = ""
-    if ($script:ReportCoverageNotes -and @($script:ReportCoverageNotes).Count -gt 0) {
-        $coverageItems = [System.Text.StringBuilder]::new()
-        foreach ($note in $script:ReportCoverageNotes) {
-            $badgeColor = switch ($note.Level) { "Incomplete" { "var(--danger-color)" } "Missing" { "var(--danger-color)" } "Stale" { "var(--warning-color)" } default { "var(--secondary-color)" } }
-            [void]$coverageItems.Append("<li style='margin-bottom:6px;'><span style='background:$badgeColor;color:#fff;padding:1px 8px;border-radius:10px;font-size:0.8em;margin-right:8px;'>$(ConvertTo-HtmlSafe $note.Level.ToUpper())</span><strong>$(ConvertTo-HtmlSafe $note.Source)</strong>: $(ConvertTo-HtmlSafe $note.Message)</li>")
-        }
-        $coverageBannerHtml = @"
-        <div id="dataCoverage" style="background: rgba(255, 152, 0, 0.12); border-left: 6px solid var(--warning-color); padding: 16px 20px; margin: 20px 0; border-radius: 8px;">
-            <h3 style="margin-bottom: 8px;">Data Coverage</h3>
-            <p style="color: var(--text-secondary); margin-bottom: 10px;">Findings below are only as complete as the data behind them. A user or item that does not appear may simply be outside the collected data.</p>
-            <ul style="margin-left: 20px;">$($coverageItems.ToString())</ul>
-        </div>
-"@
-    }
+#region HTML report: embedded template + payload builder
 
-    $sb = [System.Text.StringBuilder]::new(1MB)
-    [void]$sb.Append(@"
+# Report template (single-file by design so the script stays auto-updatable). It is dependency-free,
+# reads the JSON payload injected at __REPORT_DATA_JSON__ and renders everything client-side.
+# ASCII only: non-ASCII glyphs are written as \uXXXX escapes inside the JavaScript.
+$script:ReportTemplate = @'
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Microsoft 365 Security Analysis Report - Yeyland Wutani</title>
-    <style>
-        /* YEYLAND WUTANI THEME VARIABLES */
-        :root {
-            --primary-color: #FF6600;
-            --secondary-color: #6B7280;
-            --accent-color: #FF9800;
-            --success-color: #4CAF50;
-            --warning-color: #FF9800;
-            --danger-color: #F44336;
-            --critical-color: #D32F2F;
-            --background-color: #F5F5F5;
-            --surface-color: #FFFFFF;
-            --text-primary: #212121;
-            --text-secondary: #757575;
-            --border-color: #E0E0E0;
-            --shadow: rgba(0, 0, 0, 0.1);
-        }
-        
-        body.dark-mode {
-            --primary-color: #FF8533;
-            --secondary-color: #9CA3AF;
-            --accent-color: #FFA726;
-            --success-color: #66BB6A;
-            --warning-color: #FFA726;
-            --danger-color: #EF5350;
-            --critical-color: #E57373;
-            --background-color: #121212;
-            --surface-color: #1E1E1E;
-            --text-primary: #FFFFFF;
-            --text-secondary: #BDBDBD;
-            --border-color: #3C3C3C;
-            --shadow: rgba(0, 0, 0, 0.3);
-        }
-        
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-        }
-        
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            line-height: 1.6;
-            color: var(--text-primary);
-            background-color: var(--background-color);
-            padding: 20px;
-            transition: background-color 0.3s ease, color 0.3s ease;
-        }
-        
-        .container {
-            max-width: 1400px;
-            margin: 0 auto;
-            background-color: var(--surface-color);
-            padding: 40px;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px var(--shadow);
-            transition: background-color 0.3s ease;
-        }
-        
-        /* HEADER */
-        .header {
-            text-align: center;
-            margin-bottom: 40px;
-            padding-bottom: 30px;
-            border-bottom: 4px solid var(--primary-color);
-            position: relative;
-        }
-        
-        .header h1 {
-            color: var(--primary-color);
-            font-size: 2.8em;
-            margin-bottom: 10px;
-            font-weight: 700;
-        }
-        
-        .header .subtitle {
-            color: var(--text-secondary);
-            font-size: 1.2em;
-            margin-bottom: 15px;
-        }
-        
-        .header .report-meta {
-            color: var(--text-secondary);
-            font-size: 0.95em;
-            margin-top: 10px;
-        }
-        
-        /* Dark Mode Toggle */
-        .dark-mode-toggle {
-            position: fixed;
-            top: 20px;
-            right: 20px;
-            z-index: 1000;
-        }
-        
-        .dark-mode-toggle button {
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 25px;
-            cursor: pointer;
-            font-size: 14px;
-            font-weight: 600;
-            transition: all 0.3s ease;
-            box-shadow: 0 4px 15px var(--shadow);
-        }
-        
-        .dark-mode-toggle button:hover {
-            transform: translateY(-3px) scale(1.05);
-            box-shadow: 0 8px 30px rgba(255, 102, 0, 0.5);
-            filter: brightness(1.2);
-        }
-        
-        /* DASHBOARD STATISTICS */
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        
-        .stat-box {
-            background: linear-gradient(135deg, var(--surface-color), var(--background-color));
-            padding: 25px;
-            border-radius: 12px;
-            text-align: center;
-            border: 2px solid var(--border-color);
-            transition: all 0.3s ease;
-        }
-        
-        .stat-box:hover {
-            transform: translateY(-5px);
-            box-shadow: 0 8px 25px var(--shadow);
-        }
-        
-        .stat-box.critical { border-left: 6px solid var(--critical-color); }
-        .stat-box.high { border-left: 6px solid var(--danger-color); }
-        .stat-box.medium { border-left: 6px solid var(--warning-color); }
-        .stat-box.low { border-left: 6px solid var(--success-color); }
-        
-        .stat-number {
-            font-size: 3em;
-            font-weight: 700;
-            margin-bottom: 10px;
-        }
-        
-        .stat-box.critical .stat-number { color: var(--critical-color); }
-        .stat-box.high .stat-number { color: var(--danger-color); }
-        .stat-box.medium .stat-number { color: var(--warning-color); }
-        .stat-box.low .stat-number { color: var(--success-color); }
-        
-        .stat-label {
-            font-size: 1.1em;
-            color: var(--text-secondary);
-            font-weight: 600;
-        }
-        
-        /* USER CARDS */
-        .users-section {
-            margin-top: 40px;
-        }
-        
-        .section-title {
-            font-size: 1.8em;
-            color: var(--primary-color);
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 3px solid var(--primary-color);
-        }
-        
-        .user-card {
-            background-color: var(--surface-color);
-            border: 2px solid var(--border-color);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-            transition: all 0.3s ease;
-        }
-        
-        .user-card:hover {
-            box-shadow: 0 6px 20px var(--shadow);
-            transform: translateX(5px);
-        }
-        
-        .user-card.critical {
-            border-left: 8px solid var(--critical-color);
-            background: linear-gradient(to right, rgba(211, 47, 47, 0.05), var(--surface-color));
-        }
-        
-        .user-card.high {
-            border-left: 8px solid var(--danger-color);
-            background: linear-gradient(to right, rgba(244, 67, 54, 0.05), var(--surface-color));
-        }
-        
-        .user-card.medium { border-left: 8px solid var(--warning-color); }
-        .user-card.low { border-left: 8px solid var(--success-color); }
-        
-        .user-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 15px;
-            cursor: pointer;
-            user-select: none;
-        }
-        
-        .user-info h3 {
-            color: var(--text-primary);
-            font-size: 1.4em;
-            margin-bottom: 5px;
-        }
-        
-        .user-email {
-            color: var(--text-secondary);
-            font-size: 0.95em;
-        }
-        
-        .risk-badge {
-            padding: 8px 20px;
-            border-radius: 25px;
-            font-weight: 700;
-            font-size: 0.9em;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        
-        .risk-badge.critical { background: var(--critical-color); color: white; }
-        .risk-badge.high { background: var(--danger-color); color: white; }
-        .risk-badge.medium { background: var(--warning-color); color: white; }
-        .risk-badge.low { background: var(--success-color); color: white; }
-        
-        .risk-score {
-            font-size: 2em;
-            font-weight: 700;
-            text-align: center;
-            margin: 10px 0;
-        }
-        
-        /* COLLAPSIBLE SECTIONS */
-        .collapsible-content {
-            display: none;
-            margin-top: 20px;
-            padding-top: 20px;
-            border-top: 2px solid var(--border-color);
-        }
-        
-        .collapsible-content.show {
-            display: block;
-        }
-        
-        .toggle-icon {
-            font-size: 1.5em;
-            transition: transform 0.3s ease;
-        }
-        
-        .toggle-icon.rotated {
-            transform: rotate(180deg);
-        }
-        
-        /* TABLES */
-        .evidence-section {
-            margin-top: 20px;
-        }
-        
-        .evidence-section h4 {
-            color: var(--primary-color);
-            font-size: 1.2em;
-            margin-bottom: 15px;
-            padding-left: 15px;
-            border-left: 4px solid var(--primary-color);
-        }
-        
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-bottom: 20px;
-            background-color: var(--surface-color);
-            border-radius: 8px;
-            overflow: hidden;
-        }
-        
-        th {
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            color: white;
-            padding: 15px;
-            text-align: left;
-            font-weight: 600;
-            text-transform: uppercase;
-            font-size: 0.85em;
-            letter-spacing: 0.5px;
-        }
-        
-        td {
-            padding: 12px 15px;
-            border-bottom: 1px solid var(--border-color);
-            color: var(--text-primary);
-        }
-        
-        tr:hover {
-            background-color: var(--background-color);
-        }
-        /* High-Risk Row Highlighting */
-		.high-risk-row {
-			background: linear-gradient(to right, rgba(255, 152, 0, 0.15), transparent) !important;
-			border-left: 4px solid var(--danger-color) !important;
-			font-weight: 500;
-		}
-
-		.high-risk-row:hover {
-			background: linear-gradient(to right, rgba(255, 152, 0, 0.25), var(--background-color)) !important;
-			box-shadow: 0 2px 8px rgba(255, 152, 0, 0.3);
-			transform: translateX(3px);
-			transition: all 0.2s ease;
-		}
-
-		/* High-Risk ISP Section Title */
-		.evidence-section h4.high-risk-title {
-			color: var(--danger-color);
-			border-left-color: var(--danger-color);
-		}
-
-		/* Recommendation Box Styling */
-		.recommendation-box {
-			margin-top: 15px;
-			padding: 12px 15px;
-			background-color: rgba(255, 152, 0, 0.1);
-			border-left: 4px solid var(--warning-color);
-			border-radius: 4px;
-			font-size: 0.9em;
-			line-height: 1.6;
-		}
-
-		.recommendation-box strong {
-			color: var(--warning-color);
-			display: block;
-			margin-bottom: 8px;
-			font-size: 1.05em;
-		}
-
-		/* Dark Mode Adjustments */
-		body.dark-mode .high-risk-row {
-			background: linear-gradient(to right, rgba(255, 167, 38, 0.2), transparent) !important;
-		}
-
-		body.dark-mode .high-risk-row:hover {
-			background: linear-gradient(to right, rgba(255, 167, 38, 0.3), rgba(255, 255, 255, 0.02)) !important;
-		}
-
-		body.dark-mode .recommendation-box {
-			background-color: rgba(255, 167, 38, 0.15);
-		}
-
-		/* Summary Table Row Highlighting */
-		.summary-row-critical {
-			background: linear-gradient(to right, rgba(211, 47, 47, 0.2), rgba(211, 47, 47, 0.05)) !important;
-			border-left: 5px solid var(--critical-color) !important;
-			font-weight: 500;
-		}
-
-		.summary-row-high {
-			background: linear-gradient(to right, rgba(244, 67, 54, 0.15), rgba(244, 67, 54, 0.03)) !important;
-			border-left: 5px solid var(--danger-color) !important;
-			font-weight: 500;
-		}
-
-		.summary-row-medium {
-			background: linear-gradient(to right, rgba(255, 152, 0, 0.1), transparent) !important;
-			border-left: 4px solid var(--warning-color) !important;
-		}
-
-		.summary-row-low {
-			background: transparent;
-			border-left: 2px solid var(--border-color);
-		}
-
-		.summary-row-critical:hover,
-		.summary-row-high:hover,
-		.summary-row-medium:hover {
-			transform: translateX(3px);
-			box-shadow: 0 3px 12px rgba(0, 0, 0, 0.2);
-			transition: all 0.2s ease;
-		}
-
-		/* Summary Table Styling */
-		.summary-table {
-			width: 100%;
-			margin-bottom: 30px;
-		}
-
-		.summary-table th {
-			position: sticky;
-			top: 0;
-			z-index: 10;
-			background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-		}
-
-		.summary-table td {
-			vertical-align: top;
-			line-height: 1.6;
-		}
-        /* BADGES & ALERTS */
-        .badge {
-            display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.85em;
-            font-weight: 600;
-            margin: 2px;
-        }
-        
-        .badge.success { background: var(--success-color); color: white; }
-        .badge.warning { background: var(--warning-color); color: white; }
-        .badge.danger { background: var(--danger-color); color: white; }
-        .badge.info { background: var(--primary-color); color: white; }
-        
-        .alert {
-            padding: 15px 20px;
-            border-radius: 8px;
-            margin: 15px 0;
-            border-left: 5px solid;
-        }
-        
-        .alert.critical {
-            background-color: rgba(211, 47, 47, 0.1);
-            border-color: var(--critical-color);
-            color: var(--critical-color);
-        }
-        
-        .alert.warning {
-            background-color: rgba(255, 152, 0, 0.1);
-            border-color: var(--warning-color);
-            color: var(--warning-color);
-        }
-        
-        .alert.info {
-            background-color: rgba(33, 150, 243, 0.1);
-            border-color: var(--primary-color);
-            color: var(--primary-color);
-        }
-        
-        .alert.success {
-            background-color: rgba(76, 175, 80, 0.1);
-            border-color: var(--success-color);
-            color: var(--success-color);
-        }
-
-        /* CHARTS & VISUALIZATIONS */
-        .charts-section {
-            margin: 40px 0;
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
-            gap: 30px;
-        }
-
-        .chart-container {
-            background-color: var(--surface-color);
-            border: 2px solid var(--border-color);
-            border-radius: 12px;
-            padding: 25px;
-            box-shadow: 0 2px 10px var(--shadow);
-        }
-
-        .chart-title {
-            font-size: 1.3em;
-            color: var(--primary-color);
-            margin-bottom: 20px;
-            font-weight: 600;
-            text-align: center;
-        }
-
-        .chart {
-            position: relative;
-            height: 250px;
-            display: flex;
-            align-items: flex-end;
-            justify-content: space-around;
-            padding: 10px 0;
-        }
-
-        .bar {
-            flex: 1;
-            margin: 0 5px;
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: flex-end;
-        }
-
-        .bar-fill {
-            width: 100%;
-            border-radius: 8px 8px 0 0;
-            transition: all 0.3s ease;
-            position: relative;
-        }
-
-        .bar-fill:hover {
-            filter: brightness(1.2);
-            transform: scaleY(1.05);
-        }
-
-        .bar-value {
-            position: absolute;
-            top: -25px;
-            font-weight: 700;
-            font-size: 1.1em;
-            color: var(--text-primary);
-        }
-
-        .bar-label {
-            margin-top: 10px;
-            font-size: 0.85em;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            font-weight: 600;
-        }
-
-        /* QUICK ACTION PANEL */
-        .quick-actions {
-            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
-            padding: 20px;
-            border-radius: 12px;
-            margin-bottom: 30px;
-            display: flex;
-            gap: 15px;
-            flex-wrap: wrap;
-            justify-content: center;
-        }
-
-        .action-btn {
-            background-color: rgba(255, 255, 255, 0.2);
-            color: white;
-            border: 2px solid rgba(255, 255, 255, 0.4);
-            padding: 12px 24px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 0.95em;
-            transition: all 0.3s ease;
-            backdrop-filter: blur(10px);
-        }
-
-        .action-btn:hover {
-            background-color: rgba(255, 255, 255, 0.35);
-            transform: translateY(-3px) scale(1.05);
-            box-shadow: 0 6px 20px rgba(0, 0, 0, 0.3);
-            border-color: rgba(255, 255, 255, 0.8);
-        }
-
-        /* LOW RISK USERS - COMPACT VIEW */
-        .low-risk-summary {
-            background-color: var(--surface-color);
-            border: 2px solid var(--border-color);
-            border-left: 6px solid var(--success-color);
-            border-radius: 10px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .low-risk-summary h3 {
-            color: var(--success-color);
-            margin-bottom: 15px;
-            font-size: 1.3em;
-        }
-
-        .low-risk-summary .expand-btn {
-            background-color: var(--success-color);
-            color: white;
-            border: none;
-            padding: 10px 20px;
-            border-radius: 6px;
-            cursor: pointer;
-            font-weight: 600;
-            margin-top: 10px;
-            transition: all 0.3s ease;
-        }
-
-        .low-risk-summary .expand-btn:hover {
-            background-color: var(--success-color);
-            transform: translateY(-2px) scale(1.05);
-            box-shadow: 0 4px 15px rgba(76, 175, 80, 0.4);
-            filter: brightness(1.15);
-        }
-
-        .low-risk-users-hidden {
-            max-height: 0;
-            overflow: hidden;
-            transition: max-height 0.5s ease;
-        }
-
-        .low-risk-users-shown {
-            max-height: none;
-        }
-
-        /* HIGH PRIORITY ALERT BOX */
-        .priority-alert {
-            background: linear-gradient(135deg, rgba(244, 67, 54, 0.1), rgba(211, 47, 47, 0.05));
-            border-left: 6px solid var(--danger-color);
-            padding: 20px;
-            border-radius: 8px;
-            margin-bottom: 30px;
-        }
-
-        .priority-alert h3 {
-            color: var(--danger-color);
-            font-size: 1.4em;
-            margin-bottom: 10px;
-        }
-
-        .priority-alert ul {
-            list-style-position: inside;
-            color: var(--text-primary);
-        }
-
-        .priority-alert li {
-            margin: 8px 0;
-            padding-left: 10px;
-        }
-
-        /* FOOTER */
-        .footer {
-            margin-top: 60px;
-            padding-top: 30px;
-            border-top: 3px solid var(--border-color);
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 0.9em;
-        }
-        
-        .footer strong {
-            color: var(--primary-color);
-        }
-        
-        /* PRINT STYLES */
-        @media print {
-            .dark-mode-toggle { display: none; }
-            .collapsible-content { display: block !important; }
-            .user-card { page-break-inside: avoid; }
-        }
-        
-        /* RESPONSIVE DESIGN */
-        @media (max-width: 768px) {
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
-            
-            .user-header {
-                flex-direction: column;
-                align-items: flex-start;
-            }
-            
-            .risk-badge {
-                margin-top: 10px;
-            }
-        }
-    </style>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Microsoft 365 Security Report</title>
+<style>
+/* Tokens. PowerShell may swap [data-theme] default via meta.darkMode. */
+:root,[data-theme="dark"]{--bg:#0c0e11;--surface:#14171b;--surface2:#1b1f25;--line:#282d35;--text:#eceff3;--muted:#98a1ae;--accent:#ff6600;--crit:#ff5c5c;--high:#ffa033;--med:#f2c94c;--low:#4cc38a;--ok:#4cc38a;--on-accent:#1a0d00;--shadow:rgba(0,0,0,.35)}
+[data-theme="light"]{--bg:#f3f1ed;--surface:#fff;--surface2:#f7f5f1;--line:#e2ded6;--text:#1b1d21;--muted:#5f6670;--accent:#e85d00;--crit:#c62828;--high:#b45f00;--med:#8a6d00;--low:#1f7a4d;--ok:#1f7a4d;--shadow:rgba(0,0,0,.15)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:400 14px/1.5 'IBM Plex Sans','Segoe UI',system-ui,sans-serif;padding:28px 20px 60px}
+a{color:var(--accent)}a:hover{color:var(--high)}
+h1,h2,h3{margin:0}
+.wrap{max-width:1180px;margin:0 auto}
+.mono{font-family:'IBM Plex Mono',Consolas,monospace}
+.kick{font:500 11px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--accent)}
+.lbl{font:500 10.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px}
+.crit{color:var(--crit)}.high{color:var(--high)}.med{color:var(--med)}.low{color:var(--low)}.ok{color:var(--ok)}.muted{color:var(--muted)}
+.btn{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;font:500 13px 'IBM Plex Sans','Segoe UI',sans-serif;cursor:pointer;white-space:nowrap}
+.btn:hover{border-color:var(--accent)}
+.seg{display:flex;gap:4px;background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:4px}
+.seg button{border:0;border-radius:7px;padding:8px 16px;background:transparent;color:var(--muted);font:500 13px 'IBM Plex Sans','Segoe UI',sans-serif;cursor:pointer;white-space:nowrap}
+.seg button.on{background:var(--accent);color:var(--on-accent)}
+.row{display:grid;gap:14px;padding:11px 20px;align-items:center;border-top:1px solid var(--line);font-size:13px}
+.row.click{cursor:pointer}.row.click:hover{background:var(--surface2)}
+.row.head{background:var(--surface2);border-top:0;font:500 10.5px 'IBM Plex Mono',Consolas,monospace;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+.row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pill{font:600 11px 'IBM Plex Mono',Consolas,monospace;border:1px solid currentColor;border-radius:99px;padding:2px 9px;white-space:nowrap}
+.chip{font-size:12px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);white-space:nowrap}
+.sec>button{all:unset;box-sizing:border-box;width:100%;cursor:pointer;display:flex;align-items:center;gap:14px;padding:16px 20px;flex-wrap:wrap}
+.sec>button:hover{background:var(--surface2)}
+.more{all:unset;display:block;box-sizing:border-box;width:100%;cursor:pointer;text-align:center;padding:12px;border-top:1px solid var(--line);color:var(--accent);font-weight:500}
+.more:hover{background:var(--surface2)}
+#drawer-bg{position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:50}
+#drawer{position:fixed;top:0;right:0;bottom:0;width:min(540px,100%);background:var(--surface);border-left:1px solid var(--line);z-index:51;overflow-y:auto;box-shadow:-20px 0 60px var(--shadow)}
+.rel{all:unset;box-sizing:border-box;width:100%;cursor:pointer;display:flex;justify-content:space-between;gap:12px;padding:9px 12px;border:1px solid var(--line);border-radius:8px;margin-bottom:6px;font-size:13px}
+.rel:hover{border-color:var(--accent);background:var(--surface2)}
+.rel span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+pre{margin:8px 0 0;white-space:pre-wrap;overflow-wrap:anywhere;font:400 12px/1.5 'IBM Plex Mono',Consolas,monospace;background:var(--surface2);border:1px solid var(--line);border-radius:8px;padding:10px 12px;max-height:280px;overflow:auto}
+input[type=search]{background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:8px;padding:9px 12px;font:13px 'IBM Plex Sans','Segoe UI',sans-serif;width:200px;outline:none}
+input[type=search]:focus{border-color:var(--accent)}
+.scroll-x{overflow-x:auto}.scroll-x>div{min-width:760px}
+@media (max-width:820px){.two{grid-template-columns:1fr!important}}
+@media print{body{background:#fff;color:#000}#drawer,#drawer-bg,.noprint{display:none!important}}
+</style>
 </head>
-<body class="$( if ($defaultDarkMode -eq "true") { "dark-mode" } else { "" } )">
-    <div class="dark-mode-toggle">
-        <button onclick="toggleDarkMode()" id="themeToggle">
-            <span id="themeIcon">🌙</span> <span id="themeText">Dark Mode</span>
-        </button>
-    </div>
+<body>
+<div class="wrap" id="app"></div>
+<div id="drawer-host"></div>
+<script id="report-data" type="application/json">__REPORT_DATA_JSON__</script>
+<script>
+(function () {
+'use strict';
+var raw = document.getElementById('report-data').textContent.trim(), D;
+try { D = JSON.parse(raw); } catch (e) { document.getElementById('app').innerHTML = '<p>Report data was not injected (placeholder still present).</p>'; return; }
+var M = D.meta, PREV = 8;
+var S = { dark: M.darkMode !== false, filter: 'All', q: '', allIds: false, open: {}, showAll: {}, stack: [] };
+var $ = function (s) { return document.querySelector(s); };
+var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+var LC = { Critical: 'crit', High: 'high', Medium: 'med', Low: 'low' };
+var lc = function (l) { return LC[l] || 'muted'; };
+var by = function (a, f) { var r = {}; a.forEach(function (x) { var k = f(x); r[k] = (r[k] || 0) + 1; }); return r; };
+var hk = function (k) { return k.replace(/_/g, ' ').replace(/([a-z])([A-Z])/g, '$1 $2'); };
+var pl = function (a) { return (a || '').split('; ').length; };
+var NAMES = { audit: 'audit', app: 'apps', fail: 'fails', mfa: 'mfa', pw: 'pw', ca: 'ca', rule: 'rules', deleg: 'deleg', trace: 'trace', loc: 'locs', id: 'identities', pat: 'pat', unus: 'unus', etr: 'etr' };
+var KINDS = { audit: 'Admin operation', app: 'App registration', fail: 'Failed sign-in', mfa: 'MFA status', pw: 'Password change', ca: 'Conditional access policy', rule: 'Inbox rule', deleg: 'Mailbox delegation', trace: 'Message trace', loc: 'Sign-in location', id: 'Identity', pat: 'Attack pattern', unus: 'Unusual sign-in', etr: 'ETR spam activity' };
+var arr = function (k) { return D[NAMES[k]] || []; };
 
-    <div class="container">
-        <div class="header">
-            <h1>◈ Microsoft 365 Security Analysis Report</h1>
-            <div class="subtitle">Yeyland Wutani - Comprehensive Threat Detection & Risk Assessment</div>
-            <div class="report-meta">
-                Generated: $(Get-Date -Format "MMMM dd, yyyy 'at' HH:mm:ss") | 
-                Total Users Analyzed: $($Data.Count) | 
-                Tool Version: $ScriptVer
-            </div>
-        </div>
+/* Evidence section definitions: cols/grid/cells per dataset */
+var cell = function (t, c, m) { return { t: t == null || t === '' ? '\u2014' : String(t), c: c || '', m: !!m }; };
+var rlBadges = function (a) { var r = by(a, function (x) { return x.RiskLevel; }); return ['Critical', 'High', 'Medium', 'Low'].filter(function (k) { return r[k]; }).map(function (k) { return [r[k] + ' ' + k.toLowerCase(), lc(k)]; }); };
+var DEFS = [
+ { key: 'audit', title: 'High-risk admin operations', sub: 'Entra directory audit \u00b7 High and Medium first', cols: ['Time', 'Actor', 'Activity', 'Target', 'Result', 'Risk'], grid: '150px 1.1fr 1.5fr 1.2fr 80px 70px', badges: function (a) { return rlBadges(a); },
+   cells: function (o) { return [cell(o.Timestamp, 'muted', 1), cell(o.UserDisplayName || o.UserId), cell(o.Activity), cell((o.targets || []).join(', ')), cell(o.Result, o.Result === 'success' ? 'ok' : 'crit'), cell(o.RiskLevel, lc(o.RiskLevel), 1)]; } },
+ { key: 'app', title: 'High-risk app registrations', sub: 'Permissions and consent \u00b7 open a row for the full permission list', cols: ['Application', 'Created', 'Permissions', 'Consent', 'Why flagged'], grid: '1.3fr 150px 110px 110px 2fr', badges: function (a) { return [[a.filter(function (x) { return x.AdminConsentAllUsers === 'True'; }).length + ' tenant-wide consent', 'high']]; },
+   cells: function (o) { var t = o.AdminConsentAllUsers === 'True'; return [cell(o.DisplayName), cell(o.CreatedDateTime, 'muted', 1), cell(pl(o.RequestedPermissions) + ' requested', '', 1), cell(t ? 'Tenant-wide' : 'Limited', t ? 'high' : 'muted'), cell((o.RiskReasons || '').replace('High-privilege permissions: ', ''), 'muted')]; } },
+ { key: 'fail', title: 'Failed sign-ins', sub: 'Interactive sign-ins that did not complete', cols: ['Time', 'User', 'Reason', 'IP', 'Location', 'App'], grid: '150px 1.2fr 1.6fr 150px 1fr 1fr', badges: function (a) { return [[Object.keys(by(a, function (x) { return x.IP; })).length + ' source IPs', 'high']]; },
+   cells: function (o) { return [cell(o.CreationTime, 'muted', 1), cell(o.UserId || 'unknown'), cell(o.Status), cell(o.IP, '', 1), cell([o.City, o.Country].filter(Boolean).join(', ')), cell(o.AppDisplayName)]; } },
+ { key: 'mfa', title: 'MFA coverage', sub: 'Enforcement and registered methods per account', cols: ['Account', 'Type', 'MFA', 'Admin', 'Methods', 'Risk'], grid: '1.6fr 80px 90px 1.2fr 80px 80px', badges: function (a) { var r = by(a, function (x) { return x.HasMFA; }); return [['No', 'crit'], ['Partial', 'high'], ['Capable', 'muted']].filter(function (x) { return r[x[0]]; }).map(function (x) { return [r[x[0]] + ' ' + x[0].toLowerCase(), x[1]]; }); },
+   cells: function (o) { return [cell(o.DisplayName), cell(o.UserType, 'muted'), cell(o.HasMFA, o.HasMFA === 'No' ? 'crit' : o.HasMFA === 'Partial' ? 'high' : ''), cell(o.IsAdmin === 'True' ? (o.AdminRoles || 'Admin') : 'No', o.IsAdmin === 'True' ? 'high' : 'muted'), cell(o.MethodCount, '', 1), cell(o.RiskLevel, lc(o.RiskLevel), 1)]; } },
+ { key: 'pw', title: 'Password changes', sub: 'Rapid or repeated resets', cols: ['User', 'Changes', 'Span (h)', 'Self / admin', 'Risk'], grid: '1.6fr 90px 90px 110px 90px', badges: function (a) { return rlBadges(a); },
+   cells: function (o) { return [cell(o.User), cell(o.ChangeCount, '', 1), cell(o.TimeSpanHours, '', 1), cell(o.SelfResets + ' / ' + o.AdminResets, '', 1), cell(o.RiskLevel, lc(o.RiskLevel), 1)]; } },
+ { key: 'ca', title: 'Conditional access policies', sub: 'Grants, exclusions and enforcement state', cols: ['Policy', 'State', 'Grants', 'Excluded', 'Flags'], grid: '2fr 190px 90px 150px 1.5fr', badges: function () { return []; },
+   cells: function (o) { var s = o.summary || {}; return [cell(o.DisplayName), cell(o.State, o.State === 'enabled' ? 'ok' : 'high', 1), cell(s.grant, '', 1), cell((s.exUsers || 0) + ' users \u00b7 ' + (s.exGroups || 0) + ' groups', '', 1), cell(o.SuspiciousReasons, 'muted')]; } },
+ { key: 'rule', title: 'Inbox rules', sub: 'Forwarding, redirect and delete rules', cols: ['Mailbox', 'Rule', 'Enabled', 'Type', 'Suspicious'], grid: '1.6fr 1.2fr 80px 130px 90px', badges: function (a) { return [[a.filter(function (x) { return x.IsSuspicious === 'True'; }).length + ' suspicious', 'ok']]; },
+   cells: function (o) { return [cell(o.PrimarySmtpAddress), cell(o.RuleName), cell(o.Enabled, '', 1), cell(o.MailboxType, 'muted'), cell(o.IsSuspicious, o.IsSuspicious === 'True' ? 'crit' : 'muted', 1)]; } },
+ { key: 'deleg', title: 'Mailbox delegation', sub: 'Full access and Send As grants', cols: ['Mailbox', 'Delegate', 'Permissions', 'Flagged'], grid: '1.5fr 1.5fr 1fr 90px', badges: function () { return []; },
+   cells: function (o) { return [cell(o.PrimarySmtpAddress), cell(o.DelegateEmail || o.DelegateName), cell(o.Permissions), cell(o.IsSuspicious, o.IsSuspicious === 'True' ? 'crit' : 'muted', 1)]; } },
+ { key: 'trace', title: 'Message trace', sub: 'Mail flow in the window', cols: ['Received', 'From', 'To', 'Subject', 'Status'], grid: '150px 1.2fr 1.2fr 1.6fr 90px', badges: function (a) { var r = by(a, function (x) { return x.status; }); return Object.keys(r).map(function (k) { return [r[k] + ' ' + k.toLowerCase(), 'muted']; }); },
+   cells: function (o) { return [cell(o.received, 'muted', 1), cell(o.sender_address), cell(o.recipient_address), cell(o.subject), cell(o.status)]; } },
+ { key: 'loc', title: 'Sign-in locations', sub: 'Unique user, IP and place combinations', cols: ['User', 'IP', 'Location', 'ISP', 'Sign-ins'], grid: '1.3fr 170px 1fr 1.3fr 80px', badges: function (a) { return [[a.filter(function (x) { return x.IsUnusualLocation === 'True'; }).length + ' unusual', 'ok']]; },
+   cells: function (o) { return [cell(o.UserId || 'unknown'), cell(o.IP, '', 1), cell([o.City, o.Country].filter(Boolean).join(', ')), cell(o.ISP), cell(o.SignInCount, '', 1)]; } },
+ { key: 'pat', opt: true, title: 'Brute-force patterns', sub: 'Password spray and repeated credential failures', cols: ['User', 'Pattern', 'Source IP', 'Attempts', 'Breach', 'Risk'], grid: '1.4fr 1.3fr 150px 90px 90px 80px', badges: function (a) { var b = a.filter(function (x) { return x.SuccessfulBreach === 'True'; }).length; return (b ? [[b + ' confirmed breach', 'crit']] : []).concat(rlBadges(a)); },
+   cells: function (o) { var b = o.SuccessfulBreach === 'True'; return [cell(o.UserId), cell(o.PatternType), cell(o.SourceIP, '', 1), cell(o.FailedAttempts, '', 1), cell(b ? 'Breached' : 'No', b ? 'crit' : 'muted'), cell(o.RiskLevel, lc(o.RiskLevel), 1)]; } },
+ { key: 'unus', opt: true, title: 'Unusual and high-risk sign-ins', sub: 'Unexpected countries and high-risk ISPs', cols: ['Time', 'User', 'IP', 'Location', 'ISP', 'Flag'], grid: '150px 1.2fr 150px 1fr 1.2fr 120px', badges: function (a) { var h = a.filter(function (x) { return x.IsHighRiskISP === 'True'; }).length, u = a.filter(function (x) { return x.IsUnusualLocation === 'True'; }).length; return [[h + ' high-risk ISP', 'high'], [u + ' unusual location', 'med']]; },
+   cells: function (o) { var h = o.IsHighRiskISP === 'True'; return [cell(o.CreationTime, 'muted', 1), cell(o.UserId || 'unknown'), cell(o.IP, '', 1), cell([o.City, o.Country].filter(Boolean).join(', ')), cell(o.ISP), cell(h ? 'High-risk ISP' : 'Unusual location', h ? 'high' : 'med')]; } },
+ { key: 'etr', opt: true, title: 'ETR spam activity', sub: 'Excessive volume, failed deliveries and risky senders', cols: ['Sender', 'Type', 'Messages', 'Detail', 'Risk'], grid: '1.4fr 1.2fr 90px 2fr 80px', badges: function (a) { return rlBadges(a); },
+   cells: function (o) { return [cell(o.SenderAddress), cell(o.RiskType), cell(o.MessageCount, '', 1), cell(o.Description, 'muted'), cell(o.RiskLevel, lc(o.RiskLevel), 1)]; } }
+];
+/* Sections flagged opt are hidden when their dataset is empty. */
+var LIVE = function () { return DEFS.filter(function (d) { return !d.opt || arr(d.key).length; }); };
+var DK = { audit: 'audit', app: 'app', fail: 'fail', mfa: 'mfa', pw: 'pw', ca: 'ca', rule: 'rule', deleg: 'deleg', trace: 'trace', loc: 'loc' };
 
-$coverageBannerHtml
-        <div class="stats-grid">
-"@)
+/* Renderers */
+function renderTop() {
+  var ids = D.identities, cnt = by(ids, function (x) { return x.level; }), n = ids.length, c = cnt.Critical || 0, h = cnt.High || 0, m = cnt.Medium || 0, l = cnt.Low || 0;
+  var pct = function (v) { return (v / n * 100).toFixed(1) + '%'; };
+  var th = M.threats || {};
+  var threats = [['Accounts under attack', th.accountsUnderAttack, ''], ['Failed sign-ins', th.failedSignIns, 'high'], ['High-risk app registrations', th.highRiskApps, 'crit'], ['Priority accounts', c + h, 'crit']];
+  var cov = (D.cov || []).map(function (x) { var bad = x.Complete === 'False'; return '<div style="border:1px solid var(--line);border-radius:8px;padding:10px 12px;display:flex;flex-direction:column;gap:3px"><span style="font-weight:500;display:flex;align-items:center;gap:7px"><span style="width:7px;height:7px;border-radius:50%;background:var(--' + (bad ? 'crit' : 'ok') + ')"></span>' + esc(x.Source) + '</span><span class="mono muted" style="font-size:12px">' + esc(x.Records) + ' records</span></div>'; }).join('');
+  var notes = (D.notes || []).map(function (x) { var inc = /incomplete|missing/i.test(x.level); return '<div style="display:flex;gap:12px;align-items:baseline;line-height:1.5"><span class="mono" style="flex:none;font-weight:600;font-size:10.5px;padding:2px 8px;border-radius:99px;background:' + (inc ? 'var(--crit);color:#fff' : 'var(--surface2);color:var(--text)') + '">' + esc(String(x.level).toUpperCase()) + '</span><span><strong>' + esc(x.source) + '</strong> \u2014 ' + esc(x.message) + '</span></div>'; }).join('');
+  $('#app').innerHTML =
+   '<div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:20px" class="noprint"><span class="mono muted" style="font-size:12px">' + esc(M.toolName || 'M365 Security Analysis') + ' v' + esc(M.toolVersion) + '</span><button class="btn" data-act="theme">' + (S.dark ? 'Light mode' : 'Dark mode') + '</button></div>' +
+   '<div style="border-bottom:2px solid var(--accent);padding-bottom:26px;display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap"><div><div class="kick" style="margin-bottom:10px">' + esc(M.brand || 'Yeyland Wutani') + ' \u00b7 Threat detection &amp; risk assessment</div><h1 style="font-size:38px;font-weight:600;letter-spacing:-.02em;line-height:1.1">Microsoft 365 Security Report</h1></div><div class="mono muted" style="font-size:12.5px;line-height:1.8;text-align:right">' + esc(M.tenant) + '<br>' + esc(M.generated) + ' \u00b7 ' + esc(M.days) + '-day window<br>' + n + ' identities \u00b7 Tool v' + esc(M.toolVersion) + '</div></div>' +
+   '<div class="two" style="margin-top:28px;display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr);gap:20px"><div class="card" style="padding:28px"><div class="lbl">Verdict</div><div style="font-size:26px;font-weight:600;line-height:1.25;margin:10px 0 22px;text-wrap:pretty">' + (c + h) + ' of ' + n + ' identities need action.' + (c ? ' <span class="crit">' + c + ' are critical.</span>' : '') + '</div>' +
+   '<div style="display:flex;height:14px;border-radius:99px;overflow:hidden;gap:2px"><div style="width:' + pct(c) + ';background:var(--crit)"></div><div style="width:' + pct(h) + ';background:var(--high)"></div><div style="width:' + pct(m) + ';background:var(--med)"></div><div style="width:' + pct(l) + ';background:var(--low)"></div></div>' +
+   '<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:22px">' + [['Critical', c, 'crit'], ['High', h, 'high'], ['Medium', m, 'med'], ['Low', l, 'low']].map(function (x) { return '<div><div class="' + x[2] + '" style="font-size:34px;font-weight:600;line-height:1">' + x[1] + '</div><div class="muted" style="font-size:12.5px;margin-top:4px">' + x[0] + '</div></div>'; }).join('') + '</div></div>' +
+   '<div class="card" style="padding:28px"><div class="lbl" style="margin-bottom:8px">Active threats</div>' + threats.map(function (t) { return '<div style="display:flex;justify-content:space-between;align-items:baseline;padding:10px 0;border-top:1px solid var(--line)"><span class="muted">' + t[0] + '</span><span class="' + t[2] + '" style="font-size:20px;font-weight:600">' + (t[1] == null ? 0 : t[1]) + '</span></div>'; }).join('') + '</div></div>' +
+   '<div class="card" style="margin-top:20px;padding:24px 28px"><div style="display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:8px"><h2 style="font-size:18px;font-weight:600">Data coverage</h2><span class="muted" style="font-size:13px">A missing finding may simply be outside the collected data.</span></div><div style="margin-top:16px;display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px">' + cov + '</div><div style="margin-top:16px;display:flex;flex-direction:column;gap:8px;font-size:13.5px">' + notes + '</div></div>' +
+   '<div style="margin-top:36px" id="evidence"></div><div style="margin-top:36px" id="identities"></div><div class="mono muted" style="margin-top:22px;font-size:12px;text-align:center">Generated by Get-M365SecurityAnalysis v' + esc(M.toolVersion) + ' \u00b7 ' + esc(M.brand || 'Yeyland Wutani') + '</div>';
+  document.body.setAttribute('data-theme', S.dark ? 'dark' : 'light');
+  renderEvidence(); renderIdentities();
+}
+function renderEvidence() {
+  var allOpen = LIVE().every(function (d) { return S.open[d.key]; });
+  $('#evidence').innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-end;gap:14px;flex-wrap:wrap"><div><h2 style="font-size:22px;font-weight:600">Evidence</h2><div class="muted" style="margin-top:4px;max-width:620px">Every record behind the scores. Sections start collapsed; open a row for the full record.</div></div><button class="btn noprint" data-act="allsecs">' + (allOpen ? 'Collapse all' : 'Expand all') + '</button></div><div style="margin-top:14px;display:flex;flex-direction:column;gap:10px">' +
+  LIVE().map(function (d) {
+    var a = arr(d.key), open = !!S.open[d.key], all = !!S.showAll[d.key];
+    var head = '<button data-act="sec" data-a="' + d.key + '"><span style="font-size:15px;font-weight:600">' + d.title + '</span><span class="muted" style="flex:1;min-width:160px">' + d.sub + '</span><span style="display:flex;gap:6px;flex-wrap:wrap">' + d.badges(a).map(function (b) { return '<span class="pill ' + b[1] + '">' + esc(b[0]) + '</span>'; }).join('') + '</span><span class="mono muted" style="min-width:34px;text-align:right">' + a.length + '</span><span class="muted" style="font-size:12px;width:12px">' + (open ? '\u25b2' : '\u25bc') + '</span></button>';
+    var body = '';
+    if (open) {
+      var g = 'grid-template-columns:' + d.grid.split(' ').map(function (x) { return 'minmax(0,' + x + ')'; }).join(' ');
+      body = '<div class="scroll-x" style="border-top:1px solid var(--line)"><div><div class="row head" style="' + g + '">' + d.cols.map(function (c) { return '<span>' + c + '</span>'; }).join('') + '</div>' +
+        (all ? a : a.slice(0, PREV)).map(function (o) { return '<div class="row click" style="' + g + '" data-act="open" data-k="' + d.key + '" data-i="' + a.indexOf(o) + '">' + d.cells(o).map(function (c) { return '<span class="' + c.c + (c.m ? ' mono' : '') + '" title="' + esc(c.t) + '">' + esc(c.t) + '</span>'; }).join('') + '</div>'; }).join('') +
+        (a.length > PREV ? '<button class="more" data-act="all" data-a="' + d.key + '">' + (all ? 'Show fewer' : 'Show all ' + a.length) + '</button>' : '') + '</div></div>';
+    }
+    return '<div class="card sec" style="overflow:hidden">' + head + body + '</div>';
+  }).join('') + '</div>';
+}
+function chipsFor(u) {
+  var c = [], m = u.rel.mfa.length ? D.mfa[u.rel.mfa[0]] : null;
+  if (u.f) c.push(u.f + ' failed sign-ins'); if (u.o) c.push(u.o + ' high-risk ops'); if (u.a) c.push(u.a + ' risky app regs'); if (u.rel.pw.length) c.push('Password changes'); if (u.unusual) c.push(u.unusual + ' unusual sign-ins'); if (u.spam) c.push(u.spam + ' ETR spam flags'); if (u.rel.pat && u.rel.pat.length) c.push('Attack pattern');
+  if (m) { if (m.HasMFA === 'No') c.push('No MFA'); else if (m.HasMFA === 'Partial') c.push('MFA partial'); else if (m.MFAEnforced === 'False' && m.RiskLevel !== 'Low') c.push('MFA not enforced'); if (m.IsAdmin === 'True') c.push('Admin'); }
+  return c.length ? c : ['No findings'];
+}
+function idRows() {
+  var q = S.q.toLowerCase(), g = 'grid-template-columns:78px minmax(0,1.4fr) minmax(0,1fr) 110px 14px';
+  var all = D.identities.map(function (u, i) { return [u, i]; }).filter(function (p) { return (S.filter === 'All' || p[0].level === S.filter) && (!q || (p[0].id + p[0].name).toLowerCase().indexOf(q) >= 0); });
+  var shown = (S.allIds || q ? all : all.slice(0, 25));
+  return shown.map(function (p) { var u = p[0]; return '<div class="row click" style="padding:13px 20px;' + g + '" data-act="open" data-k="id" data-i="' + p[1] + '"><span class="mono ' + lc(u.level) + '" style="font-weight:600;font-size:11px">\u25a0 ' + u.level + '</span><span><div style="font-size:14px;font-weight:500;overflow:hidden;text-overflow:ellipsis" title="' + esc(u.name) + '">' + esc(u.name) + '</div><div class="mono muted" style="font-size:12px;overflow:hidden;text-overflow:ellipsis">' + esc(u.id) + '</div></span><span style="display:flex;gap:6px;flex-wrap:wrap;overflow:visible;white-space:normal">' + chipsFor(u).map(function (c) { return '<span class="chip">' + esc(c) + '</span>'; }).join('') + '</span><span style="display:flex;align-items:center;gap:8px;overflow:visible"><span style="flex:1;height:5px;background:var(--line);border-radius:9px;overflow:hidden"><span class="' + lc(u.level) + '" style="display:block;height:100%;width:' + Math.min(100, u.score / 60 * 100) + '%;background:currentColor"></span></span><span class="mono" style="font-size:13px;width:28px;text-align:right">' + u.score + '</span></span><span class="muted">\u203a</span></div>'; }).join('') +
+    (!q && all.length > 25 ? '<button class="more" data-act="ids">' + (S.allIds ? 'Show fewer' : 'Show all identities') + '</button>' : '') + (all.length ? '' : '<div class="muted" style="padding:30px 20px;text-align:center">No identities match.</div>');
+}
+function renderIdentities() {
+  var cnt = by(D.identities, function (x) { return x.level; });
+  var f = [['All', D.identities.length]].concat(['Critical', 'High', 'Medium', 'Low'].filter(function (k) { return cnt[k]; }).map(function (k) { return [k, cnt[k]]; }));
+  $('#identities').innerHTML = '<div style="display:flex;justify-content:space-between;align-items:flex-end;flex-wrap:wrap;gap:14px"><div><h2 style="font-size:22px;font-weight:600">Identities</h2><div class="muted" style="margin-top:4px">All ' + D.identities.length + ' sorted by score. Select a row for every related record.</div></div><div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center" class="noprint"><button class="btn" data-act="export">Export CSV</button><input type="search" id="q" placeholder="Search name or UPN" value="' + esc(S.q) + '"><div class="seg" id="filters">' + f.map(function (x) { return '<button data-act="filter" data-a="' + x[0] + '" class="' + (S.filter === x[0] ? 'on' : '') + '">' + x[0] + ' \u00b7 ' + x[1] + '</button>'; }).join('') + '</div></div></div>' +
+   '<div class="card" style="margin-top:14px;overflow:hidden"><div class="row head" style="grid-template-columns:78px minmax(0,1.4fr) minmax(0,1fr) 110px 14px"><span>Level</span><span>Identity</span><span>Findings</span><span>Score</span><span></span></div><div id="idrows">' + idRows() + '</div></div>';
+  $('#q').addEventListener('input', function (e) { S.q = e.target.value; $('#idrows').innerHTML = idRows(); });
+}
 
-    # Calculate statistics
-    $criticalCount = ($Data | Where-Object { $_.RiskLevel -eq "Critical" }).Count
-    $highCount = ($Data | Where-Object { $_.RiskLevel -eq "High" }).Count
-    $mediumCount = ($Data | Where-Object { $_.RiskLevel -eq "Medium" }).Count
-    $lowCount = ($Data | Where-Object { $_.RiskLevel -eq "Low" }).Count
+/* Detail drawer */
+function label(k, i) { var o = arr(k)[i]; switch (k) { case 'audit': return o.Timestamp + ' \u00b7 ' + o.Activity; case 'app': return o.DisplayName; case 'fail': return o.CreationTime + ' \u00b7 ' + o.Status; case 'mfa': return o.DisplayName + ' \u00b7 ' + o.HasMFA + ' MFA'; case 'pw': return o.ChangeCount + ' changes \u00b7 ' + o.RiskLevel; case 'rule': return o.RuleName + ' \u00b7 ' + o.Mailbox; case 'deleg': return o.DelegateName + ' \u2192 ' + o.DisplayName; case 'pat': return o.PatternType + ' \u00b7 ' + o.SourceIP; case 'unus': return o.CreationTime + ' \u00b7 ' + o.IP; case 'etr': return o.RiskType + ' \u00b7 ' + o.MessageCount + ' msgs'; } return k; }
+function rec(k, i) {
+  var o = arr(k)[i]; if (!o) return null;
+  var title, sub, level = o.RiskLevel || '', rel = [], f = [];
+  var add = function (a, b) { if (b !== undefined && b !== null && b !== '') f.push([a, String(b)]); };
+  if (k === 'id') {
+    title = o.name; sub = o.id; level = o.level;
+    add('Risk score', o.score); add('Failed sign-ins', o.f); add('High-risk operations', o.o); add('High-risk app registrations', o.a); add('Unusual sign-ins', o.unusual); add('Suspicious inbox rules', o.rules); add('Suspicious delegations', o.deleg); add('ETR spam activity', o.spam);
+    var nm = { audit: 'Directory audit events', fails: 'Failed sign-ins', mfa: 'MFA status', pw: 'Password changes', apps: 'App registrations', rules: 'Inbox rules', deleg: 'Delegations', pat: 'Attack patterns', unus: 'Unusual sign-ins', etr: 'ETR spam activity' }, kk = { audit: 'audit', fails: 'fail', mfa: 'mfa', pw: 'pw', apps: 'app', rules: 'rule', deleg: 'deleg', pat: 'pat', unus: 'unus', etr: 'etr' };
+    Object.keys(o.rel).forEach(function (g) { var ix = o.rel[g]; if (kk[g] && ix.length) rel.push({ t: nm[g] + ' (' + ix.length + ')', items: ix.slice(0, 12).map(function (j) { return [label(kk[g], j), kk[g], j]; }), extra: ix.length > 12 ? '+' + (ix.length - 12) + ' more in the Evidence section' : '' }); });
+  } else {
+    title = { audit: o.Activity, app: o.DisplayName, fail: o.Status, mfa: o.DisplayName, pw: o.User, ca: o.DisplayName, rule: o.RuleName, deleg: (o.DelegateName || '') + ' \u2192 ' + (o.DisplayName || ''), trace: o.subject, loc: (o.City || '') + ', ' + (o.Country || ''), pat: o.PatternType, unus: (o.City || '') + ', ' + (o.Country || ''), etr: o.RiskType }[k];
+    sub = { audit: (o.UserDisplayName || o.UserId) + ' \u00b7 ' + o.Timestamp, app: (o.Source || '') + ' \u00b7 created ' + (o.CreatedDateTime || ''), fail: (o.UserId || 'unknown user') + ' \u00b7 ' + o.CreationTime, mfa: o.UserPrincipalName, pw: o.FirstChange + ' \u2192 ' + o.LastChange, ca: o.State, rule: o.PrimarySmtpAddress, deleg: o.PrimarySmtpAddress, trace: o.sender_address + ' \u2192 ' + o.recipient_address, loc: o.IP, pat: (o.UserId || 'unknown user') + ' \u00b7 ' + o.SourceIP, unus: (o.UserId || 'unknown user') + ' \u00b7 ' + o.CreationTime, etr: o.SenderAddress }[k];
+    if (k === 'audit') add('Targets', (o.targets || []).join('\n'));
+    if (k === 'ca') Object.keys(o.summary || {}).forEach(function (s) { add('Policy \u00b7 ' + s, o.summary[s]); });
+    Object.keys(o).forEach(function (a) { if (a === 'targets' || a === 'summary') return; var v = o[a]; if (/^[\[{]/.test(v)) { try { v = JSON.stringify(JSON.parse(v), null, 2); } catch (e) {} } else if (/^(RequestedPermissions|GrantedDelegated|GrantedApplication)$/.test(a)) v = v.split('; ').join('\n'); add(hk(a), v); });
+    var keys = [o.UserId, o.UserPrincipalName, o.User, o.DelegateEmail, o.PrimarySmtpAddress, o.SenderAddress].filter(Boolean).map(function (s) { return s.toLowerCase(); });
+    var own = []; D.identities.forEach(function (x, n) { if (keys.indexOf(x.id.toLowerCase()) >= 0 || (k === 'app' && x.id === '[App] ' + o.DisplayName)) own.push([x.name + ' \u00b7 ' + x.level + ' ' + x.score, 'id', n]); });
+    if (own.length) rel.push({ t: 'Identity', items: own, extra: '' });
+  }
+  return { kind: KINDS[k], title: title, sub: sub, level: level, rel: rel, f: f };
+}
+function renderDrawer() {
+  var host = $('#drawer-host'), top = S.stack[S.stack.length - 1], r = top && rec(top.k, top.i);
+  if (!r) { host.innerHTML = ''; return; }
+  host.innerHTML = '<div id="drawer-bg" data-act="close"></div><aside id="drawer" role="dialog" aria-label="' + esc(r.kind) + '"><div style="position:sticky;top:0;background:var(--surface);border-bottom:1px solid var(--line);padding:16px 24px;display:flex;justify-content:space-between;align-items:center;gap:12px"><span class="kick" style="white-space:nowrap;letter-spacing:.12em">' + esc(r.kind) + '</span><span style="display:flex;gap:8px;flex:none">' + (S.stack.length > 1 ? '<button class="btn" data-act="back">\u2190 Back</button>' : '') + '<button class="btn" data-act="close">Close \u2715</button></span></div><div style="padding:22px 24px 40px"><h3 style="font-size:22px;font-weight:600;line-height:1.25;text-wrap:pretty;overflow-wrap:anywhere">' + esc(r.title) + '</h3><div class="mono muted" style="margin-top:6px;font-size:12.5px;overflow-wrap:anywhere">' + esc(r.sub) + '</div>' +
+   (r.level ? '<div class="pill ' + lc(r.level) + '" style="margin-top:12px;display:inline-block;font-size:12px;padding:3px 12px">\u25a0 ' + esc(r.level) + '</div>' : '') +
+   r.rel.map(function (g) { return '<div style="margin-top:24px"><div class="lbl" style="margin-bottom:8px">' + esc(g.t) + '</div>' + g.items.map(function (it) { return '<button class="rel" data-act="push" data-k="' + it[1] + '" data-i="' + it[2] + '"><span>' + esc(it[0]) + '</span><span class="muted">\u203a</span></button>'; }).join('') + (g.extra ? '<div class="muted" style="font-size:12px;padding:2px 4px">' + esc(g.extra) + '</div>' : '') + '</div>'; }).join('') +
+   '<div class="lbl" style="margin:24px 0 6px">Record</div>' + r.f.map(function (p) { var v = p[1], long = v.length > 110 || v.indexOf('\n') >= 0, nl = v.split('\n').length; return '<div style="padding:9px 0;border-top:1px solid var(--line)"><div class="mono muted" style="font-size:11px;margin-bottom:3px">' + esc(p[0]) + '</div>' + (long ? '<details><summary style="cursor:pointer;color:var(--accent)">' + (nl > 1 ? nl + ' lines \u00b7 show' : 'Show full value') + '</summary><pre>' + esc(v) + '</pre></details>' : '<div style="overflow-wrap:anywhere">' + esc(v) + '</div>') + '</div>'; }).join('') + '</div></aside>';
+}
 
-    [void]$sb.Append(@"
-            <div class="stat-box critical">
-                <div class="stat-number">$criticalCount</div>
-                <div class="stat-label">Critical Risk</div>
-            </div>
-            <div class="stat-box high">
-                <div class="stat-number">$highCount</div>
-                <div class="stat-label">High Risk</div>
-            </div>
-            <div class="stat-box medium">
-                <div class="stat-number">$mediumCount</div>
-                <div class="stat-label">Medium Risk</div>
-            </div>
-            <div class="stat-box low">
-                <div class="stat-number">$lowCount</div>
-                <div class="stat-label">Low Risk</div>
-            </div>
-        </div>
-"@)
+/* Identity summary as CSV (leading = + - @ are neutralised so spreadsheets do not run them as formulas). */
+function exportCsv() {
+  var q = function (v) { var s = String(v == null ? '' : v); if (typeof v === 'string' && /^[=+\-@\t\r]/.test(s)) s = "'" + s; return '"' + s.replace(/"/g, '""') + '"'; };
+  var cols = [['id', 'Identity'], ['name', 'Name'], ['level', 'Risk level'], ['score', 'Risk score'], ['f', 'Failed sign-ins'], ['o', 'High-risk operations'], ['a', 'High-risk app registrations'], ['unusual', 'Unusual sign-ins'], ['rules', 'Suspicious inbox rules'], ['deleg', 'Suspicious delegations'], ['spam', 'ETR spam activity']];
+  var lines = [cols.map(function (c) { return q(c[1]); }).join(',')].concat(D.identities.map(function (u) { return cols.map(function (c) { return q(u[c[0]]); }).join(','); }));
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['\ufeff' + lines.join('\r\n')], { type: 'text/csv' }));
+  a.download = 'M365_Security_Summary_' + new Date().toISOString().slice(0, 10) + '.csv';
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+}
 
-    if ($criticalCount -gt 0) {
-        [void]$sb.Append(@"
-        <div class="alert critical">
-            <strong>[CRITICAL ALERT]:</strong> $criticalCount user(s) identified with critical security risks requiring immediate attention!
-        </div>
-"@)
+/* Events */
+document.addEventListener('click', function (e) {
+  var t = e.target.closest('[data-act]'); if (!t) return;
+  var a = t.dataset.act, v = t.dataset.a;
+  if (a === 'theme') { S.dark = !S.dark; document.body.setAttribute('data-theme', S.dark ? 'dark' : 'light'); t.textContent = S.dark ? 'Light mode' : 'Dark mode'; return; }
+  if (a === 'sec') { S.open[v] = !S.open[v]; renderEvidence(); }
+  else if (a === 'all') { S.showAll[v] = !S.showAll[v]; renderEvidence(); }
+  else if (a === 'allsecs') { var on = !LIVE().every(function (d) { return S.open[d.key]; }); LIVE().forEach(function (d) { S.open[d.key] = on; }); renderEvidence(); }
+  else if (a === 'filter') { S.filter = v; renderIdentities(); }
+  else if (a === 'ids') { S.allIds = !S.allIds; $('#idrows').innerHTML = idRows(); }
+  else if (a === 'open') { S.stack = [{ k: t.dataset.k, i: +t.dataset.i }]; renderDrawer(); }
+  else if (a === 'push') { S.stack.push({ k: t.dataset.k, i: +t.dataset.i }); renderDrawer(); }
+  else if (a === 'back') { S.stack.pop(); renderDrawer(); }
+  else if (a === 'close') { S.stack = []; renderDrawer(); }
+  else if (a === 'export') { exportCsv(); }
+});
+document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && S.stack.length) { S.stack = []; renderDrawer(); } });
+/* Printing expands everything so nothing is hidden on paper. */
+var saved;
+window.addEventListener('beforeprint', function () { saved = [Object.assign({}, S.open), Object.assign({}, S.showAll), S.allIds]; DEFS.forEach(function (d) { S.open[d.key] = true; S.showAll[d.key] = true; }); S.allIds = true; renderEvidence(); $('#idrows').innerHTML = idRows(); });
+window.addEventListener('afterprint', function () { if (saved) { S.open = saved[0]; S.showAll = saved[1]; S.allIds = saved[2]; renderEvidence(); $('#idrows').innerHTML = idRows(); } });
+renderTop();
+})();
+</script>
+</body>
+</html>
+'@
+
+function ConvertTo-ReportRecord {
+    <#
+    .SYNOPSIS
+        Flattens one CSV row or result object into an ordered string map for the report payload.
+
+    .DESCRIPTION
+        Values are kept as strings exactly as they appear in the CSV ("True", "52", timestamps as
+        text) because the report template compares against those literals. Empty values are
+        omitted (the template treats a missing field as empty), which keeps the file small.
+    #>
+    param (
+        [Parameter(Mandatory = $true)]
+        $Row,
+
+        [string[]]$Exclude = @()
+    )
+
+    $record = [ordered]@{}
+    foreach ($property in $Row.PSObject.Properties) {
+        if ($Exclude -contains $property.Name) { continue }
+        if ($null -eq $property.Value -or $property.Value -is [System.DBNull]) { continue }
+        $text = [string]$property.Value
+        if ($text.Length -eq 0) { continue }
+        $record[$property.Name] = $text
+    }
+    return $record
+}
+
+function Import-ReportCsv {
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$FileName
+    )
+
+    $path = Join-Path -Path $ConfigData.WorkDir -ChildPath $FileName
+    if (-not (Test-Path -Path $path)) { return @() }
+    try {
+        return @(Import-Csv -Path $path -ErrorAction Stop)
+    }
+    catch {
+        Write-Log "Report: could not read ${FileName}: $($_.Exception.Message)" -Level "Warning"
+        return @()
+    }
+}
+
+function Sort-ReportByRisk {
+    <#
+    .SYNOPSIS
+        Stable sort of report records by RiskLevel (Critical, High, Medium, Low, anything else).
+    #>
+    param (
+        [object[]]$Items = @(),
+        [string]$Property = "RiskLevel"
+    )
+
+    $rank = @{ Critical = 0; High = 1; Medium = 2; Low = 3 }
+    $position = 0
+    $decorated = foreach ($item in $Items) {
+        $level = "$($item[$Property])"
+        [PSCustomObject]@{
+            Rank  = $(if ($rank.ContainsKey($level)) { $rank[$level] } else { 9 })
+            Index = $position
+            Item  = $item
+        }
+        $position++
+    }
+    return @($decorated | Sort-Object -Property Rank, Index | ForEach-Object { $_.Item })
+}
+
+function Add-ReportIndex {
+    param (
+        [Parameter(Mandatory = $true)] [hashtable]$Index,
+        [string]$Key,
+        [Parameter(Mandatory = $true)] [int]$Position
+    )
+
+    if ([string]::IsNullOrWhiteSpace($Key)) { return }
+    $lookup = $Key.Trim().ToLowerInvariant()
+    if (-not $Index.ContainsKey($lookup)) {
+        $Index[$lookup] = [System.Collections.Generic.List[int]]::new()
+    }
+    $list = $Index[$lookup]
+    # Positions are added in ascending order, so a repeat can only be the last element
+    if ($list.Count -eq 0 -or $list[$list.Count - 1] -ne $Position) { $list.Add($Position) }
+}
+
+function Get-ReportRel {
+    param (
+        [Parameter(Mandatory = $true)] [hashtable]$Index,
+        [string[]]$Keys = @()
+    )
+
+    $found = [System.Collections.Generic.SortedSet[int]]::new()
+    foreach ($key in $Keys) {
+        if ([string]::IsNullOrWhiteSpace($key)) { continue }
+        $lookup = $key.Trim().ToLowerInvariant()
+        if ($Index.ContainsKey($lookup)) {
+            foreach ($position in $Index[$lookup]) { [void]$found.Add($position) }
+        }
+    }
+    # Unary comma keeps a 0/1-element array from collapsing (PowerShell 5.1 ConvertTo-Json)
+    return , ([int[]]@($found))
+}
+
+function ConvertTo-ReportCaSummary {
+    <#
+    .SYNOPSIS
+        Reduces a Conditional Access policy row to the counts the report shows.
+    #>
+    param (
+        [Parameter(Mandatory = $true)]
+        $Row
+    )
+
+    $parse = {
+        param($Json)
+        if ([string]::IsNullOrWhiteSpace($Json)) { return $null }
+        try { return ($Json | ConvertFrom-Json -ErrorAction Stop) } catch { return $null }
+    }
+    $conditions = & $parse $Row.Conditions
+    $grant = & $parse $Row.GrantControls
+
+    $clean = { param($List) @($List | Where-Object { -not [string]::IsNullOrWhiteSpace("$_") } | ForEach-Object { "$_" }) }
+
+    $apps = @(& $clean $conditions.Applications.IncludeApplications)
+    $appText = if ($apps.Count -eq 0) { "None" } elseif ($apps.Count -eq 1) { $apps[0] } else { "$($apps.Count) apps" }
+
+    $incUsers = @(& $clean $conditions.Users.IncludeUsers)
+    $incGroups = @(& $clean $conditions.Users.IncludeGroups)
+    $realUsers = @($incUsers | Where-Object { $_ -notin @("None", "All", "GuestsOrExternalUsers") })
+    $userText = if ($incUsers -contains "All") { "All" }
+                elseif ($realUsers.Count -gt 0 -and $incGroups.Count -gt 0) { "$($realUsers.Count) user(s), $($incGroups.Count) group(s)" }
+                elseif ($realUsers.Count -gt 0) { "$($realUsers.Count) user(s)" }
+                else { "$($incGroups.Count) group(s)" }
+
+    return [ordered]@{
+        apps       = $appText
+        incUsers   = $userText
+        incRoles   = @(& $clean $conditions.Users.IncludeRoles).Count
+        exUsers    = @(& $clean $conditions.Users.ExcludeUsers).Count
+        exGroups   = @(& $clean $conditions.Users.ExcludeGroups).Count
+        grant      = (@(& $clean $grant.BuiltInControls) -join ", ")
+        signInRisk = (@(& $clean $conditions.SignInRiskLevels) -join ", ")
+    }
+}
+
+function New-ReportPayload {
+    <#
+    .SYNOPSIS
+        Builds the data object the HTML report template renders (see $script:ReportTemplate).
+
+    .DESCRIPTION
+        The generator emits no markup: every dataset is shaped here, serialized to JSON by
+        Generate-HTMLReport and rendered client-side. Identities link to their evidence by array
+        index (identities[].rel), so datasets must be final and sorted before the links are built.
+
+    .PARAMETER Results
+        Risk results from Invoke-CompromiseDetection (same objects that feed SecurityReport.csv).
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [array]$Results
+    )
+
+    $rowCap = 1500
+    $notes = [System.Collections.Generic.List[object]]::new()
+    foreach ($note in @($script:ReportCoverageNotes)) {
+        if ($null -eq $note) { continue }
+        $notes.Add([ordered]@{ level = [string]$note.Level; source = [string]$note.Source; message = [string]$note.Message })
+    }
+    $limitRows = {
+        param($Rows, $Label, $File)
+        if ($Rows.Count -gt $rowCap) {
+            $notes.Add([ordered]@{ level = "Note"; source = $Label; message = "Showing the first $rowCap of $($Rows.Count) rows to keep this report a reasonable size. The complete data is in $File." })
+            return @($Rows | Select-Object -First $rowCap)
+        }
+        return @($Rows)
     }
 
-if ($highCount -gt 0) {
-        [void]$sb.Append(@"
-        <div class="alert warning">
-            <strong>[WARNING]:</strong> $highCount user(s) identified with high security risks requiring review.
-        </div>
-"@)
-    }
-
-    # Add Quick Actions Panel
-    [void]$sb.Append(@"
-        <div class="quick-actions">
-            <button class="action-btn" onclick="scrollToSection('criticalUsersSection')">⚠ Jump to Critical Users</button>
-            <button class="action-btn" onclick="scrollToSection('highRiskUsersSection')">⚡ Jump to High-Risk Users</button>
-            <button class="action-btn" onclick="exportSummary()">📊 Export Summary CSV</button>
-            <button class="action-btn" onclick="printReport()">🖨 Print Report</button>
-        </div>
-"@)
-
-    # Add Charts Section
-    $totalUsers = $Data.Count
-    $maxValue = @($criticalCount, $highCount, $mediumCount, $lowCount) | Measure-Object -Maximum | Select-Object -ExpandProperty Maximum
-    if ($maxValue -eq 0) { $maxValue = 1 } # Prevent division by zero
-
-    $criticalHeight = ($criticalCount / $maxValue) * 200
-    $highHeight = ($highCount / $maxValue) * 200
-    $mediumHeight = ($mediumCount / $maxValue) * 200
-    $lowHeight = ($lowCount / $maxValue) * 200
-
-    [void]$sb.Append(@"
-        <div class="charts-section">
-            <div class="chart-container">
-                <div class="chart-title">Risk Distribution Overview</div>
-                <div class="chart">
-                    <div class="bar">
-                        <div class="bar-fill" style="height: ${criticalHeight}px; background: linear-gradient(to top, #D32F2F, #F44336);"></div>
-                        <div class="bar-value">$criticalCount</div>
-                        <div class="bar-label">Critical</div>
-                    </div>
-                    <div class="bar">
-                        <div class="bar-fill" style="height: ${highHeight}px; background: linear-gradient(to top, #F44336, #FF5722);"></div>
-                        <div class="bar-value">$highCount</div>
-                        <div class="bar-label">High</div>
-                    </div>
-                    <div class="bar">
-                        <div class="bar-fill" style="height: ${mediumHeight}px; background: linear-gradient(to top, #FF9800, #FFC107);"></div>
-                        <div class="bar-value">$mediumCount</div>
-                        <div class="bar-label">Medium</div>
-                    </div>
-                    <div class="bar">
-                        <div class="bar-fill" style="height: ${lowHeight}px; background: linear-gradient(to top, #4CAF50, #66BB6A);"></div>
-                        <div class="bar-value">$lowCount</div>
-                        <div class="bar-label">Low</div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="chart-container">
-                <div class="chart-title">Security Status Summary</div>
-                <div style="padding: 20px; text-align: center;">
-                    <div style="font-size: 3em; font-weight: 700; color: var(--primary-color); margin-bottom: 10px;">
-                        $totalUsers
-                    </div>
-                    <div style="font-size: 1.2em; color: var(--text-secondary); margin-bottom: 20px;">
-                        Total Users Analyzed
-                    </div>
-                    <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-top: 20px;">
-                        <div style="padding: 15px; background: rgba(244, 67, 54, 0.1); border-radius: 8px;">
-                            <div style="font-size: 2em; font-weight: 700; color: #F44336;">
-                                $(($criticalCount + $highCount))
-                            </div>
-                            <div style="color: var(--text-secondary); font-size: 0.9em;">Need Attention</div>
-                        </div>
-                        <div style="padding: 15px; background: rgba(76, 175, 80, 0.1); border-radius: 8px;">
-                            <div style="font-size: 2em; font-weight: 700; color: #4CAF50;">
-                                $(($mediumCount + $lowCount))
-                            </div>
-                            <div style="color: var(--text-secondary); font-size: 0.9em;">Lower Priority</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-"@)
-
-    # Add Executive Summary Section with Critical Information Upfront
-    if ($criticalCount -gt 0 -or $highCount -gt 0) {
-        $priorityUsers = $Data | Where-Object { $_.RiskLevel -in @("Critical", "High") } |
-                         Sort-Object RiskScore -Descending
-
-        # Calculate attack statistics
-        $totalBruteForceAttempts = 0
-        $uniqueAttackIPs = @()
-        $accountsUnderAttack = 0
-
-        foreach ($user in $priorityUsers) {
-            if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
-                $accountsUnderAttack++
-                foreach ($pattern in $user.FailedLoginPatterns) {
-                    $totalBruteForceAttempts += $pattern.FailedAttempts
-                    # Prefer the SourceIPs field (semicolon-delimited list of the actual
-                    # distinct attacker IPs) so the unique count reflects real IPs. Fall back
-                    # to the single SourceIP for older data that predates this field, skipping
-                    # the "Multiple IPs (X)" summary string which carries no recoverable IPs.
-                    if (-not [string]::IsNullOrWhiteSpace($pattern.SourceIPs)) {
-                        foreach ($ipEntry in ($pattern.SourceIPs -split ';')) {
-                            if (-not [string]::IsNullOrWhiteSpace($ipEntry)) {
-                                $uniqueAttackIPs += $ipEntry.Trim()
-                            }
-                        }
-                    } elseif ($pattern.SourceIP -notmatch "Multiple IPs" -and
-                              -not [string]::IsNullOrWhiteSpace($pattern.SourceIP)) {
-                        $uniqueAttackIPs += $pattern.SourceIP
+    # ---- Evidence datasets ------------------------------------------------------------------
+    $audit = [System.Collections.Generic.List[object]]::new()
+    foreach ($row in @(Import-ReportCsv "AdminAuditLogs_HighRisk.csv")) {
+        $record = ConvertTo-ReportRecord -Row $row -Exclude @("ActivityDate", "LOGIN")
+        $targets = [System.Collections.Generic.List[string]]::new()
+        if ($record.Contains("TargetResources")) {
+            try {
+                foreach ($target in @($record["TargetResources"] | ConvertFrom-Json -ErrorAction Stop)) {
+                    foreach ($candidate in @($target.UserPrincipalName, $target.DisplayName, $target.Id)) {
+                        if (-not [string]::IsNullOrWhiteSpace($candidate)) { $targets.Add([string]$candidate); break }
                     }
                 }
             }
+            catch { }
         }
-        $uniqueIPCount = ($uniqueAttackIPs | Select-Object -Unique).Count
-
-        # Executive Summary Dashboard
-        [void]$sb.Append(@"
-        <div class="priority-alert" id="criticalUsersSection">
-            <h3>🚨 Executive Security Summary - Immediate Action Required</h3>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px; margin: 20px 0;">
-                <div style="background: rgba(211, 47, 47, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--danger-color);">
-                    <div style="font-size: 2.5em; font-weight: 700; color: var(--danger-color);">$accountsUnderAttack</div>
-                    <div style="font-size: 0.9em; color: var(--text-secondary);">Accounts Under Active Attack</div>
-                </div>
-                <div style="background: rgba(255, 152, 0, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--warning-color);">
-                    <div style="font-size: 2.5em; font-weight: 700; color: var(--warning-color);">$totalBruteForceAttempts</div>
-                    <div style="font-size: 0.9em; color: var(--text-secondary);">Total Failed Login Attempts</div>
-                </div>
-                <div style="background: rgba(244, 67, 54, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--danger-color);">
-                    <div style="font-size: 2.5em; font-weight: 700; color: var(--danger-color);">$uniqueIPCount</div>
-                    <div style="font-size: 0.9em; color: var(--text-secondary);">Unique Attack Source IPs</div>
-                </div>
-                <div style="background: rgba(33, 150, 243, 0.15); padding: 15px; border-radius: 8px; border-left: 4px solid var(--primary-color);">
-                    <div style="font-size: 2.5em; font-weight: 700; color: var(--primary-color);">$($priorityUsers.Count)</div>
-                    <div style="font-size: 0.9em; color: var(--text-secondary);">High-Priority Accounts</div>
-                </div>
-            </div>
-
-            <h4 style="margin-top: 25px; margin-bottom: 15px; color: var(--danger-color); font-size: 1.2em;">⚠ Active Brute Force Attacks Detected</h4>
-            <div class="evidence-section">
-                <table>
-                    <thead>
-                        <tr>
-                            <th>User Account</th>
-                            <th>Email</th>
-                            <th>Attack Pattern</th>
-                            <th>Failed Attempts</th>
-                            <th>Source IPs</th>
-                            <th>Risk Level</th>
-                            <th>MFA Status</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-"@)
-
-        # Show all priority users with their attack details
-        foreach ($user in $priorityUsers) {
-            $attackInfo = "No active attacks"
-            $attemptCount = 0
-            $sourceIPs = "N/A"
-            $attackRisk = "info"
-
-            if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
-                $pattern = $user.FailedLoginPatterns[0]  # Get the primary pattern
-                $attackInfo = $pattern.PatternType
-                $attemptCount = $pattern.FailedAttempts
-                $sourceIPs = $pattern.SourceIP
-                $attackRisk = if ($pattern.RiskLevel -eq "Critical") { "danger" } else { "warning" }
-            }
-
-            # Use MFAStatus (the property actually present on the result object). The old code
-            # referenced $user.MFAEnabled, which never existed, so every user rendered DISABLED.
-            $mfaStatus = switch ($user.MFAStatus) { "Yes" { "success" } "No" { "danger" } default { "warning" } }
-            $mfaBadge = switch ($user.MFAStatus) { "Yes" { "✓ Enabled" } "No" { "✗ DISABLED" } default { "Unknown" } }
-
-            $riskBadgeClass = switch ($user.RiskLevel) {
-                "Critical" { "danger" }
-                "High" { "warning" }
-                default { "info" }
-            }
-
-            [void]$sb.Append(@"
-                        <tr>
-                            <td><strong>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</strong></td>
-                            <td>$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</td>
-                            <td>$([System.Web.HttpUtility]::HtmlEncode($attackInfo))</td>
-                            <td><span class="badge $attackRisk" style="font-size: 1.1em;">$attemptCount</span></td>
-                            <td style="font-family: monospace; font-size: 0.9em;">$([System.Web.HttpUtility]::HtmlEncode($sourceIPs))</td>
-                            <td><span class="badge $riskBadgeClass">$($user.RiskLevel)</span></td>
-                            <td><span class="badge $mfaStatus">$mfaBadge</span></td>
-                        </tr>
-"@)
-        }
-
-        [void]$sb.Append(@"
-                    </tbody>
-                </table>
-            </div>
-
-            <div class="alert warning" style="margin-top: 20px;">
-                <strong>🔒 Immediate Recommendations:</strong><br>
-                • <strong>CRITICAL:</strong> Verify MFA is enabled on all accounts under attack (especially those with "DISABLED" status above)<br>
-                • <strong>HIGH:</strong> Contact affected users to verify recent login activity<br>
-                • <strong>MEDIUM:</strong> Consider implementing Conditional Access policies to block suspicious IPs<br>
-                • <strong>LOW:</strong> Review and update password policies - enforce strong passwords and rotation
-            </div>
-        </div>
-"@)
+        if ($targets.Count -gt 0) { $record["targets"] = @($targets) }
+        $audit.Add($record)
     }
+    $audit = @(Sort-ReportByRisk -Items $audit.ToArray())
 
-    # Sort users by risk
-    $sortedData = $Data | Sort-Object @{Expression = {
-        switch ($_.RiskLevel) {
-            "Critical" { 1 }
-            "High" { 2 }
-            "Medium" { 3 }
-            "Low" { 4 }
-            default { 5 }
+    $apps = @(Import-ReportCsv "AppRegistrations_HighRisk.csv" | ForEach-Object {
+        $record = ConvertTo-ReportRecord -Row $_ -Exclude @("RequiredResourceAccess")
+        if ($record.Contains("DisplayName")) { $record["DisplayName"] = $record["DisplayName"].Trim() }
+        $record
+    })
+
+    $fails = @(Import-ReportCsv "UserLocationData_Failed.csv" | ForEach-Object {
+        ConvertTo-ReportRecord -Row $_ -Exclude @("IPVersion", "IsPrivateIP", "GeoLookupFailed", "IsHighRiskISP")
+    })
+    $fails = @(& $limitRows $fails "FailedSignIns" "UserLocationData_Failed.csv")
+
+    $pw = @(Import-ReportCsv "PasswordChangeAnalysis.csv" | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
+
+    $mfa = @(Import-ReportCsv "MFAStatus.csv" | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
+    $mfa = @(Sort-ReportByRisk -Items $mfa)
+
+    $ca = @(Import-ReportCsv "ConditionalAccess.csv" | ForEach-Object {
+        $record = ConvertTo-ReportRecord -Row $_ -Exclude @("Conditions", "GrantControls", "SessionControls")
+        $record["summary"] = ConvertTo-ReportCaSummary -Row $_
+        $record
+    })
+
+    $rules = @(Import-ReportCsv "InboxRules.csv" | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
+    $deleg = @(Import-ReportCsv "MailboxDelegation.csv" | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
+
+    $trace = @(Import-ReportCsv "MessageTraceResult.csv" | ForEach-Object {
+        ConvertTo-ReportRecord -Row $_ -Exclude @("message_trace_id", "message_id", "date", "timestamp", "event_type")
+    })
+    $trace = @(& $limitRows $trace "MessageTrace" "MessageTraceResult.csv")
+
+    $locs = @(Import-ReportCsv "UniqueSignInLocations.csv" | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
+    $locs = @(& $limitRows $locs "SignInLocations" "UniqueSignInLocations.csv")
+
+    # Unusual-country and high-risk-ISP sign-ins (successes and failures)
+    $unus = @(Import-ReportCsv "UserLocationData.csv" |
+        Where-Object { "$($_.IsUnusualLocation)" -eq "True" -or "$($_.IsHighRiskISP)" -eq "True" } |
+        ForEach-Object { ConvertTo-ReportRecord -Row $_ -Exclude @("IPVersion", "IsPrivateIP", "GeoLookupFailed") })
+    $unus = @(& $limitRows $unus "UnusualSignIns" "UserLocationData.csv")
+
+    # Brute-force / spray patterns and ETR spam come from the analysis results themselves
+    $patRows = [System.Collections.Generic.List[object]]::new()
+    $etr = [System.Collections.Generic.List[object]]::new()
+    $accountsUnderAttack = 0
+    foreach ($result in $Results) {
+        $patterns = @($result.FailedLoginPatterns | Where-Object { $null -ne $_ })
+        if ($patterns.Count -gt 0) { $accountsUnderAttack++ }
+        foreach ($pattern in $patterns) {
+            $record = ConvertTo-ReportRecord -Row $pattern
+            $record["UserId"] = [string]$result.UserId
+            $patRows.Add($record)
         }
-    }}, RiskScore -Descending
-
-    # Add User Summary Table with Attack Details Visible
-    [void]$sb.Append(@"
-        <div class="users-section">
-            <h2 class="section-title">👥 User Summary Overview - All Security Findings</h2>
-            <p style="color: var(--text-secondary); margin-bottom: 15px;">Complete list of all users sorted by risk level. Attack details are shown inline for immediate visibility.</p>
-            <div class="evidence-section">
-                <table class="summary-table">
-                    <thead>
-                        <tr>
-                            <th>User</th>
-                            <th>Email</th>
-                            <th>Risk Level</th>
-                            <th>Risk Score</th>
-                            <th>MFA Status</th>
-                            <th>Attack Details</th>
-                            <th>Other Indicators</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-"@)
-
-    foreach ($user in $sortedData) {
-        $riskClass = $user.RiskLevel.ToLower()
-        $mfaStatus = if ($user.MFAStatus) { $user.MFAStatus } else { "Unknown" }
-        $mfaBadgeClass = switch ($mfaStatus) {
-            "Yes" { "success" }
-            "No" { "danger" }
-            default { "info" }
+        foreach ($spam in @($result.ETRSpamActivity | Where-Object { $null -ne $_ })) {
+            $etr.Add((ConvertTo-ReportRecord -Row $spam))
         }
+    }
+    $riskRank = @{ Critical = 0; High = 1; Medium = 2; Low = 3 }
+    $patPosition = 0
+    $pat = @($patRows | ForEach-Object {
+        [PSCustomObject]@{
+            Rank     = $(if ($riskRank.ContainsKey("$($_['RiskLevel'])")) { $riskRank["$($_['RiskLevel'])"] } else { 9 })
+            Attempts = $(if ($_['FailedAttempts'] -as [int]) { [int]$_['FailedAttempts'] } else { 0 })
+            Index    = ($patPosition++)
+            Item     = $_
+        }
+    } | Sort-Object -Property Rank, @{ Expression = "Attempts"; Descending = $true }, Index | ForEach-Object { $_.Item })
+    $etr = @(Sort-ReportByRisk -Items $etr.ToArray())
 
-        # Build attack details (prioritized)
-        $attackDetails = @()
-        if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
-            foreach ($pattern in $user.FailedLoginPatterns) {
-                $attackDetails += "<span class='badge danger'>$($pattern.FailedAttempts) attempts</span> from $([System.Web.HttpUtility]::HtmlEncode($pattern.SourceIP))"
+    # ---- Identities ---------------------------------------------------------------------------
+    $toInt = { param($Value) if ($Value -as [int]) { [int]$Value } else { 0 } }
+    $resultPosition = 0
+    $sortedResults = @($Results | ForEach-Object {
+        [PSCustomObject]@{ Score = (& $toInt $_.RiskScore); Index = ($resultPosition++); Item = $_ }
+    } | Sort-Object -Property @{ Expression = "Score"; Descending = $true }, Index | ForEach-Object { $_.Item })
+
+    # ---- Evidence indexes (case-insensitive, O(n)) --------------------------------------------
+    $idxAudit = @{}; $idxFails = @{}; $idxMfa = @{}; $idxPw = @{}; $idxApps = @{}
+    $idxRules = @{}; $idxDeleg = @{}; $idxPat = @{}; $idxUnus = @{}; $idxEtr = @{}
+    for ($i = 0; $i -lt $audit.Count; $i++) {
+        Add-ReportIndex $idxAudit ($audit[$i]["UserId"]) $i
+        foreach ($target in @($audit[$i]["targets"])) { Add-ReportIndex $idxAudit $target $i }
+    }
+    for ($i = 0; $i -lt $fails.Count; $i++) { Add-ReportIndex $idxFails ($fails[$i]["UserId"]) $i }
+    for ($i = 0; $i -lt $mfa.Count; $i++) { Add-ReportIndex $idxMfa ($mfa[$i]["UserPrincipalName"]) $i }
+    for ($i = 0; $i -lt $pw.Count; $i++) { Add-ReportIndex $idxPw ($pw[$i]["User"]) $i }
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        $appName = "$($apps[$i]['DisplayName'])"
+        Add-ReportIndex $idxApps ("[App] " + $appName) $i
+    }
+    for ($i = 0; $i -lt $rules.Count; $i++) {
+        Add-ReportIndex $idxRules ($rules[$i]["PrimarySmtpAddress"]) $i
+        Add-ReportIndex $idxRules ($rules[$i]["Mailbox"]) $i
+    }
+    for ($i = 0; $i -lt $deleg.Count; $i++) {
+        Add-ReportIndex $idxDeleg ($deleg[$i]["DelegateEmail"]) $i
+        Add-ReportIndex $idxDeleg ($deleg[$i]["PrimarySmtpAddress"]) $i
+    }
+    for ($i = 0; $i -lt $pat.Count; $i++) { Add-ReportIndex $idxPat ($pat[$i]["UserId"]) $i }
+    for ($i = 0; $i -lt $unus.Count; $i++) { Add-ReportIndex $idxUnus ($unus[$i]["UserId"]) $i }
+    for ($i = 0; $i -lt $etr.Count; $i++) { Add-ReportIndex $idxEtr ($etr[$i]["SenderAddress"]) $i }
+    $allApps = [int[]]@(0..($apps.Count - 1) | Where-Object { $apps.Count -gt 0 })
+
+    $identities = foreach ($result in $sortedResults) {
+        $id = [string]$result.UserId
+        $appLinks = if ($id -eq "SYSTEM_WIDE_APPS") { , $allApps } else { Get-ReportRel $idxApps @($id) }
+        [ordered]@{
+            id      = $id
+            name    = [string]$result.UserDisplayName
+            score   = & $toInt $result.RiskScore
+            level   = [string]$result.RiskLevel
+            f       = & $toInt $result.FailedSignInCount
+            o       = & $toInt $result.HighRiskOperationsCount
+            a       = & $toInt $result.HighRiskAppRegistrationsCount
+            unusual = & $toInt $result.UnusualSignInCount
+            rules   = & $toInt $result.SuspiciousRulesCount
+            deleg   = & $toInt $result.SuspiciousDelegationsCount
+            spam    = & $toInt $result.ETRSpamActivityCount
+            rel     = [ordered]@{
+                audit = Get-ReportRel $idxAudit @($id)
+                fails = Get-ReportRel $idxFails @($id)
+                mfa   = Get-ReportRel $idxMfa @($id)
+                pw    = Get-ReportRel $idxPw @($id)
+                apps  = $appLinks
+                rules = Get-ReportRel $idxRules @($id)
+                deleg = Get-ReportRel $idxDeleg @($id)
+                pat   = Get-ReportRel $idxPat @($id)
+                unus  = Get-ReportRel $idxUnus @($id)
+                etr   = Get-ReportRel $idxEtr @($id)
             }
         }
-        $attackText = if ($attackDetails.Count -gt 0) { $attackDetails -join "<br>" } else { "<span style='color: var(--text-secondary);'>No attacks detected</span>" }
-
-        # Build other indicators
-        $indicators = @()
-        if ($user.UnusualSignInCount -gt 0) { $indicators += "<span class='badge warning'>$($user.UnusualSignInCount)</span> Unusual Locations" }
-        if ($user.HighRiskISPCount -gt 0) { $indicators += "<span class='badge danger'>$($user.HighRiskISPCount)</span> High-Risk ISPs" }
-        if ($user.SuspiciousRulesCount -gt 0) { $indicators += "<span class='badge danger'>$($user.SuspiciousRulesCount)</span> Suspicious Rules" }
-        if ($user.HighRiskOperationsCount -gt 0) { $indicators += "<span class='badge danger'>$($user.HighRiskOperationsCount)</span> High-Risk Ops" }
-        if ($user.PasswordChangeIssuesCount -gt 0) { $indicators += "<span class='badge warning'>$($user.PasswordChangeIssuesCount)</span> Password Issues" }
-
-        $indicatorText = if ($indicators.Count -gt 0) { $indicators -join "<br>" } else { "<span style='color: var(--text-secondary);'>None</span>" }
-
-        [void]$sb.Append(@"
-                        <tr class="summary-row-$riskClass">
-                            <td><strong>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</strong></td>
-                            <td>$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</td>
-                            <td><span class="badge $riskClass">$($user.RiskLevel)</span></td>
-                            <td><strong>$($user.RiskScore)</strong></td>
-                            <td><span class="badge $mfaBadgeClass">$mfaStatus</span></td>
-                            <td style="font-size: 0.85em;">$attackText</td>
-                            <td style="font-size: 0.85em;">$indicatorText</td>
-                        </tr>
-"@)
     }
 
-    [void]$sb.Append(@"
-                    </tbody>
-                </table>
-            </div>
-        </div>
+    $coverage = @(Get-CollectionStatus | ForEach-Object { ConvertTo-ReportRecord -Row $_ })
 
-        <div class="users-section">
-            <h2 class="section-title">📊 Detailed User Risk Analysis</h2>
-            <div id="highRiskUsersSection"></div>
-"@)
-
-    # Separate low-risk users for collapsible section
-    $highPriorityUsers = $sortedData | Where-Object { $_.RiskLevel -in @("Critical", "High", "Medium") }
-    $lowRiskUsers = $sortedData | Where-Object { $_.RiskLevel -eq "Low" }
-
-    # Display high-priority users first
-    foreach ($user in $highPriorityUsers) {
-        $riskClass = $user.RiskLevel.ToLower()
-        $autoExpand = if ($user.RiskLevel -in @("Critical", "High")) { "show" } else { "" }
-
-        [void]$sb.Append(@"
-            <div class="user-card $riskClass">
-                <div class="user-header" onclick="toggleDetails(this)">
-                    <div class="user-info">
-                        <h3>$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</h3>
-                        <div class="user-email">$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</div>
-                    </div>
-                    <div style="text-align: center;">
-                        <div class="risk-badge $riskClass">$($user.RiskLevel) RISK</div>
-                        <div class="risk-score" style="color: var(--$(if($riskClass -eq "critical"){"critical"}else{$riskClass})-color);">
-                            Score: $($user.RiskScore)
-                        </div>
-                        <span class="toggle-icon $(if($autoExpand){"rotated"}else{""})">▼</span>
-                    </div>
-                </div>
-                
-                <div class="collapsible-content $autoExpand">
-"@)
-
-        # MFA Status
-        $mfaStatus = if ($user.MFAStatus) { $user.MFAStatus } else { "Unknown" }
-        if ($mfaStatus -eq "No") {
-            [void]$sb.Append(@"
-                    <div class="alert critical">
-                        ❌ <strong>MFA Not Enabled</strong> - Account vulnerable to password attacks
-                    </div>
-"@)
-        } elseif ($mfaStatus -eq "Yes") {
-            [void]$sb.Append(@"
-                    <div class="alert success">
-                        [OK] <strong>MFA Enabled</strong>
-                    </div>
-"@)
+    return [ordered]@{
+        meta       = [ordered]@{
+            tenant      = [string]$Global:ConnectionState.TenantName
+            generated   = (Get-Date).ToString("MMMM d, yyyy 'at' HH:mm", [System.Globalization.CultureInfo]::InvariantCulture)
+            days        = [int]$ConfigData.DateRange
+            toolVersion = [string]$ScriptVer
+            toolName    = "M365 Security Analysis"
+            brand       = "Yeyland Wutani"
+            darkMode    = ($script:CurrentTheme -eq "Dark")
+            threats     = [ordered]@{
+                accountsUnderAttack = $accountsUnderAttack
+                failedSignIns       = $fails.Count
+                highRiskApps        = $apps.Count
+            }
         }
-
-        # Risk Summary Table
-        [void]$sb.Append(@"
-                    <div class="evidence-section">
-                        <h4>🎯 Risk Summary</h4>
-                        <table>
-                            <tr>
-                                <th>Risk Factor</th>
-                                <th>Count</th>
-                            </tr>
-"@)
-        
-        if ($user.UnusualSignInCount -gt 0) {
-            [void]$sb.Append("<tr><td>Unusual Sign-In Locations</td><td><span class='badge warning'>$($user.UnusualSignInCount)</span></td></tr>")
-        }
-        if ($user.FailedSignInCount -gt 0) {
-            [void]$sb.Append("<tr><td>Failed Sign-In Attempts</td><td><span class='badge danger'>$($user.FailedSignInCount)</span></td></tr>")
-        }
-        if ($user.HighRiskOperationsCount -gt 0) {
-            [void]$sb.Append("<tr><td>High-Risk Admin Operations</td><td><span class='badge danger'>$($user.HighRiskOperationsCount)</span></td></tr>")
-        }
-        if ($user.SuspiciousRulesCount -gt 0) {
-            [void]$sb.Append("<tr><td>Suspicious Inbox Rules</td><td><span class='badge danger'>$($user.SuspiciousRulesCount)</span></td></tr>")
-        }
-        if ($user.SuspiciousDelegationsCount -gt 0) {
-            [void]$sb.Append("<tr><td>Suspicious Delegations</td><td><span class='badge warning'>$($user.SuspiciousDelegationsCount)</span></td></tr>")
-        }
-        if ($user.ETRSpamActivityCount -gt 0) {
-            [void]$sb.Append("<tr><td>Spam Activity Detected</td><td><span class='badge danger'>$($user.ETRSpamActivityCount)</span></td></tr>")
-        }
-        if ($user.FailedLoginPatternCount -gt 0) {
-            [void]$sb.Append("<tr><td>Failed Login Patterns</td><td><span class='badge danger'>$($user.FailedLoginPatternCount)</span></td></tr>")
-        }
-        if ($user.PasswordChangeIssuesCount -gt 0) {
-            [void]$sb.Append("<tr><td>Password Change Issues</td><td><span class='badge warning'>$($user.PasswordChangeIssuesCount)</span></td></tr>")
-        }
-		if ($user.HighRiskISPCount -gt 0) {
-			[void]$sb.Append("<tr><td>High-Risk ISP Sign-Ins</td><td><span class='badge danger'>$($user.HighRiskISPCount)</span></td></tr>")
-		}
-        
-        [void]$sb.Append(@"
-                        </table>
-                    </div>
-"@)
-
-		# Unusual Sign-Ins Details
-		if ($user.UnusualSignIns -and $user.UnusualSignIns.Count -gt 0) {
-			[void]$sb.Append(@"
-							<div class="evidence-section">
-								<h4>[LOCATION] Unusual Sign-In Locations</h4>
-								<table>
-									<tr>
-										<th>Date/Time</th>
-										<th>Location</th>
-										<th>IP Address</th>
-										<th>ISP</th>
-										<th>Risk</th>
-									</tr>
-"@)
-		foreach ($signIn in ($user.UnusualSignIns | Select-Object -First 10)) {
-			$location = "$($signIn.City), $($signIn.Country)"
-			
-			# Check if this ISP is high-risk
-			$isHighRiskISP = $false
-			if ($signIn.PSObject.Properties['IsHighRiskISP']) {
-				$isHighRiskISP = $signIn.IsHighRiskISP -eq $true -or $signIn.IsHighRiskISP -eq "True"
-			}
-			
-			$riskBadge = if ($isHighRiskISP) {
-				"<span class='badge danger' title='VPN/Hosting/Datacenter Provider'>[WARNING] HIGH-RISK ISP</span>"
-			} else {
-				"<span class='badge info'>Standard</span>"
-			}
-			
-			# Highlight row if high-risk ISP
-			$rowClass = if ($isHighRiskISP) { " class='high-risk-row'" } else { "" }
-			
-			[void]$sb.Append(@"
-                            <tr$rowClass>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($signIn.CreationTime))</td>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($location))</td>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($signIn.IP))</td>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($signIn.ISP))</td>
-                                <td>$riskBadge</td>
-                            </tr>
-"@)
+        notes      = @($notes)
+        cov        = @($coverage)
+        identities = @($identities)
+        audit      = @($audit)
+        apps       = @($apps)
+        fails      = @($fails)
+        pw         = @($pw)
+        mfa        = @($mfa)
+        ca         = @($ca)
+        rules      = @($rules)
+        deleg      = @($deleg)
+        trace      = @($trace)
+        locs       = @($locs)
+        pat        = @($pat)
+        unus       = @($unus)
+        etr        = @($etr)
     }
-    [void]$sb.Append(@"
-                        </table>
-                    </div>
-"@)
 }
 
+function Generate-HTMLReport {
+    <#
+    .SYNOPSIS
+        Builds the HTML security report: shapes the data (New-ReportPayload) and injects it as JSON
+        into the embedded template. All layout and behavior live in the template.
+    #>
 
-# High-Risk ISP Sign-Ins Section
-if ($user.HighRiskISPSignIns -and $user.HighRiskISPSignIns.Count -gt 0) {
-    [void]$sb.Append(@"
-                    <div class="evidence-section">
-                        <h4 class="high-risk-title">[WARNING] High-Risk ISP Connections (VPN/Hosting/Datacenter)</h4>
-                        <div class="alert warning">
-                            <strong>Security Alert:</strong> These sign-ins originated from ISPs commonly associated with VPS hosting, 
-                            VPN services, or datacenter infrastructure. While not always malicious, these connections warrant investigation 
-                            as they may indicate compromised credentials or unauthorized access.
-                        </div>
-                        <table>
-                            <tr>
-                                <th>Date/Time</th>
-                                <th>Location</th>
-                                <th>IP Address</th>
-                                <th>High-Risk ISP</th>
-                                <th>Device</th>
-                            </tr>
-"@)
-    foreach ($signIn in ($user.HighRiskISPSignIns | Select-Object -First 10)) {
-        $location = "$($signIn.City), $($signIn.Country)"
-        $device = if ($signIn.UserAgent) {
-            [System.Web.HttpUtility]::HtmlEncode($signIn.UserAgent)
-        } else {
-            "Unknown"
-        }
-        
-        [void]$sb.Append(@"
-                            <tr class="high-risk-row">
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($signIn.CreationTime))</td>
-                                <td><span class="badge warning">$([System.Web.HttpUtility]::HtmlEncode($location))</span></td>
-                                <td><strong>$([System.Web.HttpUtility]::HtmlEncode($signIn.IP))</strong></td>
-                                <td><span class="badge danger">$([System.Web.HttpUtility]::HtmlEncode($signIn.ISP))</span></td>
-                                <td style="font-size: 0.85em;">$device</td>
-                            </tr>
-"@)
-    }
-    [void]$sb.Append(@"
-                        </table>
-                        <div class="recommendation-box">
-                            <strong>📋 Recommended Actions:</strong><br>
-                            • Verify these sign-ins with the user<br>
-                            • Confirm if VPN or remote access was authorized<br>
-                            • Review for unauthorized access patterns<br>
-                            • Consider enforcing Conditional Access policies for datacenter IPs<br>
-                            • Enable MFA if not already active
-                        </div>
-                    </div>
-"@)
+    param (
+        [Parameter(Mandatory = $true)]
+        [AllowEmptyCollection()]
+        [array]$Data
+    )
+
+    $payload = New-ReportPayload -Results $Data
+    $json = ConvertTo-Json -InputObject $payload -Depth 8 -Compress
+
+    # The JSON sits inside a <script> element: no '</script>' or '<!--' and no JS line separators
+    # may survive. The escaped form decodes back to the same text in JSON.parse.
+    $json = $json.Replace('<', '\u003c').Replace([string][char]0x2028, '\u2028').Replace([string][char]0x2029, '\u2029')
+
+    # .Replace, not -replace: the JSON must never be interpreted for '$' expansion
+    return $script:ReportTemplate.Replace('__REPORT_DATA_JSON__', $json)
 }
 
-        # Failed Login Patterns
-        if ($user.FailedLoginPatterns -and $user.FailedLoginPatterns.Count -gt 0) {
-            [void]$sb.Append(@"
-                    <div class="evidence-section">
-                        <h4>[ALERT] Failed Login Attack Patterns</h4>
-                        <table>
-                            <tr>
-                                <th>Pattern Type</th>
-                                <th>Source IP</th>
-                                <th>Failed Attempts</th>
-                                <th>Risk Level</th>
-                            </tr>
-"@)
-            foreach ($pattern in ($user.FailedLoginPatterns | Select-Object -First 5)) {
-                [void]$sb.Append(@"
-                            <tr>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($pattern.PatternType))</td>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($pattern.SourceIP))</td>
-                                <td><span class="badge danger">$($pattern.FailedAttempts)</span></td>
-                                <td><span class="badge $(if($pattern.RiskLevel -eq "Critical"){"danger"}else{"warning"})">$($pattern.RiskLevel)</span></td>
-                            </tr>
-"@)
-            }
-            [void]$sb.Append(@"
-                        </table>
-                    </div>
-"@)
-        }
-
-        # Password Change Issues
-        if ($user.PasswordChangeIssues -and $user.PasswordChangeIssues.Count -gt 0) {
-            [void]$sb.Append(@"
-                    <div class="evidence-section">
-                        <h4>[PWD] Suspicious Password Changes</h4>
-                        <table>
-                            <tr>
-                                <th>Change Count</th>
-                                <th>Time Span</th>
-                                <th>Off-Hours Changes</th>
-                                <th>Risk Level</th>
-                            </tr>
-"@)
-            foreach ($pwChange in ($user.PasswordChangeIssues | Select-Object -First 5)) {
-                [void]$sb.Append(@"
-                            <tr>
-                                <td><span class="badge warning">$($pwChange.ChangeCount)</span></td>
-                                <td>$($pwChange.TimeSpanHours) hours</td>
-                                <td>$($pwChange.OffHoursChanges)</td>
-                                <td><span class="badge $(if($pwChange.RiskLevel -eq "Critical"){"danger"}else{"warning"})">$($pwChange.RiskLevel)</span></td>
-                            </tr>
-"@)
-            }
-            [void]$sb.Append(@"
-                        </table>
-                    </div>
-"@)
-        }
-
-        # Suspicious Rules
-        if ($user.SuspiciousRules -and $user.SuspiciousRules.Count -gt 0) {
-            [void]$sb.Append(@"
-                    <div class="evidence-section">
-                        <h4>✉ Suspicious Inbox Rules</h4>
-                        <table>
-                            <tr>
-                                <th>Rule Name</th>
-                                <th>Actions</th>
-                                <th>Enabled</th>
-                            </tr>
-"@)
-            foreach ($rule in ($user.SuspiciousRules | Select-Object -First 5)) {
-                $actions = @()
-                if ($rule.ForwardTo) { $actions += "Forwards Email" }
-                if ($rule.DeleteMessage -eq $true) { $actions += "Deletes" }
-                if ($rule.MarkAsRead -eq $true) { $actions += "Marks Read" }
-                $actionText = $actions -join ", "
-                
-                [void]$sb.Append(@"
-                            <tr>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($rule.RuleName))</td>
-                                <td>$([System.Web.HttpUtility]::HtmlEncode($actionText))</td>
-                                <td><span class="badge $(if($rule.Enabled -eq $true){"danger"}else{"info"})">$($rule.Enabled)</span></td>
-                            </tr>
-"@)
-            }
-            [void]$sb.Append(@"
-                        </table>
-                    </div>
-"@)
-        }
-
-        [void]$sb.Append(@"
-                </div>
-            </div>
-"@)
-    }
-
-    # Add collapsible low-risk users section
-    if ($lowRiskUsers.Count -gt 0) {
-        [void]$sb.Append(@"
-            <div class="low-risk-summary">
-                <h3>✅ Low-Risk Users ($($lowRiskUsers.Count) accounts)</h3>
-                <p>These users have minimal security findings. Click below to expand details if needed.</p>
-                <button class="expand-btn" id="lowRiskToggleBtn" onclick="toggleLowRiskUsers()">Show All Low-Risk Users</button>
-
-                <div id="lowRiskUsersContainer" class="low-risk-users-hidden" style="margin-top: 20px;">
-"@)
-
-        foreach ($user in $lowRiskUsers) {
-            $riskClass = "low"
-            $mfaStatus = if ($user.MFAStatus) { $user.MFAStatus } else { "Unknown" }
-            $mfaBadgeClass = switch ($mfaStatus) {
-                "Yes" { "success" }
-                "No" { "danger" }
-                default { "info" }
-            }
-
-            # Build key indicators summary
-            $indicators = @()
-            if ($user.UnusualSignInCount -gt 0) { $indicators += "[LOCATION] Unusual Locations ($($user.UnusualSignInCount))" }
-            if ($user.FailedSignInCount -gt 0) { $indicators += "[BLOCKED] Failed Logins ($($user.FailedSignInCount))" }
-            if ($user.FailedLoginPatternCount -gt 0) { $indicators += "[ALERT] Attack Patterns ($($user.FailedLoginPatternCount))" }
-
-            $indicatorText = if ($indicators.Count -gt 0) { $indicators -join " | " } else { "No security findings" }
-
-            [void]$sb.Append(@"
-                    <div class="user-card low" style="padding: 15px;">
-                        <div class="user-header" onclick="toggleDetails(this)">
-                            <div class="user-info">
-                                <h3 style="font-size: 1.1em;">$([System.Web.HttpUtility]::HtmlEncode($user.UserDisplayName))</h3>
-                                <div class="user-email">$([System.Web.HttpUtility]::HtmlEncode($user.UserId))</div>
-                                <div style="font-size: 0.85em; color: var(--text-secondary); margin-top: 5px;">$indicatorText</div>
-                            </div>
-                            <div style="text-align: right;">
-                                <div style="font-size: 0.9em; color: var(--text-secondary);">MFA: <span class="badge $mfaBadgeClass">$mfaStatus</span></div>
-                                <div style="font-size: 0.9em; color: var(--success-color); margin-top: 5px;">Risk Score: $($user.RiskScore)</div>
-                            </div>
-                        </div>
-                    </div>
-"@)
-        }
-
-        [void]$sb.Append(@"
-                </div>
-            </div>
-"@)
-    }
-
-    [void]$sb.Append(@"
-        </div>
-
-        <div class="footer">
-            <strong>Yeyland Wutani - Microsoft 365 Security Analysis Tool v$ScriptVer</strong><br>
-            Report generated using Microsoft Graph PowerShell APIs<br>
-            Risk scores calculated based on multiple security indicators<br>
-            <br>
-            <strong>Recommended Actions:</strong><br>
-            • Immediately review and remediate all Critical risk users<br>
-            • Enable MFA for all accounts, especially administrative accounts<br>
-            • Investigate suspicious sign-in patterns and unusual authentication activities<br>
-            • Review and remove unnecessary administrative privileges<br>
-            • Monitor inbox rules and delegation settings for potential compromise indicators
-        </div>
-    </div>
-
-    <script>
-        function toggleDarkMode() {
-            const body = document.body;
-            const isDark = body.classList.toggle('dark-mode');
-            
-            const icon = document.getElementById('themeIcon');
-            const text = document.getElementById('themeText');
-            
-            if (isDark) {
-                icon.textContent = '[Dark]';
-                text.textContent = 'Dark Mode';
-            } else {
-                icon.textContent = '[Light]';
-                text.textContent = 'Light Mode';
-            }
-            
-            localStorage.setItem('darkMode', isDark);
-        }
-        
-        window.addEventListener('DOMContentLoaded', function() {
-            const savedMode = localStorage.getItem('darkMode');
-            const isDark = savedMode === null ? $defaultDarkMode : savedMode === 'true';
-            
-            if (isDark && !document.body.classList.contains('dark-mode')) {
-                document.body.classList.add('dark-mode');
-            } else if (!isDark && document.body.classList.contains('dark-mode')) {
-                document.body.classList.remove('dark-mode');
-            }
-            
-            const icon = document.getElementById('themeIcon');
-            const text = document.getElementById('themeText');
-            icon.textContent = isDark ? '[Dark]' : '[Light]';
-            text.textContent = isDark ? 'Dark Mode' : 'Light Mode';
-        });
-        
-        function toggleDetails(header) {
-            const content = header.nextElementSibling;
-            const icon = header.querySelector('.toggle-icon');
-            
-            content.classList.toggle('show');
-            icon.classList.toggle('rotated');
-        }
-        
-        window.addEventListener('DOMContentLoaded', function() {
-            const criticalAndHigh = document.querySelectorAll('.user-card.critical, .user-card.high');
-            criticalAndHigh.forEach(card => {
-                const content = card.querySelector('.collapsible-content');
-                const icon = card.querySelector('.toggle-icon');
-                if (content && !content.classList.contains('show')) {
-                    content.classList.add('show');
-                    icon.classList.add('rotated');
-                }
-            });
-        });
-
-        // Enhanced scroll functionality
-        function scrollToSection(sectionId) {
-            const element = document.getElementById(sectionId);
-            if (element) {
-                element.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-        }
-
-        // Toggle low-risk users visibility
-        function toggleLowRiskUsers() {
-            const container = document.getElementById('lowRiskUsersContainer');
-            const btn = document.getElementById('lowRiskToggleBtn');
-
-            if (container.classList.contains('low-risk-users-hidden')) {
-                container.classList.remove('low-risk-users-hidden');
-                container.classList.add('low-risk-users-shown');
-                btn.textContent = 'Hide Low-Risk Users';
-            } else {
-                container.classList.remove('low-risk-users-shown');
-                container.classList.add('low-risk-users-hidden');
-                btn.textContent = 'Show All Low-Risk Users';
-            }
-        }
-
-        // Expand all high/critical risk users on load
-        window.addEventListener('DOMContentLoaded', function() {
-            // Auto-expand critical and high risk
-            const highPriorityCards = document.querySelectorAll('.user-card.critical, .user-card.high');
-            highPriorityCards.forEach(card => {
-                const content = card.querySelector('.collapsible-content');
-                const icon = card.querySelector('.toggle-icon');
-                if (content && icon) {
-                    content.classList.add('show');
-                    icon.classList.add('rotated');
-                }
-            });
-
-            // Initialize charts if present
-            if (typeof initializeCharts === 'function') {
-                initializeCharts();
-            }
-        });
-
-        // Print optimized version
-        function printReport() {
-            // Expand all sections before printing
-            document.querySelectorAll('.collapsible-content').forEach(el => el.classList.add('show'));
-            window.print();
-        }
-
-        // Export summary data
-        function exportSummary() {
-            const rows = Array.from(document.querySelectorAll('.summary-table tbody tr'));
-            const csv = ['User,Email,Risk Level,Risk Score,MFA Status,Indicators'].concat(
-                rows.map(row => {
-                    const cells = Array.from(row.querySelectorAll('td'));
-                    return cells.map(cell => {
-                        const text = cell.textContent.trim().replace(/"/g, '""');
-                        return `"${text}"`;
-                    }).join(',');
-                })
-            ).join('\n');
-
-            const blob = new Blob([csv], { type: 'text/csv' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `M365_Security_Summary_${new Date().toISOString().split('T')[0]}.csv`;
-            a.click();
-            window.URL.revokeObjectURL(url);
-        }
-    </script>
-</body>
-</html>
-"@)
-
-    return $sb.ToString()
-}
+#endregion
 
 #endregion
 
@@ -11673,47 +11575,49 @@ function Show-HatzAnalysisResult {
     )
 
     $resultForm = New-Object System.Windows.Forms.Form
-    $resultForm.Text          = "Hatz AI — M365 Security Analysis"
-    $resultForm.Size          = New-Object System.Drawing.Size(920, 720)
+    $resultForm.Text          = "Hatz AI - M365 Security Analysis"
+    $resultForm.ClientSize    = New-Object System.Drawing.Size(920, 720)
     $resultForm.StartPosition = "CenterScreen"
     $resultForm.FormBorderStyle = "Sizable"
     $resultForm.BackColor     = Get-ThemeColor -ColorName "Background"
     $resultForm.MinimumSize   = New-Object System.Drawing.Size(600, 400)
+    $resultForm.Font          = Get-GuiFont -Family "Segoe UI" -Size 9
 
     $headerLbl = New-Object System.Windows.Forms.Label
-    $headerLbl.Text     = "🤖  AI Security Analysis Results   |   Powered by Hatz AI (claude-opus-4-6)"
-    $headerLbl.Font     = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
+    $headerLbl.Text     = "$($script:GlyphSparkle)  AI security analysis   |   Powered by Hatz AI (claude-opus-4-6)"
+    $headerLbl.Font     = Get-GuiFont -Family "Segoe UI Semibold" -Size 10.5
     $headerLbl.ForeColor = Get-ThemeColor -ColorName "Primary"
     $headerLbl.Size     = New-Object System.Drawing.Size(880, 28)
     $headerLbl.Location = New-Object System.Drawing.Point(15, 10)
     $headerLbl.Anchor   = [System.Windows.Forms.AnchorStyles]::Top -bor [System.Windows.Forms.AnchorStyles]::Left -bor [System.Windows.Forms.AnchorStyles]::Right
     $resultForm.Controls.Add($headerLbl)
 
-    $textBox = New-Object System.Windows.Forms.RichTextBox
-    $textBox.Text        = $AnalysisText
-    $textBox.ReadOnly    = $true
-    $textBox.Font        = New-Object System.Drawing.Font("Consolas", 9.5)
-    $textBox.BackColor   = Get-ThemeColor -ColorName "Surface"
-    $textBox.ForeColor   = Get-ThemeColor -ColorName "TextPrimary"
-    $textBox.ScrollBars  = "Vertical"
-    $textBox.WordWrap    = $true
-    $textBox.Location    = New-Object System.Drawing.Point(15, 46)
-    $textBox.Size        = New-Object System.Drawing.Size(880, 620)
-    $textBox.Anchor      = [System.Windows.Forms.AnchorStyles]::Top -bor `
+    # 1px hairline frame: a Border-colored panel with 1px padding around the text box
+    $textFrame = New-Object System.Windows.Forms.Panel
+    $textFrame.Location  = New-Object System.Drawing.Point(15, 46)
+    $textFrame.Size      = New-Object System.Drawing.Size(880, 620)
+    $textFrame.Padding   = New-Object System.Windows.Forms.Padding(1)
+    $textFrame.BackColor = Get-ThemeColor -ColorName "Border"
+    $textFrame.Anchor    = [System.Windows.Forms.AnchorStyles]::Top -bor `
                            [System.Windows.Forms.AnchorStyles]::Bottom -bor `
                            [System.Windows.Forms.AnchorStyles]::Left -bor `
                            [System.Windows.Forms.AnchorStyles]::Right
-    $resultForm.Controls.Add($textBox)
+    $resultForm.Controls.Add($textFrame)
 
-    $btnSave = New-Object System.Windows.Forms.Button
-    $btnSave.Text      = "💾 Save Report"
-    $btnSave.Size      = New-Object System.Drawing.Size(130, 32)
-    $btnSave.Location  = New-Object System.Drawing.Point(15, 674)
-    $btnSave.BackColor = Get-ThemeColor -ColorName "Success"
-    $btnSave.ForeColor = [System.Drawing.Color]::White
-    $btnSave.FlatStyle = "Flat"
-    $btnSave.Font      = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
-    $btnSave.Anchor    = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
+    $textBox = New-Object System.Windows.Forms.RichTextBox
+    $textBox.Text        = $AnalysisText
+    $textBox.ReadOnly    = $true
+    $textBox.Font        = Get-GuiFont -Family "Consolas" -Size 9.5
+    $textBox.BackColor   = Get-ThemeColor -ColorName "Surface"
+    $textBox.ForeColor   = Get-ThemeColor -ColorName "TextPrimary"
+    $textBox.BorderStyle = [System.Windows.Forms.BorderStyle]::None
+    $textBox.ScrollBars  = "Vertical"
+    $textBox.WordWrap    = $true
+    $textBox.Dock        = [System.Windows.Forms.DockStyle]::Fill
+    $textFrame.Controls.Add($textBox)
+
+    $btnSave = New-GuiFlatButton -Text "Save report" -X 15 -Y 674 -Width 130 -Height 32 -Primary $true
+    $btnSave.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Left
     $btnSave.Add_Click({
         $savePath = Join-Path $WorkDir "AI_SecurityAnalysis_$(Get-Date -Format 'yyyyMMdd_HHmmss').txt"
         try {
@@ -11728,15 +11632,8 @@ function Show-HatzAnalysisResult {
     })
     $resultForm.Controls.Add($btnSave)
 
-    $btnClose = New-Object System.Windows.Forms.Button
-    $btnClose.Text      = "Close"
-    $btnClose.Size      = New-Object System.Drawing.Size(80, 32)
-    $btnClose.Location  = New-Object System.Drawing.Point(820, 674)
-    $btnClose.BackColor = Get-ThemeColor -ColorName "Secondary"
-    $btnClose.ForeColor = [System.Drawing.Color]::White
-    $btnClose.FlatStyle = "Flat"
-    $btnClose.Font      = New-Object System.Drawing.Font("Segoe UI", 9)
-    $btnClose.Anchor    = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
+    $btnClose = New-GuiFlatButton -Text "Close" -X 815 -Y 674 -Width 80 -Height 32
+    $btnClose.Anchor = [System.Windows.Forms.AnchorStyles]::Bottom -bor [System.Windows.Forms.AnchorStyles]::Right
     $btnClose.Add_Click({ $resultForm.Close() })
     $resultForm.Controls.Add($btnClose)
 
@@ -11755,42 +11652,45 @@ function Show-MainGUI {
     <#
     .SYNOPSIS
         Displays the main graphical user interface for the security analysis tool.
-    
+
     .DESCRIPTION
-        Creates and displays the primary application window with emoji-enhanced buttons
-        and improved color scheme using Yeyland Wutani brand colors.
-    
+        Three numbered steps on neutral surfaces: 01 Connect, 02 Collect (one status tile per
+        collector), 03 Analyze. Orange fills mark the primary action of a step; everything else is a
+        hairline card. Colors come from the Yeyland Wutani theme tokens (Get-ThemeColor).
+
     .EXAMPLE
         Show-MainGUI
         # Displays the main application interface
-    
+
     .NOTES
         All buttons include error handling and visual feedback
         Form cleanup includes proper Microsoft Graph disconnection
     #>
-    
+
     [CmdletBinding()]
     param()
-    
-    #──────────────────────────────────────────────────────────────
+
+    #--------------------------------------------------------------
     # ENSURE ASSEMBLIES ARE LOADED
-    #──────────────────────────────────────────────────────────────
-    
+    #--------------------------------------------------------------
+
     Add-Type -AssemblyName System.Windows.Forms
     Add-Type -AssemblyName System.Drawing
-	[void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
-	[void][System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
+    [void][System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms")
+    [void][System.Reflection.Assembly]::LoadWithPartialName("System.Drawing")
 
-	# Set default font that supports emojis
-	[System.Windows.Forms.Application]::EnableVisualStyles()
+    [System.Windows.Forms.Application]::EnableVisualStyles()
 
-    #──────────────────────────────────────────────────────────────
-    # CREATE MAIN FORM
-    #──────────────────────────────────────────────────────────────
-    
+    #--------------------------------------------------------------
+    # CREATE MAIN FORM (1000 x 780 client area, 32 px side margins, 936 px content width)
+    #--------------------------------------------------------------
+
     $form = New-Object System.Windows.Forms.Form
     $form.Text = "Microsoft 365 Security Analysis Tool - v$ScriptVer"
-    $form.Size = New-Object System.Drawing.Size(840, 715)
+    $form.AutoScaleDimensions = New-Object System.Drawing.SizeF(96, 96)
+    $form.AutoScaleMode = [System.Windows.Forms.AutoScaleMode]::Dpi
+    $form.Font = Get-GuiFont -Family "Segoe UI" -Size 9
+    $form.ClientSize = New-Object System.Drawing.Size(1000, 780)
     $form.StartPosition = "CenterScreen"
     $form.FormBorderStyle = "FixedSingle"
     $form.MaximizeBox = $false
@@ -11799,168 +11699,104 @@ function Show-MainGUI {
     # Set global form reference
     $Global:MainForm = $form
 
-    #──────────────────────────────────────────────────────────────
-    # HEADER SECTION WITH THEME TOGGLE
-    #──────────────────────────────────────────────────────────────
-    
-    $headerLabel = New-Object System.Windows.Forms.Label
-    $headerLabel.Text = "◈ Microsoft 365 Security Analysis Tool"
-    $headerLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 16, [System.Drawing.FontStyle]::Bold)
-    $headerLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
-    $headerLabel.Size = New-Object System.Drawing.Size(650, 40)
-    $headerLabel.Location = New-Object System.Drawing.Point(20, 20)
-    $headerLabel.TextAlign = "MiddleLeft"
-    $form.Controls.Add($headerLabel)
-    
-    # Theme toggle button - Enhanced with better styling
+    $Global:GuiTiles = @{}
+    $Global:GuiToolTip = New-Object System.Windows.Forms.ToolTip
+    $Global:GuiToolTip.InitialDelay = 400
+    $Global:GuiToolTip.AutoPopDelay = 15000
+    $Global:GuiToolTip.ShowAlways = $true
+
+    #--------------------------------------------------------------
+    # HEADER: kicker, title, theme toggle, connection pill
+    #--------------------------------------------------------------
+
+    $kickerLabel = New-Object System.Windows.Forms.Label
+    $kickerLabel.Text = "YEYLAND WUTANI $($script:GlyphDot) MS GRAPH POWERSHELL EDITION"
+    $kickerLabel.Font = Get-GuiFont -Family "Consolas" -Size 8.5 -Style "Bold"
+    $kickerLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
+    $kickerLabel.Tag = [PSCustomObject]@{ ColorName = "Primary" }
+    $kickerLabel.AutoSize = $false
+    $kickerLabel.Size = New-Object System.Drawing.Size(600, 16)
+    $kickerLabel.Location = New-Object System.Drawing.Point(32, 24)
+    $form.Controls.Add($kickerLabel)
+
+    $titleLabel = New-Object System.Windows.Forms.Label
+    $titleLabel.Text = "Microsoft 365 Security Analysis"
+    $titleLabel.Font = Get-GuiFont -Family "Segoe UI Semibold" -Size 20
+    $titleLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
+    $titleLabel.Tag = [PSCustomObject]@{ ColorName = "TextPrimary" }
+    $titleLabel.AutoSize = $false
+    $titleLabel.Size = New-Object System.Drawing.Size(640, 36)
+    $titleLabel.Location = New-Object System.Drawing.Point(32, 42)
+    $form.Controls.Add($titleLabel)
+
     $themeToggle = New-Object System.Windows.Forms.Button
-    $themeToggle.Size = New-Object System.Drawing.Size(110, 38)
-    $themeToggle.Location = New-Object System.Drawing.Point(690, 20)
-    $themeToggle.FlatStyle = "Flat"
-    $themeToggle.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
+    $themeToggle.Size = New-Object System.Drawing.Size(96, 28)
+    $themeToggle.Location = New-Object System.Drawing.Point(692, 30)
+    $themeToggle.FlatStyle = [System.Windows.Forms.FlatStyle]::Flat
+    $themeToggle.Font = Get-GuiFont -Family "Segoe UI" -Size 9
     $themeToggle.Cursor = [System.Windows.Forms.Cursors]::Hand
-
-    if ($script:CurrentTheme -eq "Dark") {
-        $themeToggle.Text = "☼ Light"
-        $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(66, 165, 245)
-        $themeToggle.ForeColor = [System.Drawing.Color]::White
-        $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(41, 128, 185)
-    } else {
-        $themeToggle.Text = "☾ Dark"
-        $themeToggle.BackColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
-        $themeToggle.ForeColor = [System.Drawing.Color]::White
-        $themeToggle.FlatAppearance.BorderColor = [System.Drawing.Color]::FromArgb(44, 62, 80)
-    }
-    $themeToggle.FlatAppearance.BorderSize = 2
-
-    # Store original color in Tag for hover effects
-    $themeToggle.Tag = $themeToggle.BackColor
-
-    # Add hover effects
-    $themeToggle.Add_MouseEnter({
-        if ($script:CurrentTheme -eq "Dark") {
-            $this.BackColor = [System.Drawing.Color]::FromArgb(100, 181, 246)
-        } else {
-            $this.BackColor = [System.Drawing.Color]::FromArgb(69, 90, 100)
-        }
-    })
-
-    $themeToggle.Add_MouseLeave({
-        if ($this.Tag -and $this.Tag -is [System.Drawing.Color]) {
-            $this.BackColor = $this.Tag
-        }
-    })
-
+    $themeToggle.FlatAppearance.BorderSize = 1
+    $themeToggle.UseVisualStyleBackColor = $false
+    $themeToggle.Text = $(if ($script:CurrentTheme -eq "Dark") { "Light mode" } else { "Dark mode" })
+    $themeToggle.Tag = [PSCustomObject]@{ Variant = "Flat" }
+    Set-GuiFlatButtonColors -Button $themeToggle
+    $themeToggle.Add_MouseEnter({ $this.FlatAppearance.BorderColor = Get-ThemeColor -ColorName "Primary" })
+    $themeToggle.Add_MouseLeave({ Set-GuiFlatButtonColors -Button $this })
     $themeToggle.Add_Click({
         if ($script:CurrentTheme -eq "Dark") {
             Set-Theme -Theme "Light"
-            $this.Text = "☾ Dark"
-            $this.BackColor = [System.Drawing.Color]::FromArgb(52, 73, 94)
+            $this.Text = "Dark mode"
         } else {
             Set-Theme -Theme "Dark"
-            $this.Text = "☼ Light"
-            $this.BackColor = [System.Drawing.Color]::FromArgb(66, 165, 245)
+            $this.Text = "Light mode"
         }
-        $this.Tag = $this.BackColor
+        Set-GuiFlatButtonColors -Button $this
     })
-
     $form.Controls.Add($themeToggle)
 
-    # Version label
-    $versionLabel = New-Object System.Windows.Forms.Label
-    $versionLabel.Text = "Enhanced MS Graph PowerShell Edition - Version $ScriptVer"
-    $versionLabel.Font = New-Object System.Drawing.Font("Segoe UI", 9)
-    $versionLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
-    $versionLabel.Size = New-Object System.Drawing.Size(780, 20)
-    $versionLabel.Location = New-Object System.Drawing.Point(20, 60)
-    $versionLabel.TextAlign = "MiddleLeft"
-    $form.Controls.Add($versionLabel)
+    $Global:ConnectionPill = New-GuiConnectionPill -X 800 -Y 30 -Width 168 -Height 28
+    $form.Controls.Add($Global:ConnectionPill)
 
-    #──────────────────────────────────────────────────────────────
-    # STATUS PANEL - Enhanced Design
-    #──────────────────────────────────────────────────────────────
+    #--------------------------------------------------------------
+    # SESSION BLOCK: 2 x 2 cells (working directory, date range, tenant, account)
+    #--------------------------------------------------------------
 
-    $statusPanel = New-Object System.Windows.Forms.Panel
-    $statusPanel.Size = New-Object System.Drawing.Size(780, 150)
-    $statusPanel.Location = New-Object System.Drawing.Point(20, 95)
-    $statusPanel.BorderStyle = "None"
-    $statusPanel.BackColor = Get-ThemeColor -ColorName "Surface"
-
-    # Modern card border: thin 1px neutral border + 3px left accent strip in brand orange
-    $statusPanel.Add_Paint({
+    $sessionPanel = New-Object System.Windows.Forms.Panel
+    $sessionPanel.Size = New-Object System.Drawing.Size(936, 112)
+    $sessionPanel.Location = New-Object System.Drawing.Point(32, 96)
+    $sessionPanel.BorderStyle = "None"
+    $sessionPanel.BackColor = Get-ThemeColor -ColorName "Surface"
+    $sessionPanel.Tag = [PSCustomObject]@{ Kind = "surface"; BackRole = "Surface" }
+    Enable-GuiPaintStyle -Control $sessionPanel
+    $sessionPanel.Add_Paint({
         param($sender, $e)
+        $pen = New-Object System.Drawing.Pen((Get-ThemeColor -ColorName "Border"), 1)
         $g = $e.Graphics
         $w = [int]$sender.Width - 1
         $h = [int]$sender.Height - 1
-
-        # 1px neutral border around the whole card
-        $borderPen = New-Object System.Drawing.Pen((Get-ThemeColor -ColorName "Border"), 1)
-        $g.DrawRectangle($borderPen, 0, 0, $w, $h)
-        $borderPen.Dispose()
-
-        # 3px brand-color left accent strip
-        $accentPen = New-Object System.Drawing.Pen((Get-ThemeColor -ColorName "Primary"), 3)
-        $g.DrawLine($accentPen, 1, 0, 1, $h)
-        $accentPen.Dispose()
+        $g.DrawRectangle($pen, 0, 0, $w, $h)
+        $g.DrawLine($pen, [int]($sender.Width / 2), 0, [int]($sender.Width / 2), $h)
+        $g.DrawLine($pen, 0, [int]($sender.Height / 2), $w, [int]($sender.Height / 2))
+        $pen.Dispose()
     })
+    $form.Controls.Add($sessionPanel)
 
-    $form.Controls.Add($statusPanel)
+    # Same $Global:*Label names as before, so Update-ConnectionStatus / Update-WorkingDirectoryDisplay keep working
+    $Global:WorkDirLabel    = New-GuiSessionCell -Parent $sessionPanel -Caption "Working directory" -Value "$($ConfigData.WorkDir)" -X 0 -Y 0
+    $Global:DateRangeLabel  = New-GuiSessionCell -Parent $sessionPanel -Caption "Date range" -Value "$($ConfigData.DateRange) days back" -X 468 -Y 0
+    $Global:TenantInfoLabel = New-GuiSessionCell -Parent $sessionPanel -Caption "Tenant" -Value "Not connected" -X 0 -Y 56
+    $Global:ConnectionLabel = New-GuiSessionCell -Parent $sessionPanel -Caption "Account" -Value "-" -X 468 -Y 56
 
-    $Global:WorkDirLabel = New-Object System.Windows.Forms.Label
-    $Global:WorkDirLabel.Text = "📁 Working Directory: $($ConfigData.WorkDir)"
-    $Global:WorkDirLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
-    $Global:WorkDirLabel.Size = New-Object System.Drawing.Size(760, 28)
-    $Global:WorkDirLabel.Location = New-Object System.Drawing.Point(15, 12)
-    $Global:WorkDirLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
-    $statusPanel.Controls.Add($Global:WorkDirLabel)
+    #--------------------------------------------------------------
+    # STATUS BAR (created before the buttons: their handlers report into it)
+    #--------------------------------------------------------------
 
-    $Global:DateRangeLabel = New-Object System.Windows.Forms.Label
-    $Global:DateRangeLabel.Text = "► Date Range: $($ConfigData.DateRange) days back"
-    $Global:DateRangeLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
-    $Global:DateRangeLabel.Size = New-Object System.Drawing.Size(760, 28)
-    $Global:DateRangeLabel.Location = New-Object System.Drawing.Point(15, 40)
-    $Global:DateRangeLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
-    $statusPanel.Controls.Add($Global:DateRangeLabel)
-
-    $Global:ConnectionLabel = New-Object System.Windows.Forms.Label
-    $Global:ConnectionLabel.Text = "🔌 Microsoft Graph: Not Connected"
-    $Global:ConnectionLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5, [System.Drawing.FontStyle]::Bold)
-    $Global:ConnectionLabel.Size = New-Object System.Drawing.Size(760, 28)
-    $Global:ConnectionLabel.Location = New-Object System.Drawing.Point(15, 68)
-    $Global:ConnectionLabel.ForeColor = Get-ThemeColor -ColorName "Danger"
-    $statusPanel.Controls.Add($Global:ConnectionLabel)
-
-    $Global:TenantInfoLabel = New-Object System.Windows.Forms.Label
-    $Global:TenantInfoLabel.Text = "🏢 Not connected to any tenant"
-    $Global:TenantInfoLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9.5)
-    $Global:TenantInfoLabel.Size = New-Object System.Drawing.Size(760, 28)
-    $Global:TenantInfoLabel.Location = New-Object System.Drawing.Point(15, 96)
-    $Global:TenantInfoLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
-    $statusPanel.Controls.Add($Global:TenantInfoLabel)
-
-    # If pre-form auth already ran, reflect that state immediately in the labels
-    Update-ConnectionStatus
-
-    $performanceLabel = New-Object System.Windows.Forms.Label
-    $performanceLabel.Text = "[Performance] Batch Size $($ConfigData.BatchSize) | Cache Timeout $($ConfigData.CacheTimeout)s"
-    $performanceLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 8.5)
-    $performanceLabel.Size = New-Object System.Drawing.Size(760, 22)
-    $performanceLabel.Location = New-Object System.Drawing.Point(15, 124)
-    $performanceLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
-    $statusPanel.Controls.Add($performanceLabel)
-
-    #──────────────────────────────────────────────────────────────
-    # BOTTOM STATUS BAR - Enhanced Design
-    #──────────────────────────────────────────────────────────────
-
-    # Status bar panel — clean, no box; just a 1px top separator line
     $statusBarPanel = New-Object System.Windows.Forms.Panel
-    $statusBarPanel.Size = New-Object System.Drawing.Size(800, 50)
-    $statusBarPanel.Location = New-Object System.Drawing.Point(20, 620)
+    $statusBarPanel.Size = New-Object System.Drawing.Size(1000, 44)
+    $statusBarPanel.Location = New-Object System.Drawing.Point(0, 736)
     $statusBarPanel.BorderStyle = "None"
     $statusBarPanel.BackColor = Get-ThemeColor -ColorName "Surface"
-
-    # Top border only (1px separator line)
+    $statusBarPanel.Tag = [PSCustomObject]@{ Kind = "surface"; BackRole = "Surface" }
     $statusBarPanel.Add_Paint({
         param($sender, $e)
         $pen = New-Object System.Drawing.Pen((Get-ThemeColor -ColorName "Border"), 1)
@@ -11970,48 +11806,70 @@ function Show-MainGUI {
 
     $Global:StatusLabel = New-Object System.Windows.Forms.Label
     $Global:StatusLabel.Text = "[OK] Ready - Please connect to Microsoft Graph to begin"
-    $Global:StatusLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
-    $Global:StatusLabel.Size = New-Object System.Drawing.Size(780, 45)
-    $Global:StatusLabel.Location = New-Object System.Drawing.Point(15, 2)
+    $Global:StatusLabel.Font = Get-GuiFont -Family "Consolas" -Size 9
+    $Global:StatusLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
+    $Global:StatusLabel.AutoSize = $false
+    $Global:StatusLabel.AutoEllipsis = $true
     $Global:StatusLabel.TextAlign = "MiddleLeft"
-
-    if ($script:CurrentTheme -eq "Dark") {
-        $Global:StatusLabel.ForeColor = [System.Drawing.Color]::FromArgb(255, 193, 7)
-    } else {
-        $Global:StatusLabel.ForeColor = Get-ThemeColor -ColorName "Primary"
-    }
-
+    $Global:StatusLabel.Size = New-Object System.Drawing.Size(716, 44)
+    $Global:StatusLabel.Location = New-Object System.Drawing.Point(32, 1)
     $statusBarPanel.Controls.Add($Global:StatusLabel)
+
+    # Structured analysis summary: "Analysis complete  12 critical  23 high  0 medium  43 low"
+    $Global:StatusSummaryPanel = New-Object System.Windows.Forms.Panel
+    $Global:StatusSummaryPanel.Size = New-Object System.Drawing.Size(716, 43)
+    $Global:StatusSummaryPanel.Location = New-Object System.Drawing.Point(32, 1)
+    $Global:StatusSummaryPanel.BackColor = Get-ThemeColor -ColorName "Surface"
+    $Global:StatusSummaryPanel.Visible = $false
+    $Global:StatusSummaryPanel.Tag = [PSCustomObject]@{ Kind = "surface"; BackRole = "Surface"; Critical = 0; High = 0; Medium = 0; Low = 0 }
+    Enable-GuiPaintStyle -Control $Global:StatusSummaryPanel
+    $Global:StatusSummaryPanel.Add_Paint({
+        param($sender, $e)
+        $g = $e.Graphics
+        $scale = $sender.DeviceDpi / 96.0
+        $font = Get-GuiFont -Family "Consolas" -Size 9
+        $flags = [System.Windows.Forms.TextFormatFlags]"NoPadding, SingleLine, Left, VerticalCenter"
+        $segments = @(
+            @{ Text = "$($script:GlyphBullet) Analysis complete"; Color = (Get-ThemeColor -ColorName "Success") }
+            @{ Text = "$($sender.Tag.Critical) critical"; Color = (Get-ThemeColor -ColorName "Danger") }
+            @{ Text = "$($sender.Tag.High) high"; Color = (Get-ThemeColor -ColorName "Warning") }
+            @{ Text = "$($sender.Tag.Medium) medium"; Color = (Get-ThemeColor -ColorName "Medium") }
+            @{ Text = "$($sender.Tag.Low) low"; Color = (Get-ThemeColor -ColorName "Success") }
+        )
+        $x = 0
+        foreach ($segment in $segments) {
+            $size = [System.Windows.Forms.TextRenderer]::MeasureText($g, $segment.Text, $font, (New-Object System.Drawing.Size(600, 30)), $flags)
+            $rect = New-Object System.Drawing.Rectangle($x, 0, ($size.Width + 2), $sender.Height)
+            [System.Windows.Forms.TextRenderer]::DrawText($g, $segment.Text, $font, $rect, $segment.Color, $flags)
+            $x += $size.Width + [int](22 * $scale)
+        }
+    })
+    $statusBarPanel.Controls.Add($Global:StatusSummaryPanel)
+
+    $Global:StatusRightLabel = New-Object System.Windows.Forms.Label
+    $Global:StatusRightLabel.Text = "Batch $($ConfigData.BatchSize) $($script:GlyphDot) Cache $($ConfigData.CacheTimeout)s"
+    $Global:StatusRightLabel.Font = Get-GuiFont -Family "Consolas" -Size 9
+    $Global:StatusRightLabel.ForeColor = Get-ThemeColor -ColorName "TextSecondary"
+    $Global:StatusRightLabel.Tag = [PSCustomObject]@{ ColorName = "TextSecondary" }
+    $Global:StatusRightLabel.AutoSize = $false
+    $Global:StatusRightLabel.TextAlign = "MiddleRight"
+    $Global:StatusRightLabel.Size = New-Object System.Drawing.Size(220, 43)
+    $Global:StatusRightLabel.Location = New-Object System.Drawing.Point(748, 1)
+    $statusBarPanel.Controls.Add($Global:StatusRightLabel)
     $form.Controls.Add($statusBarPanel)
 
-    #──────────────────────────────────────────────────────────────
-    # ROW 1: SETUP BUTTONS WITH EMOJIS
-    #──────────────────────────────────────────────────────────────
+    #--------------------------------------------------------------
+    # 01 CONNECT
+    #--------------------------------------------------------------
 
-    # Section header for Setup Controls
-    $setupHeader = New-Object System.Windows.Forms.Label
-    $setupHeader.Text = "≡ Configuration & Connection"
-    $setupHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-    $setupHeader.ForeColor = Get-ThemeColor -ColorName "Primary"
-    $setupHeader.Size = New-Object System.Drawing.Size(560, 22)
-    $setupHeader.Location = New-Object System.Drawing.Point(30, 260)
-    $form.Controls.Add($setupHeader)
+    New-GuiSectionHeader -Parent $form -Number "01" -Title "Connect" -Y 232
 
-    # Hairline separator below section header
-    $sep1 = New-Object System.Windows.Forms.Panel
-    $sep1.Size = New-Object System.Drawing.Size(780, 1)
-    $sep1.Location = New-Object System.Drawing.Point(20, 282)
-    $sep1.BackColor = Get-ThemeColor -ColorName "Border"
-    $sep1.Tag = "separator"
-    $form.Controls.Add($sep1)
-
-    $btnWorkDir = New-GuiButton -text "📂 Set Working Directory" -x 30 -y 285 -width 146 -height 38 `
-        -ColorType "Secondary" -action {
+    $btnWorkDir = New-GuiCardButton -Title "Set working directory" -Hint "Where results are saved" -X 32 -Y 262 -Width 176 -Height 56 -Action {
         $folder = Get-Folder -initialDirectory $ConfigData.WorkDir
         if ($folder) {
             Update-WorkingDirectoryDisplay -NewWorkDir $folder
             Update-GuiStatus "[OK] Working directory updated successfully" (Get-ThemeColor -ColorName "Success")
-            
+
             if ($Global:ConnectionState.IsConnected) {
                 [System.Windows.Forms.MessageBox]::Show(
                     "Working directory updated to:`n$folder`n`n" +
@@ -12033,16 +11891,16 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnWorkDir)
 
-    $btnDateRange = New-GuiButton -text "► Change Date Range" -x 186 -y 285 -width 146 -height 38 `
-        -ColorType "Accent" -action {
+    $btnDateRange = New-GuiCardButton -Title "Change date range" -Hint "$($ConfigData.DateRange) days back" -X 222 -Y 262 -Width 176 -Height 56 -Action {
         $newRange = Get-DateRangeInput -CurrentValue $ConfigData.DateRange
         if ($newRange -ne $null) {
             $oldRange = $ConfigData.DateRange
             $ConfigData.DateRange = $newRange
-            $Global:DateRangeLabel.Text = "► Date Range: $($ConfigData.DateRange) days back"
+            $Global:DateRangeLabel.Text = "$($ConfigData.DateRange) days back"
             $Global:DateRangeLabel.Refresh()
+            Set-GuiCardHint -Card $btnDateRange -Hint "$($ConfigData.DateRange) days back"
             Update-GuiStatus "[OK] Date range updated from $oldRange to $newRange days" (Get-ThemeColor -ColorName "Success")
-            
+
             [System.Windows.Forms.MessageBox]::Show(
                 "Date range updated successfully!`n`nOld range: $oldRange days`nNew range: $newRange days`n`n" +
                 "Note: This will affect all future data collection operations.",
@@ -12054,12 +11912,9 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnDateRange)
 
-    $btnConnectText = if ($Global:ConnectionState.IsConnected) { "🔄 Reconnect" } else { "🔌 Connect to Microsoft Graph" }
-    $btnConnect = New-GuiButton -text $btnConnectText -x 342 -y 285 -width 146 -height 38 `
-        -ColorType "Primary" -action {
+    $btnConnect = New-GuiCardButton -Title "Connect to Microsoft Graph" -Hint "Sign in to your tenant" -X 412 -Y 262 -Width 176 -Height 56 -TitleSize 9 -Action {
         $btnConnect.Enabled = $false
-        $originalText = $btnConnect.Text
-        $btnConnect.Text = "⏳ Connecting..."
+        $btnConnect.Text = "Connecting..."
 
         try {
             $connected = Connect-TenantServices
@@ -12072,17 +11927,17 @@ function Show-MainGUI {
         }
         finally {
             $btnConnect.Enabled = $true
-            # Reflect current connection state in button label
-            $btnConnect.Text = if ($Global:ConnectionState.IsConnected) { "🔄 Reconnect" } else { "🔌 Connect to Microsoft Graph" }
+            # Title and hint follow the connection state (Reconnect / Connect to Microsoft Graph)
+            Update-ConnectionStatus
         }
     }
+    $Global:ConnectButton = $btnConnect
     $form.Controls.Add($btnConnect)
 
-    $btnDisconnect = New-GuiButton -text "🔴 Disconnect" -x 498 -y 285 -width 146 -height 38 `
-        -ColorType "Danger" -action {
+    $btnDisconnect = New-GuiCardButton -Title "Disconnect" -Hint "End session" -X 602 -Y 262 -Width 176 -Height 56 -Action {
         $btnDisconnect.Enabled = $false
         $originalText = $btnDisconnect.Text
-        $btnDisconnect.Text = "⏳ Disconnecting..."
+        $btnDisconnect.Text = "Disconnecting..."
 
         try {
             Disconnect-GraphSafely -ShowMessage $true
@@ -12094,241 +11949,99 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnDisconnect)
 
-    $btnCheckVersion = New-GuiButton -text "🔄 Check Version" -x 654 -y 285 -width 146 -height 38 `
-        -ColorType "Accent" -action {
+    $btnCheckVersion = New-GuiCardButton -Title "Check version" -Hint "Compare with GitHub" -X 792 -Y 262 -Width 176 -Height 56 -Action {
         Test-ScriptVersion -ShowMessageBox $true
     }
     $form.Controls.Add($btnCheckVersion)
 
-    #──────────────────────────────────────────────────────────────
-    # ROW 2: DATA COLLECTION BUTTONS (PART 1) WITH EMOJIS
-    #──────────────────────────────────────────────────────────────
+    # Reflect any pre-form authentication in the pill, session cells and Connect card
+    Update-ConnectionStatus
 
-    # Section header for Data Collection
-    $dataCollectionHeader = New-Object System.Windows.Forms.Label
-    $dataCollectionHeader.Text = "▪ Data Collection"
-    $dataCollectionHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-    $dataCollectionHeader.ForeColor = Get-ThemeColor -ColorName "Success"
-    $dataCollectionHeader.Size = New-Object System.Drawing.Size(560, 22)
-    $dataCollectionHeader.Location = New-Object System.Drawing.Point(30, 340)
-    $form.Controls.Add($dataCollectionHeader)
+    #--------------------------------------------------------------
+    # 02 COLLECT: one tile per collector, "Run all collection" at the end of the header row
+    #--------------------------------------------------------------
 
-    # Hairline separator below section header
-    $sep2 = New-Object System.Windows.Forms.Panel
-    $sep2.Size = New-Object System.Drawing.Size(780, 1)
-    $sep2.Location = New-Object System.Drawing.Point(20, 362)
-    $sep2.BackColor = Get-ThemeColor -ColorName "Border"
-    $sep2.Tag = "separator"
-    $form.Controls.Add($sep2)
+    New-GuiSectionHeader -Parent $form -Number "02" -Title "Collect" -Y 342 -RightReserve 176
 
-    $btnSignIn = New-GuiButton -text "👤 Collect Sign-In Data" -x 30 -y 365 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-        
-        $btnSignIn.Enabled = $false
-        $originalText = $btnSignIn.Text
-        $btnSignIn.Text = "⏳ Running..."
-        
-        try {
-            $result = Get-TenantSignInData
-            if ($result) {
-                Update-GuiStatus "[OK] Sign-in data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnSignIn.Enabled = $true
-            $btnSignIn.Text = $originalText
-        }
+    $tileX = @(32, 271, 510, 749)
+    $tileY = @(382, 470)
+
+    $tileSignIn = New-GuiCollectorTile -Key "SignIns" -Title "Sign-in data" -X $tileX[0] -Y $tileY[0] -Action {
+        Invoke-GuiCollectorTile -Key "SignIns" -Collect { Get-TenantSignInData } `
+            -Success { param($r) "[OK] Sign-in data collected! Processed $(@($r).Count) records." }
     }
-    $form.Controls.Add($btnSignIn)
+    $form.Controls.Add($tileSignIn)
 
-    $btnAudit = New-GuiButton -text "📋 Collect Admin Audits" -x 225 -y 365 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-        
-        $btnAudit.Enabled = $false
-        $originalText = $btnAudit.Text
-        $btnAudit.Text = "⏳ Running..."
-        
-        try {
-            $result = Get-AdminAuditData
-            if ($result) {
-                Update-GuiStatus "[OK] Admin audit data collected! Processed $($result.Count) records." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnAudit.Enabled = $true
-            $btnAudit.Text = $originalText
-        }
+    $tileAudit = New-GuiCollectorTile -Key "AdminAudit" -Title "Admin audits" -X $tileX[1] -Y $tileY[0] -Action {
+        Invoke-GuiCollectorTile -Key "AdminAudit" -Collect { Get-AdminAuditData } `
+            -Success { param($r) "[OK] Admin audit data collected! Processed $(@($r).Count) records." }
     }
-    $form.Controls.Add($btnAudit)
+    $form.Controls.Add($tileAudit)
 
-    $btnRules = New-GuiButton -text "✉ Collect Inbox Rules" -x 420 -y 365 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-        
-        $btnRules.Enabled = $false
-        $originalText = $btnRules.Text
-        $btnRules.Text = "⏳ Running..."
-        
-        try {
-            $result = Get-MailboxRules
-            if ($result) {
-                Update-GuiStatus "[OK] Inbox rules collected! Found $($result.Count) rules." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnRules.Enabled = $true
-            $btnRules.Text = $originalText
-        }
+    $tileRules = New-GuiCollectorTile -Key "InboxRules" -Title "Inbox rules" -X $tileX[2] -Y $tileY[0] -Action {
+        Invoke-GuiCollectorTile -Key "InboxRules" -Collect { Get-MailboxRules } `
+            -Success { param($r) "[OK] Inbox rules collected! Found $(@($r).Count) rules." }
     }
-    $form.Controls.Add($btnRules)
+    $form.Controls.Add($tileRules)
 
-    $btnDelegation = New-GuiButton -text "👥 Collect Delegations" -x 615 -y 365 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-        
-        $btnDelegation.Enabled = $false
-        $originalText = $btnDelegation.Text
-        $btnDelegation.Text = "⏳ Running..."
-        
-        try {
-            $result = Get-MailboxDelegationData
-            if ($result) {
-                Update-GuiStatus "[OK] Delegation data collected! Found $($result.Count) delegations." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnDelegation.Enabled = $true
-            $btnDelegation.Text = $originalText
-        }
+    $tileDelegation = New-GuiCollectorTile -Key "MailboxDelegation" -Title "Delegations" -X $tileX[3] -Y $tileY[0] -Action {
+        Invoke-GuiCollectorTile -Key "MailboxDelegation" -Collect { Get-MailboxDelegationData } `
+            -Success { param($r) "[OK] Delegation data collected! Found $(@($r).Count) delegations." }
     }
-    $form.Controls.Add($btnDelegation)
+    $form.Controls.Add($tileDelegation)
 
-    #──────────────────────────────────────────────────────────────
-    # ROW 3: DATA COLLECTION BUTTONS (PART 2) WITH EMOJIS
-    #──────────────────────────────────────────────────────────────
-
-    # Micro-separator between data collection rows for visual rhythm
-    $sep4 = New-Object System.Windows.Forms.Panel
-    $sep4.Size = New-Object System.Drawing.Size(780, 1)
-    $sep4.Location = New-Object System.Drawing.Point(20, 408)
-    $sep4.BackColor = Get-ThemeColor -ColorName "Border"
-    $sep4.Tag = "separator"
-    $form.Controls.Add($sep4)
-
-    $btnApps = New-GuiButton -text "🔐 Collect App Registrations" -x 30 -y 418 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-        
-        $btnApps.Enabled = $false
-        $originalText = $btnApps.Text
-        $btnApps.Text = "⏳ Running..."
-        
-        try {
-            $result = Get-AppRegistrationData
-            if ($result) {
-                Update-GuiStatus "[OK] App registration data collected! Found $($result.Count) apps." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnApps.Enabled = $true
-            $btnApps.Text = $originalText
-        }
+    $tileApps = New-GuiCollectorTile -Key "AppRegistrations" -Title "App registrations" -X $tileX[0] -Y $tileY[1] -Action {
+        Invoke-GuiCollectorTile -Key "AppRegistrations" -Collect { Get-AppRegistrationData } `
+            -Success { param($r) "[OK] App registration data collected! Found $(@($r).Count) apps." }
     }
-    $form.Controls.Add($btnApps)
+    $form.Controls.Add($tileApps)
 
-    $btnConditionalAccess = New-GuiButton -text "🔒 Conditional Access" -x 225 -y 418 -width 185 -height 38 `
-        -ColorType "Success" -action {
-        if (-not $Global:ConnectionState.IsConnected) {
-            Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
-            return
-        }
-
-        $btnConditionalAccess.Enabled = $false
-        $originalText = $btnConditionalAccess.Text
-        $btnConditionalAccess.Text = "⏳ Running..."
-
-        try {
-            $result = Get-ConditionalAccessData
-            if ($result) {
-                Update-GuiStatus "[OK] Conditional access data collected! Found $($result.Count) policies." (Get-ThemeColor -ColorName "Success")
-            }
-        }
-        finally {
-            $btnConditionalAccess.Enabled = $true
-            $btnConditionalAccess.Text = $originalText
-        }
+    $tileConditionalAccess = New-GuiCollectorTile -Key "ConditionalAccess" -Title "Conditional access" -X $tileX[1] -Y $tileY[1] -Action {
+        Invoke-GuiCollectorTile -Key "ConditionalAccess" -Collect { Get-ConditionalAccessData } `
+            -Success { param($r) "[OK] Conditional access data collected! Found $(@($r).Count) policies." }
     }
-    $form.Controls.Add($btnConditionalAccess)
+    $form.Controls.Add($tileConditionalAccess)
 
-    $btnETRAnalysis = New-GuiButton -text "🔍 Analyze ETR Files" -x 420 -y 418 -width 185 -height 38 `
-        -ColorType "Accent" -action {
-        $btnETRAnalysis.Enabled = $false
-        $originalText = $btnETRAnalysis.Text
-        $btnETRAnalysis.Text = "⏳ Analyzing ETR..."
-        
-        try {
+    $tileETR = New-GuiCollectorTile -Key "ETR" -Title "ETR files" -X $tileX[2] -Y $tileY[1] -Action {
+        Invoke-GuiCollectorTile -Key "ETR" -RequireConnection $false -Collect {
             $riskyIPs = @()
             $signInDataPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData.csv"
             if (Test-Path $signInDataPath) {
                 try {
                     $signInData = Import-Csv -Path $signInDataPath
-                    $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } | 
+                    $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } |
                                Select-Object -ExpandProperty IP -Unique
                     Write-Log "Using $($riskyIPs.Count) risky IPs for ETR correlation" -Level "Info"
                 } catch {
                     Write-Log "Could not load sign-in data for IP correlation: $($_.Exception.Message)" -Level "Warning"
                 }
             }
-            
+
+            $etrStart = Get-Date
             $result = Analyze-ETRData -RiskyIPs $riskyIPs
             if ($result) {
                 $criticalCount = ($result | Where-Object { $_.RiskLevel -eq "Critical" }).Count
                 $highCount = ($result | Where-Object { $_.RiskLevel -eq "High" }).Count
                 Update-GuiStatus "[OK] ETR analysis completed! Found $criticalCount critical and $highCount high-risk patterns." (Get-ThemeColor -ColorName "Success")
             }
-        }
-        finally {
-            $btnETRAnalysis.Enabled = $true
-            $btnETRAnalysis.Text = $originalText
+            $result
         }
     }
-    $form.Controls.Add($btnETRAnalysis)
+    $form.Controls.Add($tileETR)
 
-    $btnMessageTrace = New-GuiButton -text "📧 Collect Message Trace" -x 615 -y 418 -width 185 -height 38 `
-        -ColorType "Accent" -action {
-        $btnMessageTrace.Enabled = $false
-        $originalText = $btnMessageTrace.Text
-        $btnMessageTrace.Text = "⏳ Running Trace..."
-        
-        try {
+    $tileMessageTrace = New-GuiCollectorTile -Key "MessageTrace" -Title "Message trace" -X $tileX[3] -Y $tileY[1] -Action {
+        Invoke-GuiCollectorTile -Key "MessageTrace" -RequireConnection $false -Collect {
             $result = Get-MessageTraceExchangeOnline
             if ($result) {
-                Update-GuiStatus "[OK] Message trace collected! Processed $($result.Count) messages." (Get-ThemeColor -ColorName "Success")
-                
+                Update-GuiStatus "[OK] Message trace collected! Processed $(@($result).Count) messages." (Get-ThemeColor -ColorName "Success")
+
                 $runAnalysis = [System.Windows.Forms.MessageBox]::Show(
-                    "Message trace collection complete!`n`n$($result.Count) messages saved.`n`nRun ETR analysis now?",
+                    "Message trace collection complete!`n`n$(@($result).Count) messages saved.`n`nRun ETR analysis now?",
                     "Run Analysis?",
                     "YesNo",
                     "Question"
                 )
-                
+
                 if ($runAnalysis -eq "Yes") {
                     $riskyIPs = @()
                     $signInDataPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData.csv"
@@ -12339,105 +12052,94 @@ function Show-MainGUI {
                                        Select-Object -ExpandProperty IP -Unique
                         } catch { }
                     }
-                    Analyze-ETRData -RiskyIPs $riskyIPs
+                    $etrStart = Get-Date
+                    $etrResult = Analyze-ETRData -RiskyIPs $riskyIPs
+                    if ($etrResult) { Complete-GuiTile -Key "ETR" -Since $etrStart -Count @($etrResult).Count }
                 }
             }
-        }
-        finally {
-            $btnMessageTrace.Enabled = $true
-            $btnMessageTrace.Text = $originalText
+            $result
         }
     }
-    $form.Controls.Add($btnMessageTrace)
+    $form.Controls.Add($tileMessageTrace)
 
-    #──────────────────────────────────────────────────────────────
-    # ROW 4: BULK OPERATIONS WITH EMOJIS
-    #──────────────────────────────────────────────────────────────
-
-    # Section header for Analysis & Operations
-    $operationsHeader = New-Object System.Windows.Forms.Label
-    $operationsHeader.Text = "▪ Analysis & Operations"
-    $operationsHeader.Font = New-Object System.Drawing.Font("Segoe UI", 9, [System.Drawing.FontStyle]::Bold)
-    $operationsHeader.ForeColor = Get-ThemeColor -ColorName "Warning"
-    $operationsHeader.Size = New-Object System.Drawing.Size(560, 22)
-    $operationsHeader.Location = New-Object System.Drawing.Point(30, 468)
-    $form.Controls.Add($operationsHeader)
-
-    # Hairline separator below section header
-    $sep3 = New-Object System.Windows.Forms.Panel
-    $sep3.Size = New-Object System.Drawing.Size(780, 1)
-    $sep3.Location = New-Object System.Drawing.Point(20, 490)
-    $sep3.BackColor = Get-ThemeColor -ColorName "Border"
-    $sep3.Tag = "separator"
-    $form.Controls.Add($sep3)
-
-    $btnRunAll = New-GuiButton -text "🚀 Run All Data Collection" -x 30 -y 493 -width 245 -height 45 `
-        -ColorType "Warning" -action {
+    $btnRunAll = New-GuiCardButton -Title "Run all collection" -X 808 -Y 338 -Width 160 -Height 30 -Variant Primary -TitleSize 9 -Action {
         if (-not $Global:ConnectionState.IsConnected) {
             Update-GuiStatus "[ERROR] Please connect to Microsoft Graph first!" (Get-ThemeColor -ColorName "Danger")
             return
         }
-        
+
         $btnRunAll.Enabled = $false
         $originalText = $btnRunAll.Text
-        
+        foreach ($tile in @($Global:GuiTiles.Values)) { $tile.Enabled = $false }
+
         $tasks = @(
-            @{Name="Sign-In Data"; Function="Get-TenantSignInData"},
-            @{Name="Admin Audits"; Function="Get-AdminAuditData"},
-            @{Name="Inbox Rules"; Function="Get-MailboxRules"},
-            @{Name="MFA Status Audit"; Function="Get-MFAStatusAudit"},
-            @{Name="Failed Login Analysis"; Function="Get-FailedLoginPatterns"},
-            @{Name="Password Change Analysis"; Function="Get-RecentPasswordChanges"},
-            @{Name="Delegations"; Function="Get-MailboxDelegationData"},
-            @{Name="App Registrations"; Function="Get-AppRegistrationData"},
-            @{Name="Conditional Access"; Function="Get-ConditionalAccessData"},
-            @{Name="Message Trace"; Function="Get-MessageTraceExchangeOnline"},
-            @{Name="ETR Analysis"; Function="Analyze-ETRData"}
+            @{Name="Sign-In Data"; Function="Get-TenantSignInData"; Tile="SignIns"},
+            @{Name="Admin Audits"; Function="Get-AdminAuditData"; Tile="AdminAudit"},
+            @{Name="Inbox Rules"; Function="Get-MailboxRules"; Tile="InboxRules"},
+            @{Name="MFA Status Audit"; Function="Get-MFAStatusAudit"; Tile=$null},
+            @{Name="Failed Login Analysis"; Function="Get-FailedLoginPatterns"; Tile=$null},
+            @{Name="Password Change Analysis"; Function="Get-RecentPasswordChanges"; Tile=$null},
+            @{Name="Delegations"; Function="Get-MailboxDelegationData"; Tile="MailboxDelegation"},
+            @{Name="App Registrations"; Function="Get-AppRegistrationData"; Tile="AppRegistrations"},
+            @{Name="Conditional Access"; Function="Get-ConditionalAccessData"; Tile="ConditionalAccess"},
+            @{Name="Message Trace"; Function="Get-MessageTraceExchangeOnline"; Tile="MessageTrace"},
+            @{Name="ETR Analysis"; Function="Analyze-ETRData"; Tile="ETR"}
         )
         $completed = 0
-        
-        Update-GuiStatus "⏳ Starting comprehensive data collection..." (Get-ThemeColor -ColorName "Warning")
-        
-        foreach ($task in $tasks) {
-            $btnRunAll.Text = "⏳ Running: $($task.Name)..."
-            Update-GuiStatus "⏳ Executing: $($task.Name)..." (Get-ThemeColor -ColorName "Warning")
-            
-            try {
-                switch ($task.Function) {
-                    "Get-TenantSignInData" { Get-TenantSignInData | Out-Null }
-                    "Get-AdminAuditData" { Get-AdminAuditData | Out-Null }
-                    "Get-MailboxRules" { Get-MailboxRules | Out-Null }
-                    "Get-MFAStatusAudit" { Get-MFAStatusAudit | Out-Null }
-                    "Get-FailedLoginPatterns" { Get-FailedLoginPatterns | Out-Null }
-                    "Get-RecentPasswordChanges" { Get-RecentPasswordChanges | Out-Null }
-                    "Get-MailboxDelegationData" { Get-MailboxDelegationData | Out-Null }
-                    "Get-AppRegistrationData" { Get-AppRegistrationData | Out-Null }
-                    "Get-ConditionalAccessData" { Get-ConditionalAccessData | Out-Null }
-                    "Get-MessageTraceExchangeOnline" { Get-MessageTraceExchangeOnline | Out-Null }
-                    "Analyze-ETRData" { 
-                        $riskyIPs = @()
-                        $signInDataPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData.csv"
-                        if (Test-Path $signInDataPath) {
-                            try {
-                                $signInData = Import-Csv -Path $signInDataPath
-                                $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } |
-                                           Select-Object -ExpandProperty IP -Unique
-                            } catch { }
+
+        Update-GuiStatus "Starting comprehensive data collection..." (Get-ThemeColor -ColorName "Warning")
+
+        try {
+            foreach ($task in $tasks) {
+                $btnRunAll.Text = "Running: $($task.Name)..."
+                Update-GuiStatus "Executing: $($task.Name)..." (Get-ThemeColor -ColorName "Warning")
+                $taskStart = Get-Date
+                if ($task.Tile) { Set-GuiTileState -Key $task.Tile -State "running" -Text "Collecting$($script:GlyphEllipsis)" }
+
+                try {
+                    $taskResult = $null
+                    switch ($task.Function) {
+                        "Get-TenantSignInData" { $taskResult = Get-TenantSignInData }
+                        "Get-AdminAuditData" { $taskResult = Get-AdminAuditData }
+                        "Get-MailboxRules" { $taskResult = Get-MailboxRules }
+                        "Get-MFAStatusAudit" { Get-MFAStatusAudit | Out-Null }
+                        "Get-FailedLoginPatterns" { Get-FailedLoginPatterns | Out-Null }
+                        "Get-RecentPasswordChanges" { Get-RecentPasswordChanges | Out-Null }
+                        "Get-MailboxDelegationData" { $taskResult = Get-MailboxDelegationData }
+                        "Get-AppRegistrationData" { $taskResult = Get-AppRegistrationData }
+                        "Get-ConditionalAccessData" { $taskResult = Get-ConditionalAccessData }
+                        "Get-MessageTraceExchangeOnline" { $taskResult = Get-MessageTraceExchangeOnline }
+                        "Analyze-ETRData" {
+                            $riskyIPs = @()
+                            $signInDataPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData.csv"
+                            if (Test-Path $signInDataPath) {
+                                try {
+                                    $signInData = Import-Csv -Path $signInDataPath
+                                    $riskyIPs = $signInData | Where-Object { $_.IsUnusualLocation -eq "True" -and -not [string]::IsNullOrEmpty($_.IP) } |
+                                               Select-Object -ExpandProperty IP -Unique
+                                } catch { }
+                            }
+                            $taskResult = Analyze-ETRData -RiskyIPs $riskyIPs
                         }
-                        Analyze-ETRData -RiskyIPs $riskyIPs | Out-Null
                     }
+                    $completed++
+                    if ($task.Tile) {
+                        Complete-GuiTile -Key $task.Tile -Since $taskStart -Count $(if ($taskResult) { @($taskResult).Count } else { $null })
+                    }
+                    Update-GuiStatus "[OK] Completed: $($task.Name) ($completed/$($tasks.Count))" (Get-ThemeColor -ColorName "Success")
                 }
-                $completed++
-                Update-GuiStatus "[OK] Completed: $($task.Name) ($completed/$($tasks.Count))" (Get-ThemeColor -ColorName "Success")
-            }
-            catch {
-                Write-Log "Error in $($task.Name): $($_.Exception.Message)" -Level "Error"
-                Update-GuiStatus "[ERROR] Error in $($task.Name): $($_.Exception.Message)" (Get-ThemeColor -ColorName "Danger")
+                catch {
+                    Write-Log "Error in $($task.Name): $($_.Exception.Message)" -Level "Error"
+                    if ($task.Tile) { Set-GuiTileState -Key $task.Tile -State "error" -Text "Failed" -Note $_.Exception.Message }
+                    Update-GuiStatus "[ERROR] Error in $($task.Name): $($_.Exception.Message)" (Get-ThemeColor -ColorName "Danger")
+                }
             }
         }
-        
-        $btnRunAll.Enabled = $true
-        $btnRunAll.Text = $originalText
+        finally {
+            foreach ($tile in @($Global:GuiTiles.Values)) { $tile.Enabled = $true }
+            $btnRunAll.Enabled = $true
+            $btnRunAll.Text = $originalText
+        }
 
         # Determine status based on completion rate
         $allSucceeded = ($completed -eq $tasks.Count)
@@ -12458,34 +12160,40 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnRunAll)
 
-    $btnAnalyze = New-GuiButton -text "🔎 Analyze Data" -x 290 -y 493 -width 180 -height 45 `
-        -ColorType "Danger" -action {
+    #--------------------------------------------------------------
+    # 03 ANALYZE
+    #--------------------------------------------------------------
+
+    New-GuiSectionHeader -Parent $form -Number "03" -Title "Analyze" -Y 568
+
+    $btnAnalyze = New-GuiCardButton -Title "Analyze data" -X 32 -Y 598 -Width 302 -Height 52 -Variant Primary -TitleSize 11 -Action {
         $btnAnalyze.Enabled = $false
         $originalText = $btnAnalyze.Text
-        $btnAnalyze.Text = "⏳ Analyzing..."
-        
+        $btnAnalyze.Text = "Analyzing..."
+
         $reportPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "SecurityReport.html"
-        
+
         try {
-            Update-GuiStatus "⏳ Starting comprehensive security analysis..." (Get-ThemeColor -ColorName "Warning")
+            Update-GuiStatus "Starting comprehensive security analysis..." (Get-ThemeColor -ColorName "Warning")
             $results = Invoke-CompromiseDetection -ReportPath $reportPath
-            
+
             if ($results) {
-                $critical = ($results | Where-Object { $_.RiskLevel -eq "Critical" }).Count
-                $high = ($results | Where-Object { $_.RiskLevel -eq "High" }).Count
-                $medium = ($results | Where-Object { $_.RiskLevel -eq "Medium" }).Count
-                
-                Update-GuiStatus "[OK] Analysis completed - $critical critical, $high high, $medium medium risk users" (Get-ThemeColor -ColorName "Success")
-                
+                $critical = @($results | Where-Object { $_.RiskLevel -eq "Critical" }).Count
+                $high = @($results | Where-Object { $_.RiskLevel -eq "High" }).Count
+                $medium = @($results | Where-Object { $_.RiskLevel -eq "Medium" }).Count
+                $low = @($results | Where-Object { $_.RiskLevel -eq "Low" }).Count
+
+                Update-GuiRiskSummary -Critical $critical -High $high -Medium $medium -Low $low
+
                 $result = [System.Windows.Forms.MessageBox]::Show(
                     "Security Analysis Completed!`n`n" +
-                    "Risk Summary:`n• Critical Risk: $critical users`n• High Risk: $high users`n• Medium Risk: $medium users`n`n" +
+                    "Risk Summary:`n- Critical Risk: $critical users`n- High Risk: $high users`n- Medium Risk: $medium users`n`n" +
                     "Total Users Analyzed: $($results.Count)`n`nOpen the detailed HTML report now?",
                     "Analysis Complete",
                     "YesNo",
                     "Information"
                 )
-                
+
                 if ($result -eq "Yes") {
                     Start-Process $reportPath
                 }
@@ -12506,12 +12214,11 @@ function Show-MainGUI {
     }
     $form.Controls.Add($btnAnalyze)
 
-    $btnViewReports = New-GuiButton -text "📊 View Reports" -x 485 -y 493 -width 155 -height 45 `
-        -ColorType "Accent" -action {
-        Update-GuiStatus "🔍 Looking for reports in working directory..." (Get-ThemeColor -ColorName "Warning")
-        
-        $reports = Get-ChildItem -Path $ConfigData.WorkDir -Filter "*.html" -ErrorAction SilentlyContinue
-        
+    $btnViewReports = New-GuiCardButton -Title "View reports" -X 349 -Y 598 -Width 302 -Height 52 -TitleSize 11 -Action {
+        Update-GuiStatus "Looking for reports in working directory..." (Get-ThemeColor -ColorName "Warning")
+
+        $reports = @(Get-ChildItem -Path $ConfigData.WorkDir -Filter "*.html" -ErrorAction SilentlyContinue)
+
         if ($reports.Count -eq 0) {
             Update-GuiStatus "[WARNING] No reports found in working directory" (Get-ThemeColor -ColorName "Warning")
             [System.Windows.Forms.MessageBox]::Show(
@@ -12523,7 +12230,7 @@ function Show-MainGUI {
             )
             return
         }
-        
+
         if ($reports.Count -eq 1) {
             Update-GuiStatus "[OK] Opening report: $($reports[0].Name)" (Get-ThemeColor -ColorName "Success")
             Start-Process $reports[0].FullName
@@ -12536,69 +12243,49 @@ function Show-MainGUI {
             $reportForm.MaximizeBox = $false
             $reportForm.MinimizeBox = $false
             $reportForm.BackColor = Get-ThemeColor -ColorName "Background"
-            
+
             $reportLabel = New-Object System.Windows.Forms.Label
-            $reportLabel.Text = "📊 Select a report to open:"
-            $reportLabel.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
+            $reportLabel.Text = "Select a report to open:"
+            $reportLabel.Font = Get-GuiFont -Family "Segoe UI Semibold" -Size 10
             $reportLabel.Size = New-Object System.Drawing.Size(560, 30)
             $reportLabel.Location = New-Object System.Drawing.Point(20, 20)
             $reportLabel.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
             $reportForm.Controls.Add($reportLabel)
-            
+
             $listBox = New-Object System.Windows.Forms.ListBox
             $listBox.Size = New-Object System.Drawing.Size(560, 280)
             $listBox.Location = New-Object System.Drawing.Point(20, 50)
-            $listBox.Font = New-Object System.Drawing.Font("Segoe UI", 9)
+            $listBox.Font = Get-GuiFont -Family "Segoe UI" -Size 9
             $listBox.BackColor = Get-ThemeColor -ColorName "Surface"
             $listBox.ForeColor = Get-ThemeColor -ColorName "TextPrimary"
-            
+            $listBox.BorderStyle = [System.Windows.Forms.BorderStyle]::FixedSingle
+
             foreach ($report in $reports) {
                 $item = "$($report.Name) ($(Get-Date $report.LastWriteTime -Format 'yyyy-MM-dd HH:mm:ss'))"
                 $listBox.Items.Add($item) | Out-Null
             }
-            
+
             $reportForm.Controls.Add($listBox)
-            
-            $buttonPanel = New-Object System.Windows.Forms.Panel
-            $buttonPanel.Size = New-Object System.Drawing.Size(560, 50)
-            $buttonPanel.Location = New-Object System.Drawing.Point(20, 340)
-            $buttonPanel.BackColor = Get-ThemeColor -ColorName "Background"
-            $reportForm.Controls.Add($buttonPanel)
-            
-            $openBtn = New-Object System.Windows.Forms.Button
-            $openBtn.Text = "[OK] Open Selected Report"
-            $openBtn.Size = New-Object System.Drawing.Size(180, 35)
-            $openBtn.Location = New-Object System.Drawing.Point(270, 10)
-            $openBtn.BackColor = Get-ThemeColor -ColorName "Primary"
-            $openBtn.ForeColor = [System.Drawing.Color]::White
-            $openBtn.FlatStyle = "Flat"
-            $openBtn.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
+
+            $openBtn = New-GuiFlatButton -Text "Open selected report" -X 340 -Y 340 -Width 150 -Height 32 -Primary $true
             $openBtn.Add_Click({
                 if ($listBox.SelectedIndex -ge 0) {
                     Start-Process $reports[$listBox.SelectedIndex].FullName
                     $reportForm.Close()
                 }
             })
-            $buttonPanel.Controls.Add($openBtn)
-            
-            $cancelBtn = New-Object System.Windows.Forms.Button
-            $cancelBtn.Text = "[X] Cancel"
-            $cancelBtn.Size = New-Object System.Drawing.Size(100, 35)
-            $cancelBtn.Location = New-Object System.Drawing.Point(460, 10)
-            $cancelBtn.BackColor = Get-ThemeColor -ColorName "Secondary"
-            $cancelBtn.ForeColor = [System.Drawing.Color]::White
-            $cancelBtn.FlatStyle = "Flat"
-            $cancelBtn.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 9, [System.Drawing.FontStyle]::Bold)
+            $reportForm.Controls.Add($openBtn)
+
+            $cancelBtn = New-GuiFlatButton -Text "Cancel" -X 500 -Y 340 -Width 80 -Height 32
             $cancelBtn.Add_Click({ $reportForm.Close() })
-            $buttonPanel.Controls.Add($cancelBtn)
-            
+            $reportForm.Controls.Add($cancelBtn)
+
             [void]$reportForm.ShowDialog()
         }
     }
     $form.Controls.Add($btnViewReports)
 
-    $btnExit = New-GuiButton -text "🚪 Exit Application" -x 655 -y 493 -width 145 -height 45 `
-        -ColorType "Secondary" -action {
+    $btnExit = New-GuiCardButton -Title "Exit" -X 666 -Y 598 -Width 302 -Height 52 -Variant Muted -TitleSize 11 -Action {
         $result = [System.Windows.Forms.MessageBox]::Show(
             "Are you sure you want to exit the application?`n`n" +
             "This will disconnect from Microsoft Graph and close the tool.",
@@ -12606,45 +12293,35 @@ function Show-MainGUI {
             "YesNo",
             "Question"
         )
-        
+
         if ($result -eq "Yes") {
-            Update-GuiStatus "⏳ Shutting down application..." (Get-ThemeColor -ColorName "Warning")
-            
+            Update-GuiStatus "Shutting down application..." (Get-ThemeColor -ColorName "Warning")
+
             if ($Global:ConnectionState.IsConnected) {
                 Disconnect-GraphSafely
             }
-            
+
             try {
                 Stop-Transcript -ErrorAction SilentlyContinue
             }
             catch { }
-            
+
             $form.Close()
         }
     }
     $form.Controls.Add($btnExit)
 
-    # Separator above AI row — visually anchors it as its own distinct zone
-    $sepAI = New-Object System.Windows.Forms.Panel
-    $sepAI.Size = New-Object System.Drawing.Size(780, 1)
-    $sepAI.Location = New-Object System.Drawing.Point(20, 545)
-    $sepAI.BackColor = Get-ThemeColor -ColorName "Border"
-    $sepAI.Tag = "separator"
-    $form.Controls.Add($sepAI)
-
-    # ── Hatz AI: Send to AI Analysis (optional, full-width row) ──
-    # Uses a distinctive indigo color to stand out as a premium/AI feature
-    $btnAIAnalysis = New-GuiButton -text "✦ AI Security Analysis  —  Powered by Hatz AI" -x 30 -y 550 -width 770 -height 55 `
-        -ColorType "Secondary" -action {
+    # Hatz AI: send the collected CSVs for AI analysis (optional, full-width row)
+    $btnAIAnalysis = New-GuiCardButton -Title "$($script:GlyphSparkle)  AI security analysis   Powered by Hatz AI" -X 32 -Y 666 -Width 936 -Height 52 -Variant Ai -TitleSize 11 -Action {
         $btnAIAnalysis.Enabled = $false
         $originalText = $btnAIAnalysis.Text
-        $btnAIAnalysis.Text = "⏳ Connecting to Hatz AI..."
-        Update-GuiStatus "⏳ Hatz AI: Retrieving API key..." (Get-ThemeColor -ColorName "Warning")
+        $btnAIAnalysis.Text = "Connecting to Hatz AI..."
+        Update-GuiStatus "Hatz AI: Retrieving API key..." (Get-ThemeColor -ColorName "Warning")
 
         try {
             $apiKey = Get-HatzApiKeyForM365
             if ([string]::IsNullOrWhiteSpace($apiKey)) {
-                Update-GuiStatus "[WARNING] Hatz AI: No API key provided — analysis cancelled" (Get-ThemeColor -ColorName "Warning")
+                Update-GuiStatus "[WARNING] Hatz AI: No API key provided - analysis cancelled" (Get-ThemeColor -ColorName "Warning")
                 return
             }
 
@@ -12653,7 +12330,7 @@ function Show-MainGUI {
                 Where-Object { $_.Length -gt 0 }).Count
 
             if ($csvCount -eq 0) {
-                Update-GuiStatus "[WARNING] Hatz AI: No CSV data files found — collect data first" (Get-ThemeColor -ColorName "Warning")
+                Update-GuiStatus "[WARNING] Hatz AI: No CSV data files found - collect data first" (Get-ThemeColor -ColorName "Warning")
                 [System.Windows.Forms.MessageBox]::Show(
                     "No CSV data files found in:`n$($ConfigData.WorkDir)`n`nPlease run data collection first.",
                     "No Data Available", "OK", "Warning")
@@ -12676,13 +12353,13 @@ function Show-MainGUI {
                 return
             }
 
-            $btnAIAnalysis.Text = "⏳ Analyzing $csvCount files..."
-            Update-GuiStatus "⏳ Hatz AI: Sending data for analysis — please wait..." (Get-ThemeColor -ColorName "Warning")
+            $btnAIAnalysis.Text = "Analyzing $csvCount files..."
+            Update-GuiStatus "Hatz AI: Sending data for analysis - please wait..." (Get-ThemeColor -ColorName "Warning")
 
             $analysisText, $errorMsg = Invoke-HatzSecurityAnalysis -ApiKey $apiKey -WorkDir $ConfigData.WorkDir
 
             if ($analysisText) {
-                Update-GuiStatus "[OK] Hatz AI analysis complete — displaying results" (Get-ThemeColor -ColorName "Success")
+                Update-GuiStatus "[OK] Hatz AI analysis complete - displaying results" (Get-ThemeColor -ColorName "Success")
                 Show-HatzAnalysisResult -AnalysisText $analysisText -WorkDir $ConfigData.WorkDir
             }
             else {
@@ -12697,33 +12374,37 @@ function Show-MainGUI {
             $btnAIAnalysis.Text = $originalText
         }
     }
-    # Override AI button with indigo — distinctive from orange action buttons
-    $aiIndigo       = [System.Drawing.Color]::FromArgb(88, 86, 214)
-    $aiIndigoDark   = [System.Drawing.Color]::FromArgb(68, 66, 180)
-    $btnAIAnalysis.BackColor = $aiIndigo
-    $btnAIAnalysis.FlatAppearance.BorderColor = $aiIndigoDark
-    $btnAIAnalysis.Font = New-Object System.Drawing.Font("Segoe UI Emoji", 10, [System.Drawing.FontStyle]::Bold)
-    $btnAIAnalysis.Tag  = [PSCustomObject]@{ BgColor = $aiIndigo; BorderColor = $aiIndigoDark }
     $form.Controls.Add($btnAIAnalysis)
 
-    #──────────────────────────────────────────────────────────────
+    #--------------------------------------------------------------
     # FORM EVENT HANDLERS
-    #──────────────────────────────────────────────────────────────
-    
+    #--------------------------------------------------------------
+
+    # Running collectors pulse their status dot (500 ms)
+    $Global:GuiPulseTimer = New-Object System.Windows.Forms.Timer
+    $Global:GuiPulseTimer.Interval = 500
+    $Global:GuiPulseTimer.Add_Tick({
+        $script:TilePulseHigh = -not $script:TilePulseHigh
+        foreach ($tile in @($Global:GuiTiles.Values)) {
+            if ($tile.Tag.State -eq "running") { $tile.Invalidate() }
+        }
+    })
+    $Global:GuiPulseTimer.Start()
+
     $form.Add_FormClosing({
         param($sender, $e)
-        
+
         try {
             if ($Global:ConnectionState.IsConnected) {
-                Update-GuiStatus "⏳ Form closing - disconnecting from Microsoft Graph..." (Get-ThemeColor -ColorName "Warning")
+                Update-GuiStatus "Form closing - disconnecting from Microsoft Graph..." (Get-ThemeColor -ColorName "Warning")
                 Disconnect-GraphSafely
             }
-            
+
             try {
                 Stop-Transcript -ErrorAction SilentlyContinue
             }
             catch { }
-            
+
             Write-Log "Application closed successfully" -Level "Info"
         }
         catch {
@@ -12732,6 +12413,14 @@ function Show-MainGUI {
     })
 
     $form.Add_FormClosed({
+        try {
+            if ($Global:GuiPulseTimer) {
+                $Global:GuiPulseTimer.Stop()
+                $Global:GuiPulseTimer.Dispose()
+            }
+        }
+        catch { }
+
         try {
             if (Get-MgContext -ErrorAction SilentlyContinue) {
                 Disconnect-MgGraph -ErrorAction SilentlyContinue
@@ -12743,12 +12432,13 @@ function Show-MainGUI {
     $form.Add_Shown({
         Test-ExistingGraphConnection | Out-Null
         Update-ConnectionStatus
-        
+        Initialize-GuiTileStates
+
         $versionCheck = Test-ScriptVersion -ShowMessageBox $false
         if ($versionCheck.IsLatest -eq $false) {
             Test-ScriptVersion -ShowMessageBox $true
         }
-        
+
         if ($Global:ConnectionState.IsConnected) {
             Update-GuiStatus "[OK] Application ready - Using existing Microsoft Graph connection" (Get-ThemeColor -ColorName "Success")
         } else {
@@ -12756,10 +12446,10 @@ function Show-MainGUI {
         }
     })
 
-    #──────────────────────────────────────────────────────────────
+    #--------------------------------------------------------------
     # SHOW THE FORM
-    #──────────────────────────────────────────────────────────────
-    
+    #--------------------------------------------------------------
+
     [void]$form.ShowDialog()
 }
 

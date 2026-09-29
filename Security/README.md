@@ -533,7 +533,7 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 
 ---
 
-## Get-M365SecurityAnalysis.ps1 (v11.18)
+## Get-M365SecurityAnalysis.ps1 (v12.0)
 
 See [CHANGELOG-Get-M365SecurityAnalysis.md](CHANGELOG-Get-M365SecurityAnalysis.md) for version history.
 
@@ -548,6 +548,7 @@ See [CHANGELOG-Get-M365SecurityAnalysis.md](CHANGELOG-Get-M365SecurityAnalysis.m
 - Conditional Access policy review
 - Exchange message trace (paged past the 5000-record cap)
 - **Hatz AI security analysis** — AI-powered review of all collected CSV data
+- Single-file interactive HTML report (offline, light and dark, print-friendly): verdict, data coverage, evidence sections and a per-identity detail drawer
 
 **Usage:**
 ```powershell
