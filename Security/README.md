@@ -533,15 +533,18 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 
 ---
 
-## Get-M365SecurityAnalysis.ps1 (v11.3)
+## Get-M365SecurityAnalysis.ps1 (v11.17)
 
 **Capabilities:**
 - Sign-in log analysis with geolocation and high-risk ISP detection
-- Attack pattern detection: password spray, brute force, confirmed breach
-- MFA status audit with privileged account focus
-- Inbox rule analysis for data exfiltration patterns
+- Attack pattern detection: password spray, brute force, confirmed breach, and guessed passwords that MFA blocked (50074/50076 after repeated failures from the same IP)
+- MFA status audit with privileged account focus (Conditional Access scoping, Security Defaults, per-user MFA, active and PIM-eligible admin roles)
+- Inbox rule analysis for data exfiltration patterns across **all user and shared mailboxes**, hidden rules included
+- Mailbox delegation audit (FullAccess, SendAs, SendOnBehalf)
 - Admin audit log monitoring with risk scoring
-- App registration analysis for OAuth abuse
+- App analysis for OAuth abuse: app registrations **and** consented third-party enterprise apps
+- Conditional Access policy review
+- Exchange message trace (paged past the 5000-record cap)
 - **Hatz AI security analysis** — AI-powered review of all collected CSV data
 
 **Usage:**
@@ -557,7 +560,27 @@ Get-ADComputer -Filter "Name -like 'WS-*'" |
 # 5. Generate HTML security report
 ```
 
-**Required Modules:** Microsoft.Graph.*, ExchangeOnlineManagement
+**Required Modules:** Microsoft.Graph.*, ExchangeOnlineManagement (PowerShell 7+)
+
+**Required roles:** Global Administrator, or Security Administrator, or Security Reader + Exchange Administrator. Exchange Administrator (or the Mail Recipients role) is required for inbox rules, delegations and message trace: `Get-InboxRule` does **not** work for Global Reader or View-Only Organization Management. Entra ID P2 (PIM) is needed to see *eligible* admin assignments; without it the MFA audit says so instead of guessing.
+
+---
+
+### Data coverage (read this before trusting a clean report)
+
+A report is only as complete as the data behind it. Every collector records its gaps in `CollectionStatus.csv` in the working directory (skipped mailboxes, truncated pulls, fallback sources, unreadable APIs). **Analyze Data** reads it back and shows every gap, plus stale (older than 2 days) or never-collected sources, in the log and in the **Data Coverage** section at the top of the HTML report. `CollectionStatus.csv` is also picked up by the Hatz AI analysis.
+
+Each collector deletes its own previous output before writing, so a run that finds nothing cannot leave old data behind as current.
+
+| Collector | Behavior worth knowing |
+|-----------|------------------------|
+| Sign-ins | Interactive sign-ins only by default (the Graph endpoint returns nothing else unless filtered). `-IncludeNonInteractive` adds non-interactive sign-ins; volume is typically 10-50x, so it is opt-in. On a tenant with a **confirmed** P1/P2 license a Graph timeout or 403 fails loudly instead of silently dropping to the 10-day Exchange Online source. The Exchange fallback pages until empty and splits any window that hits the 50,000-record ceiling; CA, risk and device fields are reported as `notAvailable`. IPs that cannot be geolocated are flagged `GeoLookupFailed` and counted. |
+| Inbox rules | User and shared mailboxes, `-IncludeHidden`. External forwarding compares whole domains against the tenant's **accepted domains** for `ForwardTo`, `ForwardAsAttachmentTo` and `RedirectTo`. `Mailbox` is the UPN (matches sign-in data); `PrimarySmtpAddress` is separate. Unreadable mailboxes are named in `InboxRules_Skipped.csv`. |
+| Delegations | `Get-MailboxPermission`, `Get-RecipientPermission`, `GrantSendOnBehalfTo` (Graph mailbox settings carry no delegate data). Flags external delegates, orphaned SIDs and any delegated access on a user mailbox; shared-mailbox delegates are recorded but not flagged alone. |
+| Apps | Evaluates all app registrations (not just recent ones; `IsRecent` marks the date range) and third-party service principals that hold consent. Risk is by resolved permission name across requested, delegated (incl. tenant-wide admin consent) and application grants, and only ever escalates. |
+| Conditional Access | Flags disabled policies, policies modified inside the date range, and policies excluding administrator roles (role GUIDs resolved to names). |
+| Message trace | Pages with `StartingRecipientAddress`/`EndDate` up to `-MaxMessages` (default 50000); hitting the cap is recorded as incomplete. |
+| Admin audit | Microsoft Entra directory audit only. Exchange admin actions (`New-InboxRule`, `Add-MailboxPermission`) are not in this source. App-initiated events are attributed as `[App] <name>`. |
 
 ---
 
@@ -575,6 +598,7 @@ After collecting data, click the **AI Analysis** button to send all CSV exports 
 | Inbox rules CSVs | External forwarding, auto-deletion, data exfiltration indicators |
 | App registration CSVs | Overprivileged OAuth apps, suspicious registrations |
 | MFA audit CSVs | Users without MFA, per-user MFA vs. Conditional Access coverage |
+| `CollectionStatus.csv` | Known gaps in the collected data, so "not found" is not read as "not there" |
 
 **AI Finding Categories (priority order):**
 
