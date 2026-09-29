@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.14"
+$ScriptVer = "11.15"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -6081,14 +6081,41 @@ function Get-RecentPasswordChanges {
         Write-Log "Loaded $($auditData.Count) audit records" -Level "Info"
         
         # Filter password change events with valid dates
-        $passwordEvents = $auditData | Where-Object {
-            ($_.Activity -like "*password*" -or
-             $_.Activity -like "*Reset user password*" -or
-             $_.Activity -like "*Change user password*") -and
-            (-not [string]::IsNullOrWhiteSpace($_.ActivityDate))
-        }
+        # The audit CSV has no TargetUser / InitiatedBy columns: the initiator is UserId and
+        # the target lives in the TargetResources JSON. Derive both, and parse the date once
+        # so ordering is chronological (sorting the CSV date strings sorts as text).
+        $unresolvedTargets = 0
+        $passwordEvents = @(foreach ($row in $auditData) {
+            if ($row.Activity -notlike "*password*") { continue }
+
+            $eventTime = $null
+            $rawDate = if (-not [string]::IsNullOrWhiteSpace($row.ActivityDate)) { $row.ActivityDate } else { $row.Timestamp }
+            if ([string]::IsNullOrWhiteSpace($rawDate) -or -not [DateTime]::TryParse($rawDate, [ref]$eventTime)) { continue }
+
+            $targetUser = $null
+            if (-not [string]::IsNullOrWhiteSpace($row.TargetResources)) {
+                try {
+                    $targets = @($row.TargetResources | ConvertFrom-Json -ErrorAction Stop)
+                    $userTarget = $targets | Where-Object { $_.Type -eq "User" -and $_.UserPrincipalName } | Select-Object -First 1
+                    if ($userTarget) { $targetUser = $userTarget.UserPrincipalName }
+                    elseif ($targets.Count -gt 0 -and $targets[0].UserPrincipalName) { $targetUser = $targets[0].UserPrincipalName }
+                }
+                catch { }
+            }
+            if ([string]::IsNullOrWhiteSpace($targetUser)) { $unresolvedTargets++; continue }
+
+            [PSCustomObject]@{
+                TargetUser  = $targetUser
+                InitiatedBy = $row.UserId
+                Activity    = $row.Activity
+                EventTime   = $eventTime
+            }
+        })
         
-        Write-Log "Found $($passwordEvents.Count) password-related events with valid dates" -Level "Info"
+        Write-Log "Found $($passwordEvents.Count) password-related events with valid dates and a resolvable target user" -Level "Info"
+        if ($unresolvedTargets -gt 0) {
+            Write-Log "$unresolvedTargets password-related event(s) had no resolvable target user and were excluded from analysis" -Level "Warning"
+        }
         
         if ($passwordEvents.Count -eq 0) {
             Update-GuiStatus "No password change events found" ([System.Drawing.Color]::Green)
@@ -6104,23 +6131,14 @@ function Get-RecentPasswordChanges {
         foreach ($userGroup in $userGroups) {
             try {
                 # Sort events and convert dates
-                $events = $userGroup.Group | Where-Object { -not [string]::IsNullOrWhiteSpace($_.ActivityDate) } | Sort-Object ActivityDate
+                $events = @($userGroup.Group | Sort-Object EventTime)
                 $changeCount = $events.Count
                 
                 # Skip users with only 1 password change
                 if ($changeCount -eq 1) { continue }
                 
-                # Safe date conversion with error handling
-                $firstChange = $null
-                $lastChange = $null
-                
-                try {
-                    $firstChange = [DateTime]::Parse($events[0].ActivityDate)
-                    $lastChange = [DateTime]::Parse($events[-1].ActivityDate)
-                } catch {
-                    Write-Log "Date parsing error for user $($userGroup.Name): $($_.Exception.Message)" -Level "Warning"
-                    continue
-                }
+                $firstChange = $events[0].EventTime
+                $lastChange = $events[-1].EventTime
                 
                 $timespan = ($lastChange - $firstChange).TotalHours
                 
@@ -6135,15 +6153,9 @@ function Get-RecentPasswordChanges {
                 # analyst's timezone, which may differ from the client tenant's business hours.
                 $offHoursChanges = 0
                 foreach ($event in $events) {
-                    try {
-                        $eventDate = [DateTime]::Parse($event.ActivityDate)
-                        $hour = $eventDate.Hour
-                        if ($hour -lt 6 -or $hour -gt 22) {
-                            $offHoursChanges++
-                        }
-                    } catch {
-                        # Skip events with unparseable dates
-                        continue
+                    $hour = $event.EventTime.Hour
+                    if ($hour -lt 6 -or $hour -gt 22) {
+                        $offHoursChanges++
                     }
                 }
                 
@@ -6314,15 +6326,17 @@ function Get-AdminAuditData {
     
     Update-GuiStatus "Starting admin audit logs collection for the past $DaysBack days..." ([System.Drawing.Color]::Orange)
     
+    # Lower bound only. A date-only upper bound ("le yyyy-MM-dd") resolves to midnight
+    # UTC and silently drops every event from the current day - the newest and most
+    # relevant records in an active investigation.
     $startDate = (Get-Date).AddDays(-$DaysBack).ToString("yyyy-MM-dd")
-    $endDate = (Get-Date).ToString("yyyy-MM-dd")
     
     try {
         Update-GuiStatus "Querying Microsoft Graph for admin audit logs..." ([System.Drawing.Color]::Orange)
         
         $auditLogs = [System.Collections.Generic.List[object]]::new()
         $pageSize = 1000
-        $uri = "https://graph.microsoft.com/v1.0/auditLogs/directoryAudits?`$filter=activityDateTime ge $startDate and activityDateTime le $endDate&`$top=$pageSize"
+        $uri = "https://graph.microsoft.com/v1.0/auditLogs/directoryAudits?`$filter=activityDateTime ge $startDate&`$top=$pageSize"
 
         do {
             $response = Invoke-MgGraphRequest -Uri $uri -Method GET
@@ -6399,11 +6413,27 @@ function Get-AdminAuditData {
                 }
             }
             
+            # Actions started by an app / service principal have no initiatedBy.user. Without a
+            # fallback they got a blank UserId and were dropped by the analysis step.
+            $initiatorType = "User"
+            $initiatorId = $log.initiatedBy.user.userPrincipalName
+            $initiatorName = $log.initiatedBy.user.displayName
+            if ([string]::IsNullOrWhiteSpace($initiatorId)) { $initiatorId = $log.initiatedBy.user.id }
+            if ([string]::IsNullOrWhiteSpace($initiatorId)) {
+                $initiatorType = "App"
+                $initiatorName = $log.initiatedBy.app.displayName
+                $initiatorId = if ($initiatorName) { $initiatorName }
+                               elseif ($log.initiatedBy.app.servicePrincipalId) { $log.initiatedBy.app.servicePrincipalId }
+                               else { $log.initiatedBy.app.appId }
+                if ($initiatorId) { $initiatorId = "[App] $initiatorId" }
+            }
+            
             $processedLog = [PSCustomObject]@{
                 Timestamp = [DateTime]::Parse($log.activityDateTime)
                 ActivityDate = [DateTime]::Parse($log.activityDateTime)  # Alias for compatibility
-                UserId = $log.initiatedBy.user.userPrincipalName
-                UserDisplayName = $log.initiatedBy.user.displayName
+                UserId = $initiatorId
+                UserDisplayName = $initiatorName
+                InitiatedByType = $initiatorType
                 Activity = $activityDisplayName
                 Result = $log.result
                 ResultReason = $log.resultReason
@@ -8019,11 +8049,14 @@ function Invoke-CompromiseDetection {
                                     CreationTime = ConvertTo-SafeString $_.CreationTime
                                     UserAgent = ConvertTo-SafeString $_.UserAgent
                                     IP = ConvertTo-SafeString $_.IP
+                                    IPVersion = ConvertTo-SafeString $_.IPVersion
                                     ISP = ConvertTo-SafeString $_.ISP
                                     City = ConvertTo-SafeString $_.City
                                     RegionName = ConvertTo-SafeString $_.RegionName
                                     Country = ConvertTo-SafeString $_.Country
                                     IsUnusualLocation = ConvertTo-SafeBoolean $_.IsUnusualLocation
+                                    IsHighRiskISP = ConvertTo-SafeBoolean $_.IsHighRiskISP
+                                    StatusCode = ConvertTo-SafeString $_.StatusCode
                                     Status = ConvertTo-SafeString $_.Status
                                     FailureReason = ConvertTo-SafeString $_.FailureReason
                                     ConditionalAccessStatus = ConvertTo-SafeString $_.ConditionalAccessStatus
@@ -8042,6 +8075,7 @@ function Invoke-CompromiseDetection {
                                     Timestamp = ConvertTo-SafeString $_.Timestamp
                                     UserId = ConvertTo-SafeString $_.UserId
                                     UserDisplayName = ConvertTo-SafeString $_.UserDisplayName
+                                    InitiatedByType = ConvertTo-SafeString $_.InitiatedByType
                                     Activity = ConvertTo-SafeString $_.Activity
                                     Result = ConvertTo-SafeString $_.Result
                                     ResultReason = ConvertTo-SafeString $_.ResultReason
