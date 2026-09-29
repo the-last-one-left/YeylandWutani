@@ -6462,24 +6462,18 @@ function Get-AdminAuditData {
 function Get-MailboxRules {
     <#
     .SYNOPSIS
-        Collects inbox rules with performance optimizations
+        Collects inbox rules from every user and shared mailbox in the tenant
     
     .DESCRIPTION
-        Retrieves inbox rules from all mailboxes with smart filtering
-        and progress tracking. Note: Exchange Online cmdlets cannot use
+        Retrieves inbox rules from all mailboxes regardless of sign-in
+        activity, with progress tracking. Note: Exchange Online cmdlets cannot use
         ForEach-Object -Parallel, so this uses optimized sequential processing.
     #>
     
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $false)]
-        [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "InboxRules.csv"),
-        
-        [Parameter(Mandatory = $false)]
-        [switch]$IncludeInactive,
-        
-        [Parameter(Mandatory = $false)]
-        [int]$DaysInactive = 90
+        [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "InboxRules.csv")
     )
     
     Update-GuiStatus "Starting mailbox rules collection..." ([System.Drawing.Color]::Orange)
@@ -6503,61 +6497,26 @@ function Get-MailboxRules {
         }
         
         # ═══════════════════════════════════════════════════════════════════════════
-        # STEP 2: GET FILTERED MAILBOX LIST (PERFORMANCE OPTIMIZATION)
+        # STEP 2: GET MAILBOX LIST
         # ═══════════════════════════════════════════════════════════════════════════
         
-        Update-GuiStatus "Retrieving mailboxes with smart filtering..." ([System.Drawing.Color]::Orange)
-        Write-Log "Retrieving user mailboxes" -Level "Info"
+        Update-GuiStatus "Retrieving mailboxes..." ([System.Drawing.Color]::Orange)
+        Write-Log "Retrieving user and shared mailboxes" -Level "Info"
         
         # Get mailboxes
         $allMailboxes = Get-Mailbox -ResultSize Unlimited `
-                                     -RecipientTypeDetails UserMailbox `
+                                     -RecipientTypeDetails UserMailbox,SharedMailbox `
                                      -ErrorAction Stop
         
         Write-Log "Retrieved $($allMailboxes.Count) mailboxes" -Level "Info"
         
         # ═══════════════════════════════════════════════════════════════════════════
-        # STEP 3: FILTER OUT INACTIVE USERS (OPTIONAL BUT RECOMMENDED)
+        # STEP 3: CHECK ALL MAILBOXES
+        # No sign-in based filtering: a compromised admin can plant rules in
+        # mailboxes whose owners never sign in (dormant, shared, etc.).
         # ═══════════════════════════════════════════════════════════════════════════
         
         $mailboxesToCheck = $allMailboxes
-        
-        if (-not $IncludeInactive -and $DaysInactive -gt 0) {
-            Update-GuiStatus "Filtering out mailboxes inactive for $DaysInactive+ days..." ([System.Drawing.Color]::Orange)
-            Write-Log "Checking last sign-in activity to skip inactive users" -Level "Info"
-            
-            try {
-                # Get recent sign-in data to filter inactive users
-                $cutoffDate = (Get-Date).AddDays(-$DaysInactive)
-                $activeUserUpns = @()
-                
-                # Get users with recent activity from Graph
-                $recentUsers = Get-MgUser -All `
-                    -Property UserPrincipalName,SignInActivity `
-                    -ErrorAction SilentlyContinue | 
-                    Where-Object { 
-                        $_.SignInActivity.LastSignInDateTime -and 
-                        $_.SignInActivity.LastSignInDateTime -ge $cutoffDate 
-                    }
-                
-                if ($recentUsers) {
-                    $activeUserUpns = $recentUsers.UserPrincipalName
-                    $mailboxesToCheck = $allMailboxes | Where-Object { 
-                        $activeUserUpns -contains $_.UserPrincipalName 
-                    }
-                    
-                    $skipped = $allMailboxes.Count - $mailboxesToCheck.Count
-                    Write-Log "Filtered to $($mailboxesToCheck.Count) active mailboxes (skipped $skipped inactive)" -Level "Info"
-                    Update-GuiStatus "Checking $($mailboxesToCheck.Count) active mailboxes (skipped $skipped inactive)" ([System.Drawing.Color]::Orange)
-                }
-                else {
-                    Write-Log "Could not retrieve sign-in activity data, checking all mailboxes" -Level "Warning"
-                }
-            }
-            catch {
-                Write-Log "Could not filter by sign-in activity, checking all mailboxes: $($_.Exception.Message)" -Level "Warning"
-            }
-        }
         
         if ($mailboxesToCheck.Count -eq 0) {
             Write-Log "No mailboxes to check" -Level "Warning"
