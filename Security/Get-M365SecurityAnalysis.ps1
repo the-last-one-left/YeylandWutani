@@ -6462,7 +6462,7 @@ function Get-AdminAuditData {
 function Get-MailboxRules {
     <#
     .SYNOPSIS
-        Collects inbox rules from every user mailbox in the tenant
+        Collects inbox rules from every user and shared mailbox in the tenant
     
     .DESCRIPTION
         Retrieves inbox rules from all mailboxes regardless of sign-in
@@ -6501,11 +6501,11 @@ function Get-MailboxRules {
         # ═══════════════════════════════════════════════════════════════════════════
         
         Update-GuiStatus "Retrieving mailboxes..." ([System.Drawing.Color]::Orange)
-        Write-Log "Retrieving user mailboxes" -Level "Info"
+        Write-Log "Retrieving user and shared mailboxes" -Level "Info"
         
         # Get mailboxes
         $allMailboxes = Get-Mailbox -ResultSize Unlimited `
-                                     -RecipientTypeDetails UserMailbox `
+                                     -RecipientTypeDetails UserMailbox,SharedMailbox `
                                      -ErrorAction Stop
         
         Write-Log "Retrieved $($allMailboxes.Count) mailboxes" -Level "Info"
