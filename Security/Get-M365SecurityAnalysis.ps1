@@ -64,7 +64,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.15"
+$ScriptVer = "11.16"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -6796,107 +6796,235 @@ function Get-MailboxRules {
 function Get-MailboxDelegationData {
     <#
     .SYNOPSIS
-        Collects mailbox delegation permissions.
-    
+        Collects mailbox delegation permissions from Exchange Online.
+
     .DESCRIPTION
-        Retrieves mailbox delegation settings identifying:
-        • External delegates (high risk)
-        • High privilege access (FullAccess, SendAs)
-        • Unusual delegation patterns
-    
+        Enumerates every user and shared mailbox in the tenant, regardless of sign-in
+        activity, and records three kinds of delegation:
+        - FullAccess   (Get-MailboxPermission, explicit non-inherited Allow entries)
+        - SendAs       (Get-RecipientPermission)
+        - SendOnBehalf (GrantSendOnBehalfTo on the mailbox)
+
+        Microsoft Graph mailboxSettings has no delegate or permission data, so the
+        Exchange Online cmdlets are the only source for this.
+
+        Flagged as suspicious:
+        - Delegate outside the tenant's accepted domains (guest / #EXT# accounts included)
+        - Orphaned SID (delegate account was deleted, permission left behind)
+        - FullAccess / SendAs / SendOnBehalf on a USER mailbox. The same grants on a
+          shared mailbox are expected and are recorded but not flagged on their own.
+
+        Mailboxes that cannot be read (errors, persistent throttling) are logged by name
+        and written to a _Skipped.csv so the result is never silently incomplete.
+
     .OUTPUTS
         Array of delegation objects with risk flags
     #>
-    
+
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $false)]
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "MailboxDelegation.csv")
     )
-    
+
     Update-GuiStatus "Starting mailbox delegation collection..." ([System.Drawing.Color]::Orange)
-    
+    Write-Log "MAILBOX DELEGATION COLLECTION STARTED" -Level "Info"
+
     try {
-        $orgDomains = @()
-        try {
-            $org = Get-MgOrganization -ErrorAction Stop | Select-Object -First 1
-            $orgDomains = $org.VerifiedDomains | ForEach-Object { $_.Name }
-        } catch {
-            Write-Log "Could not retrieve org domains: $($_.Exception.Message)" -Level "Warning"
+        $connectionResult = Connect-ExchangeOnlineIfNeeded
+        if (-not $connectionResult) {
+            Update-GuiStatus "Exchange Online connection failed - skipping delegation collection" ([System.Drawing.Color]::Red)
+            [System.Windows.Forms.MessageBox]::Show(
+                "Exchange Online connection required for mailbox delegation collection.",
+                "Connection Required", "OK", "Warning"
+            )
+            return @()
         }
 
-        $users = Get-MgUser -All -Property Id, UserPrincipalName, DisplayName, Mail | Where-Object { $_.Mail -ne $null }
-        $totalCount = $users.Count
-        $delegations = @()
-        $suspiciousDelegations = @()
-        $processedCount = 0
+        # Accepted domains define "internal" for the external-delegate check.
+        $orgDomains = @()
+        try {
+            $orgDomains = @(Get-AcceptedDomain -ErrorAction Stop | ForEach-Object { $_.DomainName.ToString().ToLower() })
+            Write-Log "Loaded $($orgDomains.Count) accepted domains" -Level "Info"
+        }
+        catch {
+            Write-Log "Could not retrieve accepted domains ($($_.Exception.Message)) - external delegate check will only catch #EXT# guests" -Level "Warning"
+        }
 
-        foreach ($user in $users) {
-            $processedCount++
-            if ($processedCount % 10 -eq 0) {
-                $percentage = [math]::Round(($processedCount / $totalCount) * 100, 1)
-                Update-GuiStatus "Processing delegations: $processedCount of $totalCount ($percentage%)" ([System.Drawing.Color]::Orange)
-            }
-            
-            try {
-                $mailboxSettings = Get-MgUserMailboxSetting -UserId $user.Id -ErrorAction Stop
-                
-                if ($mailboxSettings.DelegatesSettings) {
-                    foreach ($delegate in $mailboxSettings.DelegatesSettings) {
-                        $isSuspicious = $false
-                        $suspiciousReasons = @()
-                        
-                        $delegateEmail = $delegate.EmailAddress.Address
-                        $isExternalDelegate = $true
-                        foreach ($domain in $orgDomains) {
-                            if ($delegateEmail -like "*$domain*") {
-                                $isExternalDelegate = $false
-                                break
-                            }
-                        }
-                        if ($isExternalDelegate) {
-                            $isSuspicious = $true
-                            $suspiciousReasons += "External delegate"
-                        }
-                        
-                        if ($delegate.Permissions -contains "FullAccess" -or $delegate.Permissions -contains "SendAs") {
-                            $suspiciousReasons += "High privilege access"
-                            $isSuspicious = $true
-                        }
-                        
-                        $delegationEntry = [PSCustomObject]@{
-                            Mailbox = $user.UserPrincipalName
-                            DisplayName = $user.DisplayName
-                            DelegateName = $delegate.DisplayName
-                            DelegateEmail = $delegateEmail
-                            Permissions = ($delegate.Permissions -join ", ")
-                            IsSuspicious = $isSuspicious
-                            SuspiciousReasons = $suspiciousReasons -join ", "
-                        }
-                        
-                        $delegations += $delegationEntry
-                        if ($isSuspicious) { $suspiciousDelegations += $delegationEntry }
+        # Runs a script block, backing off and retrying on Exchange Online throttling.
+        $invokeWithRetry = {
+            param([scriptblock]$Action, [string]$Label)
+            $maxAttempts = 4
+            for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+                try {
+                    return (& $Action)
+                }
+                catch {
+                    $isThrottle = $_.Exception.Message -match '429|503|throttl|too many requests|ServerBusy'
+                    if ($isThrottle -and $attempt -lt $maxAttempts) {
+                        $backoff = [Math]::Min(30, [Math]::Pow(2, $attempt))
+                        Write-Log "Throttled on $Label (attempt $attempt) - backing off $backoff s" -Level "Warning"
+                        Start-Sleep -Seconds $backoff
+                    }
+                    else {
+                        throw
                     }
                 }
             }
-            catch { continue }
         }
-        
-        if ($delegations.Count -gt 0) {
-            $delegations | Export-Csv -Path $OutputPath -NoTypeInformation -Force
-            
+
+        Update-GuiStatus "Retrieving mailboxes..." ([System.Drawing.Color]::Orange)
+        $mailboxes = @(Get-Mailbox -ResultSize Unlimited `
+                                   -RecipientTypeDetails UserMailbox,SharedMailbox `
+                                   -ErrorAction Stop)
+        $totalCount = $mailboxes.Count
+        Write-Log "Retrieved $totalCount mailboxes for delegation review" -Level "Info"
+
+        $delegations = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $skipped = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $processedCount = 0
+        $startTime = Get-Date
+
+        foreach ($mailbox in $mailboxes) {
+            $processedCount++
+            if ($processedCount % 5 -eq 0 -or $processedCount -eq 1) {
+                $percentage = [math]::Round(($processedCount / $totalCount) * 100, 1)
+                Update-GuiStatus "Processing delegations: $processedCount of $totalCount ($percentage%) - $($delegations.Count) found" ([System.Drawing.Color]::Orange)
+                [System.Windows.Forms.Application]::DoEvents()
+            }
+
+            $mbxId = $mailbox.PrimarySmtpAddress.ToString()
+            $mbxType = $mailbox.RecipientTypeDetails.ToString()
+            $isSharedMbx = ($mbxType -eq "SharedMailbox")
+
+            # Each entry: Delegate, Permission
+            $entries = [System.Collections.Generic.List[PSCustomObject]]::new()
+
+            try {
+                # --- FullAccess ---
+                $fullAccess = & $invokeWithRetry {
+                    Get-MailboxPermission -Identity $mbxId -ResultSize Unlimited -ErrorAction Stop
+                } "FullAccess on $mbxId"
+
+                foreach ($perm in @($fullAccess)) {
+                    if ($perm.IsInherited -eq $true -or $perm.Deny -eq $true) { continue }
+                    if (@($perm.AccessRights) -notcontains "FullAccess") { continue }
+                    $who = $perm.User.ToString()
+                    if ($who -match '^NT AUTHORITY\\') { continue }
+                    $entries.Add([PSCustomObject]@{ Delegate = $who; Permission = "FullAccess" })
+                }
+
+                # --- SendAs ---
+                $sendAs = & $invokeWithRetry {
+                    Get-RecipientPermission -Identity $mbxId -ResultSize Unlimited -ErrorAction Stop
+                } "SendAs on $mbxId"
+
+                foreach ($perm in @($sendAs)) {
+                    if ($perm.AccessControlType -ne "Allow") { continue }
+                    if (@($perm.AccessRights) -notcontains "SendAs") { continue }
+                    $who = $perm.Trustee.ToString()
+                    if ($who -match '^NT AUTHORITY\\') { continue }
+                    $entries.Add([PSCustomObject]@{ Delegate = $who; Permission = "SendAs" })
+                }
+
+                # --- SendOnBehalf ---
+                foreach ($grantee in @($mailbox.GrantSendOnBehalfTo)) {
+                    if ([string]::IsNullOrWhiteSpace($grantee)) { continue }
+                    $entries.Add([PSCustomObject]@{ Delegate = $grantee.ToString(); Permission = "SendOnBehalf" })
+                }
+            }
+            catch {
+                $skipped.Add([PSCustomObject]@{ Mailbox = $mbxId; Error = $_.Exception.Message })
+                Write-Log "Error reading delegation for ${mbxId}: $($_.Exception.Message)" -Level "Warning"
+                continue
+            }
+
+            # Merge per delegate so one person with FullAccess + SendAs is one row.
+            foreach ($group in ($entries | Group-Object -Property Delegate)) {
+                $delegate = $group.Name
+                $permissions = @($group.Group | Select-Object -ExpandProperty Permission -Unique)
+
+                $isSuspicious = $false
+                $reasons = @()
+
+                $isOrphanedSid = ($delegate -match '^S-1-5-21-')
+                $delegateDomain = $null
+                if ($delegate -match '@([^@\s]+)$') { $delegateDomain = $Matches[1].ToLower() }
+
+                $isExternal = $false
+                if ($delegate -match '#EXT#') { $isExternal = $true }
+                elseif ($delegateDomain -and $orgDomains.Count -gt 0 -and $orgDomains -notcontains $delegateDomain) { $isExternal = $true }
+
+                if ($isOrphanedSid) {
+                    $isSuspicious = $true
+                    $reasons += "Orphaned SID (delegate account deleted)"
+                }
+                if ($isExternal) {
+                    $isSuspicious = $true
+                    $reasons += "External delegate"
+                }
+                if (-not $isSharedMbx) {
+                    $isSuspicious = $true
+                    $reasons += "Delegated access on user mailbox ($($permissions -join '/'))"
+                }
+                elseif ($permissions.Count -gt 0) {
+                    $reasons += "Shared mailbox delegate (expected, not flagged alone)"
+                }
+
+                $delegations.Add([PSCustomObject]@{
+                    Mailbox           = $mailbox.UserPrincipalName
+                    PrimarySmtpAddress = $mbxId
+                    DisplayName       = $mailbox.DisplayName
+                    MailboxType       = $mbxType
+                    DelegateName      = $delegate
+                    DelegateEmail     = if ($delegateDomain) { $delegate } else { "" }
+                    Permissions       = ($permissions -join ", ")
+                    IsSuspicious      = $isSuspicious
+                    SuspiciousReasons = ($reasons -join ", ")
+                })
+            }
+        }
+
+        # Never present a partial pull as complete.
+        $skippedPath = $OutputPath -replace '\.csv$', '_Skipped.csv'
+        if ($skipped.Count -gt 0) {
+            $skipped | Export-Csv -Path $skippedPath -NoTypeInformation -Force
+            Write-Log "$($skipped.Count) of $totalCount mailboxes could not be read - delegation results are INCOMPLETE (see $skippedPath)" -Level "Error"
+            Update-GuiStatus "WARNING: $($skipped.Count) mailbox(es) skipped - delegation results incomplete (see log)" ([System.Drawing.Color]::Red)
+        }
+        elseif (Test-Path -Path $skippedPath) {
+            Remove-Item -Path $skippedPath -Force -ErrorAction SilentlyContinue
+        }
+
+        # Overwrite our own previous output either way so a clean run cannot leave last
+        # run's delegations behind for the analysis step to pick up.
+        $suspiciousPath = $OutputPath -replace '\.csv$', '_Suspicious.csv'
+        foreach ($stale in @($OutputPath, $suspiciousPath)) {
+            if (Test-Path -Path $stale) { Remove-Item -Path $stale -Force -ErrorAction SilentlyContinue }
+        }
+
+        $delegationArray = $delegations.ToArray()
+        $suspiciousDelegations = @($delegationArray | Where-Object { $_.IsSuspicious -eq $true })
+
+        if ($delegationArray.Count -gt 0) {
+            $delegationArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
             if ($suspiciousDelegations.Count -gt 0) {
-                $suspiciousPath = $OutputPath -replace '.csv$', '_Suspicious.csv'
                 $suspiciousDelegations | Export-Csv -Path $suspiciousPath -NoTypeInformation -Force
             }
-            
-            Update-GuiStatus "Delegation collection complete: $($delegations.Count) delegations." ([System.Drawing.Color]::Green)
         }
-        
-        return $delegations
+
+        $elapsed = (Get-Date) - $startTime
+        Write-Log "Delegation collection complete: $($delegationArray.Count) delegations across $totalCount mailboxes ($($suspiciousDelegations.Count) suspicious, $($skipped.Count) mailboxes skipped) in $($elapsed.ToString('mm\:ss'))" -Level "Info"
+
+        if ($skipped.Count -eq 0) {
+            Update-GuiStatus "Delegation collection complete: $($delegationArray.Count) delegations ($($suspiciousDelegations.Count) suspicious)." ([System.Drawing.Color]::Green)
+        }
+
+        return $delegationArray
     }
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
+        Write-Log "Error in delegation collection: $($_.Exception.Message)" -Level "Error"
         return $null
     }
 }
