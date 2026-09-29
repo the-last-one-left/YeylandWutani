@@ -2,6 +2,20 @@
 
 Versions follow Major.Minor (`$ScriptVer` in the script). Newest first.
 
+## 12.0 - 2026-09-29
+Redesigned window and HTML report (Yeyland Wutani design handoff).
+
+**Changed**
+- Main window rebuilt as three numbered steps: 01 Connect, 02 Collect, 03 Analyze. Neutral hairline surfaces, one orange fill for the primary action of each step, new dark and light tokens (`Surface2`, `OnPrimary`, `Medium`, `Ai` added to `Get-ThemeColor`). Client size is now 1000 x 780 with DPI scaling.
+- Each collector is a status tile (Not collected / Collecting / `<n>` records / incomplete / error) filled from `CollectionStatus.csv` on load and updated as collectors run; the collector's gap note is the tile tooltip. `Run all collection` moves to the Collect header.
+- Connection state is a pill in the header; session block shows working directory, date range, tenant and account. Batch size and cache timeout moved to the status bar; the status bar shows a colored critical/high/medium/low summary after an analysis.
+- `Show-HatzAnalysisResult` restyled; its Save and Close buttons were clipped below the window edge and now fit.
+- The HTML report is now one dependency-free page rendered client-side from an embedded JSON payload (`New-ReportPayload`, `$script:ReportTemplate`): verdict and risk bar, data coverage, ten collapsible evidence sections, a detail drawer with related records, identity search and filter, light and dark themes, print expands everything. The generator no longer emits markup, so record values are HTML-escaped by the template only.
+
+**Added**
+- Report sections for brute-force patterns, unusual and high-risk sign-ins and ETR spam activity (hidden when empty), linked to identities; Export CSV of the identity list.
+- Report tables are capped at 1500 rows for failed sign-ins, unusual sign-ins, message trace and sign-in locations, with a note pointing to the full CSV.
+
 ## 11.18 - 2026-09-29
 - Version bump and this changelog. No functional change.
 
