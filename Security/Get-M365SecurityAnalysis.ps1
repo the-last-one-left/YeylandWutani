@@ -83,7 +83,8 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.17"
+# Record every change in Security/CHANGELOG-Get-M365SecurityAnalysis.md
+$ScriptVer = "11.18"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
