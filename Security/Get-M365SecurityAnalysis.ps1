@@ -11,14 +11,27 @@
 #  +-------------------------------------------------------------+
 #  | DATA COLLECTION                                             |
 #  +-------------------------------------------------------------+
-#  | - Sign-in logs with geolocation analysis                    |
-#  | - Admin audit logs with risk assessment                     |
-#  | - Inbox rules (forwarding, deletion, suspicious patterns)   |
-#  | - Mailbox delegations                                       |
-#  | - App registrations and service principals                  |
+#  | - Sign-in logs with geolocation analysis (interactive by    |
+#  |   default; non-interactive with -IncludeNonInteractive)     |
+#  | - Admin audit logs with risk assessment (Entra directory)   |
+#  | - Inbox rules from ALL user and shared mailboxes, hidden    |
+#  |   rules included, external forwarding by accepted domain    |
+#  | - Mailbox delegations (FullAccess, SendAs, SendOnBehalf)    |
+#  | - App registrations AND consented third-party enterprise    |
+#  |   apps, risk by resolved permission name                    |
 #  | - Conditional Access policies                               |
-#  | - Exchange message traces (ETR format)                      |
+#  | - MFA status audit (per-user, CA, Security Defaults, roles) |
+#  | - Exchange message traces (ETR format, paged)               |
 #  +-------------------------------------------------------------+
+#
+#  DATA COVERAGE:
+#  Each collector records its gaps (skipped mailboxes, truncated
+#  pulls, fallback sources, unreadable APIs) in CollectionStatus.csv
+#  in the working directory. The analysis step reads it back and
+#  shows every gap, plus stale or missing sources, in the log and
+#  in the Data Coverage section of the HTML report. A collector
+#  removes its own previous output before writing, so a run that
+#  finds nothing cannot leave old data behind as current.
 #
 #  +-------------------------------------------------------------+
 #  | ANALYSIS & DETECTION                                        |
@@ -38,6 +51,12 @@
 #  - Administrative permissions in Microsoft 365 tenant:
 #    - Global Administrator, Security Administrator, or
 #    - Security Reader + Exchange Administrator (recommended minimum)
+#    - Exchange Administrator (or Mail Recipients role) is REQUIRED for
+#      inbox rules, delegations and message trace. Get-InboxRule does
+#      not work for Global Reader or View-Only Organization Management.
+#    - Entra ID P2 (PIM) is needed to see eligible admin assignments;
+#      without it the MFA audit reports that eligible admins are not
+#      included.
 #
 #  AUTHOR:
 #  Yeyland Wutani LLC (info@yeylandwutani.com)
@@ -64,7 +83,7 @@
 #--------------------------------------------------------------
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
-$ScriptVer = "11.16"
+$ScriptVer = "11.17"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -1740,6 +1759,225 @@ function Get-DateRangeInput {
         Write-Log "Error in date range input dialog: $($_.Exception.Message)" -Level "Error"
         return $null
     }
+}
+
+#--------------------------------------------------------------
+# COLLECTION COVERAGE TRACKING
+#--------------------------------------------------------------
+# Collectors and analysis run as separate steps (often in separate sessions), so
+# coverage gaps are persisted to CollectionStatus.csv in the working directory. The
+# analysis step reads it back and surfaces every gap in the log and the HTML report,
+# so a partial pull is never mistaken for full coverage.
+
+function Get-CollectionStatusPath {
+    return (Join-Path -Path $ConfigData.WorkDir -ChildPath "CollectionStatus.csv")
+}
+
+function Set-CollectionStatus {
+    <#
+    .SYNOPSIS
+        Records how complete the most recent run of a collector was.
+
+    .PARAMETER Source
+        Collector name (for example "InboxRules", "SignIns").
+
+    .PARAMETER Complete
+        $false if the dataset has known gaps (skipped mailboxes, truncated results,
+        reduced date range, degraded fallback source).
+
+    .PARAMETER Note
+        Human-readable description of the gap. Shown verbatim in the report.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Source,
+
+        [Parameter(Mandatory = $false)]
+        [bool]$Complete = $true,
+
+        [Parameter(Mandatory = $false)]
+        [int]$Records = 0,
+
+        [Parameter(Mandatory = $false)]
+        [string]$Note = ""
+    )
+
+    try {
+        $path = Get-CollectionStatusPath
+        $rows = @()
+        if (Test-Path -Path $path) {
+            $rows = @(Import-Csv -Path $path -ErrorAction Stop | Where-Object { $_.Source -ne $Source })
+        }
+        $rows += [PSCustomObject]@{
+            Source     = $Source
+            RunTimeUtc = (Get-Date).ToUniversalTime().ToString("o")
+            Complete   = $Complete
+            Records    = $Records
+            Note       = $Note
+        }
+        $rows | Export-Csv -Path $path -NoTypeInformation -Force
+    }
+    catch {
+        Write-Log "Could not record collection status for ${Source}: $($_.Exception.Message)" -Level "Warning"
+    }
+}
+
+function Get-CollectionStatus {
+    <#
+    .SYNOPSIS
+        Returns the persisted collection status rows (empty array if none recorded).
+    #>
+    [CmdletBinding()]
+    param ()
+
+    try {
+        $path = Get-CollectionStatusPath
+        if (Test-Path -Path $path) {
+            return @(Import-Csv -Path $path -ErrorAction Stop)
+        }
+    }
+    catch {
+        Write-Log "Could not read collection status: $($_.Exception.Message)" -Level "Warning"
+    }
+    return @()
+}
+
+function Remove-StaleOutput {
+    <#
+    .SYNOPSIS
+        Deletes a collector's own previous output files.
+
+    .DESCRIPTION
+        Collectors call this before writing results so a run that finds nothing cannot
+        leave last run's file behind for the analysis step to pick up as current data.
+        Only ever pass paths the calling collector itself writes.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string[]]$Path
+    )
+
+    foreach ($p in $Path) {
+        if ($p -and (Test-Path -Path $p)) {
+            try { Remove-Item -Path $p -Force -ErrorAction Stop }
+            catch { Write-Log "Could not remove stale output ${p}: $($_.Exception.Message)" -Level "Warning" }
+        }
+    }
+}
+
+function Invoke-GraphPaged {
+    <#
+    .SYNOPSIS
+        GETs a Microsoft Graph collection and follows @odata.nextLink to the end.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [string]$Uri
+    )
+
+    $items = [System.Collections.Generic.List[object]]::new()
+    $next = $Uri
+    while ($next) {
+        $response = Invoke-MgGraphRequest -Uri $next -Method GET -ErrorAction Stop
+        if ($response.value) { $items.AddRange([object[]]@($response.value)) }
+        $next = $response.'@odata.nextLink'
+    }
+    return $items.ToArray()
+}
+
+function Get-AdminRoleMap {
+    <#
+    .SYNOPSIS
+        Builds a user-id -> directory-role map covering active and PIM-eligible assignments.
+
+    .DESCRIPTION
+        Reads activated directory roles and their members (expanding role-assignable
+        groups to users), then PIM eligible assignments. This replaces the old per-user
+        "member of a group/role whose name contains Admin" check, which matched ordinary
+        groups named "*Admin*" and missed eligible admins entirely.
+
+        Returns a hashtable:
+          Users    - userId -> @{ Active = list of role names; Eligible = list of role
+                     names; TemplateIds = HashSet of role template ids }
+          Warnings - strings describing anything that could not be read
+    #>
+    [CmdletBinding()]
+    param ()
+
+    $users = @{}
+    $warnings = [System.Collections.Generic.List[string]]::new()
+
+    $getEntry = {
+        param($userId)
+        if (-not $users.ContainsKey($userId)) {
+            $users[$userId] = @{
+                Active      = [System.Collections.Generic.List[string]]::new()
+                Eligible    = [System.Collections.Generic.List[string]]::new()
+                TemplateIds = [System.Collections.Generic.HashSet[string]]::new()
+            }
+        }
+        return $users[$userId]
+    }
+
+    $expandPrincipal = {
+        param($principalId, $odataType)
+        if ($odataType -match 'group') {
+            try {
+                return @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/groups/$principalId/transitiveMembers/microsoft.graph.user?`$select=id" |
+                    ForEach-Object { $_.id })
+            }
+            catch {
+                $warnings.Add("Could not expand role-assigned group ${principalId}: $($_.Exception.Message)")
+                return @()
+            }
+        }
+        if ($odataType -match 'servicePrincipal') { return @() }
+        return @($principalId)
+    }
+
+    # Active (activated) role assignments
+    try {
+        $roles = @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/directoryRoles")
+        foreach ($role in $roles) {
+            $members = @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/directoryRoles/$($role.id)/members?`$select=id")
+            foreach ($member in $members) {
+                foreach ($userId in @(& $expandPrincipal $member.id $member.'@odata.type')) {
+                    $entry = & $getEntry $userId
+                    $entry.Active.Add($role.displayName)
+                    if ($role.roleTemplateId) { [void]$entry.TemplateIds.Add($role.roleTemplateId) }
+                }
+            }
+        }
+    }
+    catch {
+        $warnings.Add("Active directory role assignments could not be read: $($_.Exception.Message)")
+    }
+
+    # PIM eligible assignments (needs Entra ID P2 / Governance and RoleManagement.Read.All)
+    try {
+        $definitions = @{}
+        foreach ($def in @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleDefinitions?`$select=id,displayName,templateId")) {
+            $definitions[$def.id] = $def
+        }
+        $eligible = @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/roleManagement/directory/roleEligibilityScheduleInstances?`$expand=principal")
+        foreach ($item in $eligible) {
+            $def = $definitions[$item.roleDefinitionId]
+            $roleName = if ($def) { $def.displayName } else { $item.roleDefinitionId }
+            foreach ($userId in @(& $expandPrincipal $item.principalId $item.principal.'@odata.type')) {
+                $entry = & $getEntry $userId
+                $entry.Eligible.Add($roleName)
+                if ($def -and $def.templateId) { [void]$entry.TemplateIds.Add($def.templateId) }
+            }
+        }
+    }
+    catch {
+        $warnings.Add("PIM eligible role assignments could not be read - eligible admins are NOT included: $($_.Exception.Message)")
+    }
+
+    return @{ Users = $users; Warnings = $warnings }
 }
 
 #endregion
@@ -3962,6 +4200,7 @@ function Get-SignInStatusDescription {
         "700016" = "Application not found in directory"
         "700082" = "Refresh token has expired"
         "7000218" = "Request body too large"
+        "UNKNOWN" = "Failure - cause not reported in the audit record"
     }
     
     if ([string]::IsNullOrEmpty($StatusCode)) {
@@ -4108,6 +4347,13 @@ function Get-TenantSignInData {
     .PARAMETER UseCache
         Whether to use caching for geolocation lookups.
         Default: $true
+
+    .PARAMETER IncludeNonInteractive
+        Also collect NON-INTERACTIVE user sign-ins. The Graph signIns endpoint returns
+        interactive sign-ins only unless the signInEventTypes filter is set explicitly, so
+        token-based access (refresh-token replay, legacy protocols, background app access)
+        is invisible by default. Non-interactive volume is typically 10-50x interactive,
+        so this is opt-in and can make the collection much slower.
     
     .OUTPUTS
         Array of PSCustomObject containing sign-in records with geolocation
@@ -4121,6 +4367,11 @@ function Get-TenantSignInData {
         - Geolocation requires internet connectivity
         - Uses fallback methods: Premium Graph -> Exchange Online (max 10 days)
         - Non-premium tenants automatically use Exchange Online fallback
+        - On a tenant with a CONFIRMED P1/P2 license, a Graph timeout or 403 is treated as
+          an error, NOT a licensing problem: the collection fails loudly instead of silently
+          dropping to 10 days of degraded unified audit log data.
+        - Coverage limits (fallback source, interactive-only, failed geolocation lookups,
+          missing source IPs) are written to CollectionStatus.csv and shown in the report.
     #>
     
     [CmdletBinding()]
@@ -4133,7 +4384,10 @@ function Get-TenantSignInData {
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData.csv"),
         
         [Parameter(Mandatory = $false)]
-        [bool]$UseCache = $true
+        [bool]$UseCache = $true,
+
+        [Parameter(Mandatory = $false)]
+        [switch]$IncludeNonInteractive
     )
     
     #═══════════════════════════════════════════════════════════════════════════
@@ -4159,7 +4413,7 @@ function Get-TenantSignInData {
     try {
         # Calculate date range
         $startDate = (Get-Date).AddDays(-$DaysBack)
-        $filterDate = $startDate.ToString("yyyy-MM-ddTHH:mm:ssZ")
+        $filterDate = $startDate.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         
         # Initialize IP cache for geolocation
         $ipCache = @{}
@@ -4173,6 +4427,9 @@ function Get-TenantSignInData {
         
         $signInLogs = @()
         $isPremiumTenant = $true
+        $premiumState = $null
+        $coverageGaps = [System.Collections.Generic.List[string]]::new()
+        $coverageComplete = $true
         
         # ATTEMPT 1: Premium Microsoft Graph API
         try {
@@ -4181,19 +4438,29 @@ function Get-TenantSignInData {
             # Pre-flight: the signIns endpoint requires an Azure AD Premium P1/P2 license.
             # If the tenant positively has none, skip the Graph attempt entirely and drop to
             # the Exchange Online fallback immediately - no probe, no timeout wait.
-            if ((Test-PremiumSignInLicense) -eq $false) {
+            $premiumState = Test-PremiumSignInLicense
+            if ($premiumState -eq $false) {
                 throw "Authentication_RequestFromNonPremiumTenantOrB2CTenant: no Azure AD Premium (P1/P2) license in tenant (pre-flight) - using Exchange Online fallback"
             }
 
-            $graphTimeoutSec = Get-AdaptiveGraphTimeoutSec -DaysBack $DaysBack
-            Update-GuiStatus "Attempting premium Microsoft Graph API (timeout ${graphTimeoutSec}s)..." ([System.Drawing.Color]::Orange)
+            # The wall-clock timeout exists only to fail fast on tenants that may be
+            # non-premium. A CONFIRMED premium tenant is queried directly and allowed to take
+            # as long as it needs, so a big tenant is never mistaken for a non-premium one.
+            if ($premiumState -eq $true) {
+                $graphTimeoutSec = 0
+                Update-GuiStatus "Querying premium Microsoft Graph sign-in logs (licensed tenant, no timeout)..." ([System.Drawing.Color]::Orange)
+            }
+            else {
+                $graphTimeoutSec = Get-AdaptiveGraphTimeoutSec -DaysBack $DaysBack
+                Update-GuiStatus "Attempting premium Microsoft Graph API (timeout ${graphTimeoutSec}s)..." ([System.Drawing.Color]::Orange)
+            }
             Write-Log "Trying premium Graph API with filter: $filter" -Level "Info"
 
             # Enforce our own wall-clock timeout so a non-premium tenant (whose signIns endpoint
             # hangs rather than erroring) fails fast to the Exchange Online fallback instead of
             # blocking on the SDK's fixed 300s HttpClient timeout. Start-ThreadJob runs in-process,
             # so it shares the Microsoft Graph connection established on the main thread.
-            if (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue) {
+            if ($premiumState -ne $true -and (Get-Command Start-ThreadJob -ErrorAction SilentlyContinue)) {
                 $graphJob = Start-ThreadJob -ScriptBlock {
                     param($f) Get-MgBetaAuditLogSignIn -Filter $f -All -ErrorAction Stop
                 } -ArgumentList $filter
@@ -4220,11 +4487,36 @@ function Get-TenantSignInData {
                 }
             }
             else {
-                # ThreadJob module unavailable (e.g. stock PowerShell 5.1) - direct call.
+                # Confirmed premium tenant, or ThreadJob unavailable - direct call.
                 $signInLogs = Get-MgBetaAuditLogSignIn -Filter $filter -All -ErrorAction Stop
             }
 
             Write-Log "Premium Graph API successful: $($signInLogs.Count) total records" -Level "Info"
+
+            # The signIns endpoint returns interactive sign-ins only unless signInEventTypes
+            # is filtered explicitly.
+            if ($IncludeNonInteractive) {
+                try {
+                    Update-GuiStatus "Querying non-interactive sign-ins (this can be large)..." ([System.Drawing.Color]::Orange)
+                    $nonInteractiveFilter = "$filter and signInEventTypes/any(t: t eq 'nonInteractiveUser')"
+                    $nonInteractiveLogs = @(Get-MgBetaAuditLogSignIn -Filter $nonInteractiveFilter -All -ErrorAction Stop)
+                    Write-Log "Non-interactive sign-ins retrieved: $($nonInteractiveLogs.Count)" -Level "Info"
+                    $seenIds = [System.Collections.Generic.HashSet[string]]::new()
+                    foreach ($existing in @($signInLogs)) { [void]$seenIds.Add("$($existing.Id)") }
+                    $merged = [System.Collections.Generic.List[object]]::new()
+                    $merged.AddRange([object[]]@($signInLogs))
+                    foreach ($record in $nonInteractiveLogs) { if ($seenIds.Add("$($record.Id)")) { $merged.Add($record) } }
+                    $signInLogs = $merged.ToArray()
+                }
+                catch {
+                    $coverageComplete = $false
+                    $coverageGaps.Add("non-interactive sign-in query failed ($($_.Exception.Message)); only interactive sign-ins were collected")
+                    Write-Log "Non-interactive sign-in query failed: $($_.Exception.Message)" -Level "Warning"
+                }
+            }
+            else {
+                $coverageGaps.Add("interactive sign-ins only; non-interactive sign-ins (token replay, legacy protocols, background access) are not collected unless -IncludeNonInteractive is used")
+            }
             Update-GuiStatus "Premium Graph API successful - $($signInLogs.Count) records retrieved" ([System.Drawing.Color]::Green)
         }
         catch {
@@ -4235,6 +4527,14 @@ function Get-TenantSignInData {
                 Write-Log "Inner exception details: $innerException" -Level "Warning"
             }
             
+            # A timeout or 403 on a tenant with a CONFIRMED premium license is not a licensing
+            # problem. Falling back would silently swap in 10 days of degraded data, so fail loudly.
+            if ($premiumState -eq $true -and
+                ($errorMessage -match "HttpClient.Timeout|adaptive timeout|Forbidden|403|Authorization_RequestDenied")) {
+                Update-GuiStatus "Premium sign-in query failed on a licensed tenant - see log" ([System.Drawing.Color]::Red)
+                throw "Premium sign-in query failed on a tenant with a confirmed Entra ID P1/P2 license: $errorMessage. Not falling back to the 10-day Exchange Online source. Check AuditLog.Read.All consent and the admin's Entra role (Reports Reader, Security Reader or higher), or reduce the date range and retry."
+            }
+
             # Check if the error indicates lack of premium license or B2C tenant
             if ($errorMessage -match "Authentication_RequestFromNonPremiumTenantOrB2CTenant" -or
                 $errorMessage -match "premium license" -or
@@ -4262,6 +4562,11 @@ function Get-TenantSignInData {
                         Write-Log "Exchange Online fallback successful: $($exchangeData.Count) records" -Level "Info"
                         Update-GuiStatus "Exchange Online fallback successful - $($exchangeData.Count) records retrieved" ([System.Drawing.Color]::Yellow)
                         $signInLogs = $exchangeData
+                        $coverageComplete = $false
+                        $coverageGaps.Add("Exchange Online unified audit log fallback used: $fallbackDaysBack day(s) of data (requested $DaysBack); Conditional Access, risk level and device fields are unavailable")
+                        if (-not $Global:ExchangeOnlineState.LastCollectionComplete) {
+                            $coverageGaps.Add("fallback pull had gaps: $($Global:ExchangeOnlineState.LastCollectionWarning)")
+                        }
                     } else {
                         Write-Log "Exchange Online fallback returned no data" -Level "Warning"
                         throw "Exchange Online fallback returned no data"
@@ -4288,6 +4593,14 @@ function Get-TenantSignInData {
         if ($signInLogs.Count -eq 0) {
             Update-GuiStatus "No sign-in data found for the specified date range" ([System.Drawing.Color]::Yellow)
             Write-Log "No sign-in data found" -Level "Warning"
+            Remove-StaleOutput -Path @(
+                $OutputPath,
+                ($OutputPath -replace '\.csv$', '_Unusual.csv'),
+                ($OutputPath -replace '\.csv$', '_Failed.csv'),
+                (Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations.csv"),
+                (Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations_Unusual.csv")
+            )
+            Set-CollectionStatus -Source "SignIns" -Complete $false -Records 0 -Note "No sign-in records were returned for the requested range; there is no sign-in data to analyze."
             return @()
         }
         
@@ -4382,6 +4695,7 @@ function Get-TenantSignInData {
             $isp = "Unknown"
             $ipVersion = "Unknown"
             $isPrivateIP = $false
+            $geoLookupFailed = $false
             
             # Apply geolocation data if available (skip placeholder "Unknown" values)
             if (-not [string]::IsNullOrEmpty($ip) -and $ip -ne "Unknown") {
@@ -4417,8 +4731,8 @@ function Get-TenantSignInData {
                         # Check IPv6 private/special ranges
                         if ($ip -match "^::1$" -or                      # Loopback
                             $ip -match "^fe80:" -or                      # Link-local
-                            $ip -match "^fc00:" -or $ip -match "^fd00:" -or  # Unique local
-                            $ip -match "^ff00:") {                       # Multicast
+                            $ip -match "^f[cd][0-9a-fA-F]{2}:" -or       # Unique local (fc00::/7)
+                            $ip -match "^ff[0-9a-fA-F]{2}:") {           # Multicast
                             
                             $isPrivateIP = $true
                             $country = "Private Network"
@@ -4447,6 +4761,12 @@ function Get-TenantSignInData {
                 }
             }
             
+            # A public IP with no usable geolocation is NOT "expected" - it just could not be
+            # evaluated. Flag it so those sign-ins are not silently treated as normal.
+            if (-not [string]::IsNullOrEmpty($ip) -and $ip -ne "Unknown" -and -not $isPrivateIP -and $country -eq "Unknown") {
+                $geoLookupFailed = $true
+            }
+
 			# Check if ISP is in high-risk list
 			$isHighRiskISP = $false
 			if (-not [string]::IsNullOrEmpty($isp) -and $isp -ne "Unknown" -and $isp -ne "Private Network") {
@@ -4482,6 +4802,7 @@ function Get-TenantSignInData {
                 ISP = $isp
 				IsHighRiskISP = $isHighRiskISP
                 IsUnusualLocation = $isUnusual
+                GeoLookupFailed = $geoLookupFailed
                 StatusCode = $statusCode
                 Status = $statusDescription
                 UserAgent = $userAgent
@@ -4504,6 +4825,16 @@ function Get-TenantSignInData {
         
         Update-GuiStatus "Exporting sign-in data..." ([System.Drawing.Color]::Orange)
         
+        # Remove the previous run's derived files - they are only rewritten when non-empty,
+        # so a clean run would otherwise leave old unusual/failed sign-ins on disk.
+        Remove-StaleOutput -Path @(
+            $OutputPath,
+            ($OutputPath -replace '\.csv$', '_Unusual.csv'),
+            ($OutputPath -replace '\.csv$', '_Failed.csv'),
+            (Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations.csv"),
+            (Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations_Unusual.csv")
+        )
+
         # Export main results
         $resultsArray = $results.ToArray()
         $resultsArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
@@ -4602,6 +4933,20 @@ function Get-TenantSignInData {
         $ipv6Count = ($results | Where-Object { $_.IPVersion -eq "IPv6" }).Count
         $privateIPCount = ($results | Where-Object { $_.Country -eq "Private Network" }).Count
         
+        # Record coverage limits so the report cannot present this as a complete picture.
+        $geoFailedCount = @($resultsArray | Where-Object { $_.GeoLookupFailed -eq $true }).Count
+        if ($geoFailedCount -gt 0) {
+            $coverageComplete = $false
+            $coverageGaps.Add("$geoFailedCount sign-in(s) came from public IPs that could not be geolocated (lookup failure or quota); they are NOT evaluated for unusual location")
+        }
+        $noIpCount = @($resultsArray | Where-Object { [string]::IsNullOrWhiteSpace($_.IP) -or $_.IP -eq "Unknown" }).Count
+        if ($noIpCount -gt 0) {
+            $coverageComplete = $false
+            $coverageGaps.Add("$noIpCount sign-in(s) have no source IP; location, spray and breach analysis cannot evaluate them")
+        }
+        Set-CollectionStatus -Source "SignIns" -Complete $coverageComplete -Records $results.Count -Note ($coverageGaps -join "; ")
+        foreach ($gap in $coverageGaps) { Write-Log "SIGN-IN COVERAGE: $gap" -Level "Warning" }
+
         Update-GuiStatus "Sign-in collection complete: $($results.Count) records ($($unusualSignIns.Count) unusual, $($failedSignIns.Count) failed)" ([System.Drawing.Color]::Green)
         
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
@@ -4638,8 +4983,85 @@ function Get-TenantSignInData {
         Update-GuiStatus "Error collecting sign-in data: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in sign-in data collection: $($_.Exception.Message)" -Level "Error"
         Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Level "Error"
+        Set-CollectionStatus -Source "SignIns" -Complete $false -Records 0 -Note "Sign-in collection FAILED ($($_.Exception.Message)); any sign-in CSV in the working directory is from an EARLIER run and may be stale."
         return $null
     }
+}
+
+function Get-UalStsLogonWindow {
+    <#
+    .SYNOPSIS
+        Pulls every AzureActiveDirectoryStsLogon unified audit log record in [Start, End).
+
+    .DESCRIPTION
+        Search-UnifiedAuditLog with SessionCommand ReturnLargeSet exposes at most 50,000
+        records per session and returns them unsorted. Two things matter for completeness:
+        - Paging continues until the cmdlet returns ZERO records (per Microsoft's docs), not
+          until a page comes back smaller than ResultSize.
+        - If a window returns the 50,000-record ceiling it is almost certainly truncated,
+          so it is split in half and each half re-queried. If a window cannot be split
+          further it is reported in TruncatedWindows instead of being passed off as complete.
+
+    .OUTPUTS
+        Hashtable: Records (List of audit records), TruncatedWindows (List of strings)
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]
+        [datetime]$Start,
+
+        [Parameter(Mandatory = $true)]
+        [datetime]$End
+    )
+
+    $sessionCap = 50000
+    $minWindow = [TimeSpan]::FromMinutes(30)
+    $maxPages = 60   # safety stop (300k records)
+
+    $records = [System.Collections.Generic.List[object]]::new()
+    $truncated = [System.Collections.Generic.List[string]]::new()
+    $sessionId = [Guid]::NewGuid().ToString() + "_SignIn"
+    $pageCount = 0
+
+    do {
+        $pageCount++
+        $page = @(Search-UnifiedAuditLog `
+            -StartDate $Start `
+            -EndDate $End `
+            -RecordType "AzureActiveDirectoryStsLogon" `
+            -ResultSize 5000 `
+            -SessionId $sessionId `
+            -SessionCommand ReturnLargeSet `
+            -ErrorAction Stop)
+
+        if ($page.Count -gt 0) {
+            $records.AddRange([object[]]$page)
+            Write-Log "  Page $pageCount : Retrieved $($page.Count) records" -Level "Info"
+        }
+    } while ($page.Count -gt 0 -and $pageCount -lt $maxPages)
+
+    if ($records.Count -ge $sessionCap -and ($End - $Start) -gt $minWindow) {
+        # Hit the per-session ceiling: discard and re-pull as two smaller windows.
+        $mid = $Start.AddTicks([long](($End - $Start).Ticks / 2))
+        Write-Log "  Window $($Start.ToString('yyyy-MM-dd HH:mm')) to $($End.ToString('yyyy-MM-dd HH:mm')) hit the $sessionCap-record ceiling - splitting" -Level "Warning"
+        $first = Get-UalStsLogonWindow -Start $Start -End $mid
+        $second = Get-UalStsLogonWindow -Start $mid -End $End
+        $merged = [System.Collections.Generic.List[object]]::new()
+        $merged.AddRange($first.Records)
+        $merged.AddRange($second.Records)
+        $truncated.AddRange($first.TruncatedWindows)
+        $truncated.AddRange($second.TruncatedWindows)
+        return @{ Records = $merged; TruncatedWindows = $truncated }
+    }
+
+    if ($records.Count -ge $sessionCap) {
+        $truncated.Add("$($Start.ToString('yyyy-MM-dd HH:mm')) to $($End.ToString('yyyy-MM-dd HH:mm')) (hit the $sessionCap-record ceiling in a window that cannot be split further)")
+    }
+    if ($pageCount -ge $maxPages -and $page.Count -gt 0) {
+        $truncated.Add("$($Start.ToString('yyyy-MM-dd HH:mm')) to $($End.ToString('yyyy-MM-dd HH:mm')) (paging safety limit reached)")
+    }
+
+    return @{ Records = $records; TruncatedWindows = $truncated }
 }
 
 function Get-SignInDataFromExchangeOnline {
@@ -4715,6 +5137,7 @@ function Get-SignInDataFromExchangeOnline {
         $totalRecords = 0
         $failedChunks = 0
         $failedRanges = [System.Collections.Generic.List[string]]::new()
+        $truncatedWindows = [System.Collections.Generic.List[string]]::new()
 
         # Assume complete until a chunk fails; reset here so a previous run's state
         # does not bleed into this collection.
@@ -4739,56 +5162,16 @@ function Get-SignInDataFromExchangeOnline {
             Write-Log "Processing chunk $chunkNumber/$expectedChunks : $($currentStart.ToString('yyyy-MM-dd HH:mm')) to $($currentEnd.ToString('yyyy-MM-dd HH:mm'))" -Level "Info"
             
             try {
-                $sessionId = [Guid]::NewGuid().ToString() + "_SignIn_" + $chunkNumber
-                $chunkLogs = @()
-                $pageCount = 0
-                
-                # Paginate through all results
-                do {
-                    $pageCount++
-                    $pageResults = Search-UnifiedAuditLog `
-                        -StartDate $currentStart `
-                        -EndDate $currentEnd `
-                        -RecordType "AzureActiveDirectoryStsLogon" `
-                        -ResultSize 5000 `
-                        -SessionId $sessionId `
-                        -SessionCommand ReturnLargeSet `
-                        -ErrorAction Stop
-                    
-                    if ($pageResults -and $pageResults.Count -gt 0) {
-                        $chunkLogs += $pageResults
-                        Write-Log "  Page $pageCount : Retrieved $($pageResults.Count) records" -Level "Info"
-                    }
-                } while ($pageResults -and $pageResults.Count -ge 5000)
-                
-                # Fallback to broader search if no specific operations found
-                if ($chunkLogs.Count -eq 0) {
-                    Write-Log "No specific operations found, trying broader search..." -Level "Info"
-                    $sessionId = [Guid]::NewGuid().ToString() + "_Broad_" + $chunkNumber
-                    $pageCount = 0
-                    
-                    do {
-                        $pageCount++
-                        $pageResults = Search-UnifiedAuditLog `
-                            -StartDate $currentStart `
-                            -EndDate $currentEnd `
-                            -RecordType "AzureActiveDirectoryStsLogon" `
-                            -ResultSize 5000 `
-                            -SessionId $sessionId `
-                            -SessionCommand ReturnLargeSet `
-                            -ErrorAction Stop
-                        
-                        if ($pageResults -and $pageResults.Count -gt 0) {
-                            $chunkLogs += $pageResults
-                            Write-Log "  Page $pageCount : Retrieved $($pageResults.Count) records" -Level "Info"
-                        }
-                    } while ($pageResults -and $pageResults.Count -ge 5000)
-                }
-                
+                # Pages until the cmdlet returns zero records and splits any window that hits
+                # the 50,000-record ReturnLargeSet ceiling (see Get-UalStsLogonWindow).
+                $window = Get-UalStsLogonWindow -Start $currentStart -End $currentEnd
+                $chunkLogs = $window.Records
+                foreach ($truncatedWindow in $window.TruncatedWindows) { $truncatedWindows.Add($truncatedWindow) }
+
                 Write-Log "Chunk $chunkNumber complete: $($chunkLogs.Count) records" -Level "Info"
-                
-                if ($chunkLogs -and $chunkLogs.Count -gt 0) {
-                    $auditLogs.AddRange(@($chunkLogs))
+
+                if ($chunkLogs.Count -gt 0) {
+                    $auditLogs.AddRange([object[]]$chunkLogs.ToArray())
                     $totalRecords += $chunkLogs.Count
                 }
             }
@@ -4811,12 +5194,19 @@ function Get-SignInDataFromExchangeOnline {
 
         # If any chunk failed, the dataset has gaps. Make this loud rather than silent so
         # downstream analysis and the report are not mistaken for full-coverage results.
+        $exoWarnings = @()
         if ($failedChunks -gt 0) {
-            $warning = "$failedChunks of $chunkNumber EXO chunks failed - sign-in data is INCOMPLETE for: $($failedRanges -join '; ')"
+            $exoWarnings += "$failedChunks of $chunkNumber EXO chunks failed - sign-in data is INCOMPLETE for: $($failedRanges -join '; ')"
+        }
+        if ($truncatedWindows.Count -gt 0) {
+            $exoWarnings += "unified audit log ceiling reached, records TRUNCATED for: $($truncatedWindows -join '; ')"
+        }
+        if ($exoWarnings.Count -gt 0) {
+            $warning = $exoWarnings -join ' | '
             $Global:ExchangeOnlineState.LastCollectionComplete = $false
             $Global:ExchangeOnlineState.LastCollectionWarning = $warning
             Write-Log $warning -Level "Error"
-            Update-GuiStatus "WARNING: $failedChunks/$chunkNumber chunks failed - results are incomplete (see log)" ([System.Drawing.Color]::Red)
+            Update-GuiStatus "WARNING: EXO sign-in pull is incomplete (see log)" ([System.Drawing.Color]::Red)
         }
 
         # Remove duplicates (ReturnLargeSet returns unsorted data with dupes)
@@ -4928,7 +5318,7 @@ function Get-SignInDataFromExchangeOnline {
 								"*password*reset*" { $statusCode = "50125" }
 								"*mfa*required*" { $statusCode = "50074" }
 								"*consent*required*" { $statusCode = "65001" }
-								default { $statusCode = "50126" }  # Only default if nothing else matches
+								default { $statusCode = "UNKNOWN" }  # Unmapped text: do not guess a cause (50126 would inflate spray/brute-force counts)
 							}
 						}
 					}
@@ -4968,25 +5358,14 @@ function Get-SignInDataFromExchangeOnline {
 					$statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
 				}
 				# Check ResultStatus for explicit failure indicators
-				elseif ($auditDetails.ResultStatus -and 
-						$auditDetails.ResultStatus -match "Failed|Failure|Error") {
-					# Try to extract error code from ResultStatus
+				# (also covers UserLoggedIn records whose ResultStatus is Failed)
+				elseif ($auditDetails.ResultStatus -and $auditDetails.ResultStatus -match "Failed|Failure|Error") {
 					if ($auditDetails.ResultStatus -match '(\d{5,6})') {
 						$statusCode = $matches[1]
 					} else {
-						$statusCode = "50126"
+						$statusCode = "UNKNOWN"
 					}
 					$statusDescription = "Failed - " + $auditDetails.ResultStatus
-				}
-				# If Operation is UserLoggedIn but ResultStatus shows failure
-				elseif ($operation -eq "UserLoggedIn" -and 
-						$auditDetails.ResultStatus -eq "Failed") {
-					if ($auditDetails.ResultStatus -match '(\d{5,6})') {
-						$statusCode = $matches[1]
-					} else {
-						$statusCode = "50126"
-					}
-					$statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
 				}
 
                 
@@ -5022,8 +5401,9 @@ function Get-SignInDataFromExchangeOnline {
                     UserAgent = $userAgent
                     IsInteractive = $isInteractive
                     AppDisplayName = $appDisplayName
-                    ConditionalAccessStatus = "notApplied"
-                    RiskLevelDuringSignIn = "none"
+                    # The audit log does not carry these; say so instead of asserting "notApplied"/"none"
+                    ConditionalAccessStatus = "notAvailable"
+                    RiskLevelDuringSignIn = "notAvailable"
                     DeviceDetail = @{
                         OperatingSystem = "Unknown"
                         Browser = "Unknown"
@@ -5086,7 +5466,9 @@ function Get-PerUserMFAStatus {
     
     try {
         $uri = "https://graph.microsoft.com/beta/users/$UserId/authentication/requirements"
-        $authRequirements = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction SilentlyContinue
+        # -ErrorAction Stop: a 403/throttle must reach the catch (State = unknown, caller falls back
+        # to sign-in analysis) instead of being read as "per-user MFA disabled".
+        $authRequirements = Invoke-MgGraphRequest -Uri $uri -Method GET -ErrorAction Stop
         
         if ($authRequirements -and $authRequirements.perUserMfaState) {
             $perUserMFAState = $authRequirements.perUserMfaState
@@ -5135,10 +5517,10 @@ function Get-MFAStatusFromSignIns {
     )
     
     try {
-        $startDate = (Get-Date).AddDays(-$DaysBack).ToString("yyyy-MM-ddTHH:mm:ssZ")
+        $startDate = (Get-Date).AddDays(-$DaysBack).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
         
         $filter = "userPrincipalName eq '$UserPrincipalName' and createdDateTime ge $startDate"
-        $signIns = Get-MgBetaAuditLogSignIn -Filter $filter -Top 100 -ErrorAction SilentlyContinue
+        $signIns = Get-MgBetaAuditLogSignIn -Filter $filter -Top 100 -ErrorAction Stop
         
         if (-not $signIns -or $signIns.Count -eq 0) {
             return @{
@@ -5215,6 +5597,23 @@ function Get-MFAStatusAudit {
         • Attempts to use Graph Beta API first (most accurate)
         • Falls back to sign-in analysis if API unavailable
         • Combines both methods for comprehensive detection
+
+        CONDITIONAL ACCESS CREDIT (a policy counts as MFA enforcement only when it):
+        • is enabled, and grants via "mfa" or an authentication strength (compliantDevice
+          alone is NOT MFA; an OR operator with other grant options is not enforcement)
+        • includes the user by All / user / group (transitive membership) / role, and does
+          not exclude them by user / group / role / guest type
+        • targets All cloud apps, All client app types and All platforms, and is not
+          risk-conditioned. Policies that are narrower are listed in PartialCAPolicies and
+          not credited as full enforcement.
+
+        ADMIN DETECTION uses directory role assignments (active AND PIM-eligible, including
+        role-assignable groups), not group names.
+
+        API failures are never read as "no MFA": if registered methods cannot be read the
+        user is reported as HasMFA = Unknown, and every gap is recorded in
+        CollectionStatus.csv. Disabled accounts (and guests when SkipGuests is set) are
+        skipped and counted in the log.
     #>
     
     [CmdletBinding()]
@@ -5235,11 +5634,13 @@ function Get-MFAStatusAudit {
         
         Update-GuiStatus "Checking tenant-wide MFA settings..." ([System.Drawing.Color]::Orange)
         
+        $mfaGaps = [System.Collections.Generic.List[string]]::new()
+
         # Check Security Defaults
         $securityDefaultsEnabled = $false
         try {
             $policyUri = "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy"
-            $securityDefaultsPolicy = Invoke-MgGraphRequest -Uri $policyUri -Method GET -ErrorAction SilentlyContinue
+            $securityDefaultsPolicy = Invoke-MgGraphRequest -Uri $policyUri -Method GET -ErrorAction Stop
             
             if ($securityDefaultsPolicy.isEnabled -eq $true) {
                 $securityDefaultsEnabled = $true
@@ -5251,16 +5652,18 @@ function Get-MFAStatusAudit {
             }
         }
         catch {
+            $mfaGaps.Add("Security Defaults state could not be read; tenant-wide MFA enforcement via Security Defaults would not be credited")
             Write-Log "Could not check Security Defaults: $($_.Exception.Message)" -Level "Warning"
         }
         
         # Get Conditional Access Policies
         $caPolicies = @()
         try {
-            $caPolicies = Get-MgIdentityConditionalAccessPolicy -All -ErrorAction SilentlyContinue
+            $caPolicies = @(Get-MgIdentityConditionalAccessPolicy -All -ErrorAction Stop)
             Write-Log "Found $($caPolicies.Count) Conditional Access policies" -Level "Info"
         }
         catch {
+            $mfaGaps.Add("Conditional Access policies could not be read; MFA enforced through CA would not be credited, so users may appear unprotected")
             Write-Log "Could not retrieve Conditional Access policies: $($_.Exception.Message)" -Level "Warning"
         }
         
@@ -5312,7 +5715,8 @@ function Get-MFAStatusAudit {
                     # tracked, rather than silently returning $null and being cached as an
                     # empty group (which is indistinguishable from a genuinely empty group
                     # and would make in-scope users look uncovered).
-                    $members = Get-MgGroupMember -GroupId $groupId -All -ErrorAction Stop
+                    # Transitive: users in nested groups are in scope of (or excluded by) the policy too.
+                    $members = Get-MgGroupTransitiveMember -GroupId $groupId -All -ErrorAction Stop
                     $memberIdSet = [System.Collections.Generic.HashSet[string]]::new()
                     foreach ($m in $members) {
                         [void]$memberIdSet.Add($m.Id)
@@ -5329,10 +5733,23 @@ function Get-MFAStatusAudit {
 
             Write-Log "Group membership cache built: $($groupMembershipCache.Count) groups cached" -Level "Info"
             if ($failedGroupIds.Count -gt 0) {
+                $mfaGaps.Add("$($failedGroupIds.Count) group(s) referenced by Conditional Access policies could not be read; CA coverage for their members may be misreported")
                 Write-Log "WARNING: $($failedGroupIds.Count) CA group(s) could not be read. Conditional Access coverage for users in those groups may be reported as absent when it is not. Affected group IDs: $($failedGroupIds -join ', ')" -Level "Error"
             }
         }
         
+        # Directory role assignments (active + PIM eligible) - used for admin detection and for
+        # role-targeted Conditional Access policies (IncludeRoles / ExcludeRoles).
+        Update-GuiStatus "Reading directory role assignments..." ([System.Drawing.Color]::Orange)
+        $adminMap = Get-AdminRoleMap
+        foreach ($roleWarning in $adminMap.Warnings) {
+            $mfaGaps.Add($roleWarning)
+            Write-Log "Role assignment lookup: $roleWarning" -Level "Warning"
+        }
+        $authMethodFailures = 0
+        $skippedDisabled = 0
+        $skippedGuests = 0
+
         foreach ($user in $users) {
             $processedCount++
             
@@ -5346,12 +5763,14 @@ function Get-MFAStatusAudit {
             Write-Log "Processing: $($user.UserPrincipalName)" -Level "Info"
             
             if ($user.AccountEnabled -eq $false) {
+                $skippedDisabled++
                 Write-Log "Skipping disabled account: $($user.UserPrincipalName)" -Level "Info"
                 continue
             }
 
             # Skip guests if configured
             if ($user.UserType -eq "Guest" -and $ConfigData.SkipGuests) {
+                $skippedGuests++
                 Write-Log "Skipping guest user: $($user.UserPrincipalName)" -Level "Info"
                 continue
             }
@@ -5422,33 +5841,48 @@ function Get-MFAStatusAudit {
             
             $caPolicyEnforced = $false
             $applicablePolicies = @()
+            $partialPolicies = @()
+
+            $userRoleTemplateIds = if ($adminMap.Users.ContainsKey($user.Id)) { $adminMap.Users[$user.Id].TemplateIds } else { $null }
+            $userIsGuest = ($user.UserType -eq "Guest")
             
             if ($caPolicies.Count -gt 0) {
                 foreach ($policy in $caPolicies) {
                     if ($policy.State -ne "enabled") { continue }
                     
-                    # Check if policy requires MFA
+                    # Grant controls: MFA via the built-in "mfa" control or an authentication
+                    # strength. compliantDevice is NOT MFA and is not credited. With operator OR
+                    # and more than one grant option the user can satisfy the policy without MFA.
                     $requiresMFA = $false
                     if ($policy.GrantControls) {
-                        $grantControls = $policy.GrantControls.BuiltInControls
-                        if ($grantControls -contains "mfa" -or $grantControls -contains "compliantDevice") {
+                        # NOTE: @($null).Count is 1 in PowerShell, so absent properties are
+                        # filtered before counting.
+                        $builtInControls = @($policy.GrantControls.BuiltInControls | Where-Object { $_ })
+                        $hasAuthStrength = ($null -ne $policy.GrantControls.AuthenticationStrength)
+                        $grantOptionCount = $builtInControls.Count +
+                            $(if ($hasAuthStrength) { 1 } else { 0 }) +
+                            @($policy.GrantControls.CustomAuthenticationFactors | Where-Object { $_ }).Count +
+                            @($policy.GrantControls.TermsOfUse | Where-Object { $_ }).Count
+                        $offersMfa = ($builtInControls -contains "mfa") -or $hasAuthStrength
+                        if ($offersMfa -and ($policy.GrantControls.Operator -ne "OR" -or $grantOptionCount -le 1)) {
                             $requiresMFA = $true
                         }
                     }
                     
                     if (-not $requiresMFA) { continue }
                     
-                    # Check if user is in scope
+                    $policyUsers = $policy.Conditions.Users
+
+                    # Check if user is in scope: All, listed user, group (cache), role, guest type
                     $userInScope = $false
                     
-                    if ($policy.Conditions.Users.IncludeUsers -contains "All" -or
-                        $policy.Conditions.Users.IncludeUsers -contains $user.Id) {
+                    if ($policyUsers.IncludeUsers -contains "All" -or
+                        $policyUsers.IncludeUsers -contains $user.Id) {
                         $userInScope = $true
                     }
                     
-                    # Check included groups (using pre-built cache)
-                    if ($policy.Conditions.Users.IncludeGroups) {
-                        foreach ($groupId in $policy.Conditions.Users.IncludeGroups) {
+                    if (-not $userInScope -and $policyUsers.IncludeGroups) {
+                        foreach ($groupId in $policyUsers.IncludeGroups) {
                             if ($groupMembershipCache.ContainsKey($groupId) -and
                                 $groupMembershipCache[$groupId].Contains($user.Id)) {
                                 $userInScope = $true
@@ -5456,15 +5890,25 @@ function Get-MFAStatusAudit {
                             }
                         }
                     }
+
+                    if (-not $userInScope -and $policyUsers.IncludeRoles -and $userRoleTemplateIds) {
+                        foreach ($roleId in $policyUsers.IncludeRoles) {
+                            if ($userRoleTemplateIds.Contains("$roleId")) { $userInScope = $true; break }
+                        }
+                    }
+
+                    if (-not $userInScope -and $userIsGuest -and $policyUsers.IncludeGuestsOrExternalUsers) {
+                        $userInScope = $true
+                    }
                     
-                    # Check exclusions (using pre-built cache)
+                    # Exclusions: user, group (cache), role, guest type
                     if ($userInScope) {
-                        if ($policy.Conditions.Users.ExcludeUsers -contains $user.Id) {
+                        if ($policyUsers.ExcludeUsers -contains $user.Id) {
                             $userInScope = $false
                         }
                         
-                        if ($policy.Conditions.Users.ExcludeGroups) {
-                            foreach ($groupId in $policy.Conditions.Users.ExcludeGroups) {
+                        if ($userInScope -and $policyUsers.ExcludeGroups) {
+                            foreach ($groupId in $policyUsers.ExcludeGroups) {
                                 if ($groupMembershipCache.ContainsKey($groupId) -and
                                     $groupMembershipCache[$groupId].Contains($user.Id)) {
                                     $userInScope = $false
@@ -5472,11 +5916,38 @@ function Get-MFAStatusAudit {
                                 }
                             }
                         }
+
+                        if ($userInScope -and $policyUsers.ExcludeRoles -and $userRoleTemplateIds) {
+                            foreach ($roleId in $policyUsers.ExcludeRoles) {
+                                if ($userRoleTemplateIds.Contains("$roleId")) { $userInScope = $false; break }
+                            }
+                        }
+
+                        if ($userInScope -and $userIsGuest -and $policyUsers.ExcludeGuestsOrExternalUsers) {
+                            $userInScope = $false
+                        }
                     }
                     
-                    if ($userInScope) {
+                    if (-not $userInScope) { continue }
+
+                    # The policy applies to this user; it only counts as FULL MFA enforcement if
+                    # it is not narrowed by app, client type, platform or risk condition.
+                    $narrowedBy = @()
+                    if ($policy.Conditions.Applications.IncludeApplications -notcontains "All") { $narrowedBy += "specific apps only" }
+                    $clientTypes = @($policy.Conditions.ClientAppTypes | Where-Object { $_ })
+                    if ($clientTypes.Count -gt 0 -and $clientTypes -notcontains "all") { $narrowedBy += "limited client app types" }
+                    $includedPlatforms = @($policy.Conditions.Platforms.IncludePlatforms | Where-Object { $_ })
+                    if ($includedPlatforms.Count -gt 0 -and $includedPlatforms -notcontains "all") { $narrowedBy += "limited platforms" }
+                    if (@($policy.Conditions.UserRiskLevels | Where-Object { $_ }).Count -gt 0 -or @($policy.Conditions.SignInRiskLevels | Where-Object { $_ }).Count -gt 0) { $narrowedBy += "risk-conditioned" }
+
+                    if ($narrowedBy.Count -gt 0) {
+                        $partialPolicies += "$($policy.DisplayName) [$($narrowedBy -join ', ')]"
+                    }
+                    else {
                         $caPolicyEnforced = $true
-                        $applicablePolicies += $policy.DisplayName
+                        $policyLabel = $policy.DisplayName
+                        if (@($policy.Conditions.Locations.ExcludeLocations) -contains "AllTrusted") { $policyLabel += " (exempts trusted locations)" }
+                        $applicablePolicies += $policyLabel
                     }
                 }
             }
@@ -5487,15 +5958,32 @@ function Get-MFAStatusAudit {
             
             $registeredMethods = @()
             $hasMFAMethods = $false
+            $authMethodsFailed = $false
             
             try {
-                $authMethods = Get-MgUserAuthenticationMethod -UserId $user.Id -ErrorAction SilentlyContinue
+                # -ErrorAction Stop with throttle retry: a failure here must not look like
+                # "this user has no methods registered".
+                $authMethods = $null
+                for ($authAttempt = 1; $authAttempt -le 3; $authAttempt++) {
+                    try {
+                        $authMethods = Get-MgUserAuthenticationMethod -UserId $user.Id -ErrorAction Stop
+                        break
+                    }
+                    catch {
+                        if ($_.Exception.Message -match '429|503|throttl|too many requests|TooManyRequests' -and $authAttempt -lt 3) {
+                            Start-Sleep -Seconds ([Math]::Pow(2, $authAttempt))
+                        }
+                        else { throw }
+                    }
+                }
                 
                 if ($authMethods) {
                     foreach ($method in $authMethods) {
                         $methodType = $method.AdditionalProperties.'@odata.type'
                         
-                        if ($methodType -match "microsoftAuthenticator|phone|email|softwareOath|fido2") {
+                        # Email is an SSPR method, not MFA, so it is not counted. Windows Hello
+                        # for Business is strong MFA-equivalent.
+                        if ($methodType -match "microsoftAuthenticator|phone|softwareOath|fido2|windowsHelloForBusiness") {
                             $registeredMethods += $methodType -replace '#microsoft.graph.', ''
                             $hasMFAMethods = $true
                         }
@@ -5503,6 +5991,8 @@ function Get-MFAStatusAudit {
                 }
             }
             catch {
+                $authMethodsFailed = $true
+                $authMethodFailures++
                 Write-Log "Could not retrieve auth methods for $($user.UserPrincipalName): $($_.Exception.Message)" -Level "Warning"
             }
             
@@ -5513,18 +6003,17 @@ function Get-MFAStatusAudit {
             $isAdmin = $false
             $adminRoles = @()
             
-            try {
-                $roleAssignments = Get-MgUserMemberOf -UserId $user.Id -All -ErrorAction SilentlyContinue
-                
-                foreach ($role in $roleAssignments) {
-                    $roleName = $role.AdditionalProperties.displayName
-                    if ($roleName -like '*Admin*') {
-                        $isAdmin = $true
-                        $adminRoles += $roleName
-                    }
+            # From the pre-built role map: active AND PIM-eligible assignments, role-assignable
+            # groups expanded. (The old check matched any group/role NAME containing "Admin".)
+            if ($adminMap.Users.ContainsKey($user.Id)) {
+                $roleEntry = $adminMap.Users[$user.Id]
+                foreach ($roleName in @($roleEntry.Active | Select-Object -Unique)) {
+                    if ($roleName -like '*Admin*') { $isAdmin = $true; $adminRoles += $roleName }
+                }
+                foreach ($roleName in @($roleEntry.Eligible | Select-Object -Unique)) {
+                    if ($roleName -like '*Admin*') { $isAdmin = $true; $adminRoles += "$roleName (eligible)" }
                 }
             }
-            catch { }
             
             # ═══════════════════════════════════════════════════════════════════════════
             # DETERMINE OVERALL MFA STATUS
@@ -5544,7 +6033,11 @@ function Get-MFAStatusAudit {
             $hasMFAValue = "No"
             $mfaStatusDetail = "No MFA"
             
-            if ($mfaEnforced -and $mfaCapable) {
+            if ($authMethodsFailed) {
+                $hasMFAValue = "Unknown"
+                $mfaStatusDetail = "[WARNING] Registered MFA methods could not be read (permission or throttling) - MFA status NOT verified"
+            }
+            elseif ($mfaEnforced -and $mfaCapable) {
                 $hasMFAValue = "Yes"
                 $enforcementList = $enforcementMethod -join " + "
                 $mfaStatusDetail = "[OK] Enforced via $enforcementList with $($registeredMethods.Count) method(s) registered"
@@ -5610,7 +6103,7 @@ function Get-MFAStatusAudit {
                     $recommendation = "[ALERT] MEDIUM: MFA methods registered but not enforced - Enable per-user MFA or CA policy"
                 }
             }
-            elseif ($hasMFAValue -eq "Likely" -or $hasMFAValue -eq "Inconsistent") {
+            elseif ($hasMFAValue -eq "Likely" -or $hasMFAValue -eq "Inconsistent" -or $hasMFAValue -eq "Unknown") {
                 $riskLevel = "Medium"
                 $recommendation = "[ALERT] MEDIUM: Cannot fully verify MFA status - Manual review recommended"
             }
@@ -5643,6 +6136,7 @@ function Get-MFAStatusAudit {
                 PerUserMFAEnforced = $perUserMFAEnforced
                 ConditionalAccess = $caPolicyEnforced
                 ApplicablePolicies = ($applicablePolicies -join ", ")
+                PartialCAPolicies = ($partialPolicies -join "; ")
                 
                 # Registration details
                 MFARegistered = $hasMFAMethods
@@ -5671,6 +6165,20 @@ function Get-MFAStatusAudit {
         # EXPORT RESULTS
         # ═══════════════════════════════════════════════════════════════════════════════
         
+        if ($authMethodFailures -gt 0) {
+            $mfaGaps.Add("$authMethodFailures user(s) had registered MFA methods that could not be read; they are reported as HasMFA = Unknown")
+        }
+        Write-Log "MFA audit skipped $skippedDisabled disabled account(s) and $skippedGuests guest(s)" -Level "Info"
+
+        # Clear the previous run's files (variants are only rewritten when non-empty).
+        Remove-StaleOutput -Path @(
+            $OutputPath,
+            ($OutputPath -replace '\.csv$', '_NoMFA.csv'),
+            ($OutputPath -replace '\.csv$', '_PerUserOnly.csv'),
+            ($OutputPath -replace '\.csv$', '_HighRisk.csv')
+        )
+        Set-CollectionStatus -Source "MFAAudit" -Complete ($mfaGaps.Count -eq 0) -Records $mfaResults.Count -Note ($mfaGaps -join "; ")
+
         if ($mfaResults.Count -gt 0) {
             Update-GuiStatus "Exporting MFA status data..." ([System.Drawing.Color]::Orange)
             
@@ -5763,6 +6271,13 @@ function Get-FailedLoginPatterns {
         • Password spray attacks (same IP, many users)
         • Brute force attacks (same user, many attempts)
         • Confirmed breaches (5+ failures then success from SAME IP)
+        • Guessed passwords blocked by MFA (5+ failures then an MFA challenge from the
+          SAME IP - 50074/50076 means the password was CORRECT)
+
+        Timestamps are parsed to DateTime once (the CSV stores culture-formatted text, which
+        sorts wrongly as a string) so first/last attempt and the breach window are correct.
+        Failures with no source IP cannot be attributed to an attacker and are counted; the
+        gap is recorded in CollectionStatus.csv rather than reported as a clean result.
     #>
     
     [CmdletBinding()]
@@ -5785,6 +6300,22 @@ function Get-FailedLoginPatterns {
         }
         
         $signInData = Import-Csv -Path $SignInDataPath
+        $gaps = [System.Collections.Generic.List[string]]::new()
+
+        # CreationTime is culture-formatted text in the CSV: parse once so ordering and the
+        # breach window use real DateTimes.
+        $unparsedTimes = 0
+        $signInData = @(foreach ($row in $signInData) {
+            [datetime]$parsedTime = [datetime]::MinValue
+            if ([DateTime]::TryParse($row.CreationTime, [ref]$parsedTime)) {
+                $row | Add-Member -NotePropertyName EventTime -NotePropertyValue $parsedTime -Force -PassThru
+            }
+            else { $unparsedTimes++ }
+        })
+        if ($unparsedTimes -gt 0) {
+            $gaps.Add("$unparsedTimes sign-in record(s) had an unparseable timestamp and were excluded")
+            Write-Log "$unparsedTimes sign-in record(s) had an unparseable CreationTime and were excluded from attack analysis" -Level "Warning"
+        }
 
         # ── IMPORTANT: use StatusCode (numeric), NOT Status (text description) ──
         # The CSV has two columns:
@@ -5838,8 +6369,8 @@ function Get-FailedLoginPatterns {
             if ($totalAttempts -ge 5 -and $uniqueUsers -ge 3) {
                 $timespan = 0
                 if ($ipGroup.Group.Count -gt 1) {
-                    $firstAttempt = [DateTime]($ipGroup.Group | Sort-Object CreationTime | Select-Object -First 1).CreationTime
-                    $lastAttempt = [DateTime]($ipGroup.Group | Sort-Object CreationTime | Select-Object -Last 1).CreationTime
+                    $firstAttempt = [DateTime]($ipGroup.Group | Sort-Object EventTime | Select-Object -First 1).EventTime
+                    $lastAttempt = [DateTime]($ipGroup.Group | Sort-Object EventTime | Select-Object -Last 1).EventTime
                     $timespan = [math]::Round(($lastAttempt - $firstAttempt).TotalHours, 1)
                 }
                 
@@ -5852,8 +6383,8 @@ function Get-FailedLoginPatterns {
                     TargetedUsers = $uniqueUsers
                     FailedAttempts = $totalAttempts
                     TimeSpan = $timespan
-                    FirstSeen = ($ipGroup.Group | Sort-Object CreationTime | Select-Object -First 1).CreationTime
-                    LastSeen = ($ipGroup.Group | Sort-Object CreationTime | Select-Object -Last 1).CreationTime
+                    FirstSeen = ($ipGroup.Group | Sort-Object EventTime | Select-Object -First 1).CreationTime
+                    LastSeen = ($ipGroup.Group | Sort-Object EventTime | Select-Object -Last 1).CreationTime
                     RiskLevel = if ($uniqueUsers -ge 10 -or $totalAttempts -ge 20) { "Critical" }
                                elseif ($uniqueUsers -ge 5 -or $totalAttempts -ge 10) { "High" }
                                else { "Medium" }
@@ -5886,8 +6417,8 @@ function Get-FailedLoginPatterns {
             if ($totalAttempts -ge 5) {
                 $timespan = 0
                 if ($userGroup.Group.Count -gt 1) {
-                    $firstAttempt = [DateTime]($userGroup.Group | Sort-Object CreationTime | Select-Object -First 1).CreationTime
-                    $lastAttempt = [DateTime]($userGroup.Group | Sort-Object CreationTime | Select-Object -Last 1).CreationTime
+                    $firstAttempt = [DateTime]($userGroup.Group | Sort-Object EventTime | Select-Object -First 1).EventTime
+                    $lastAttempt = [DateTime]($userGroup.Group | Sort-Object EventTime | Select-Object -Last 1).EventTime
                     $timespan = [math]::Round(($lastAttempt - $firstAttempt).TotalHours, 1)
                 }
                 
@@ -5902,8 +6433,8 @@ function Get-FailedLoginPatterns {
                     TargetedUsers = 1
                     FailedAttempts = $totalAttempts
                     TimeSpan = $timespan
-                    FirstSeen = ($userGroup.Group | Sort-Object CreationTime | Select-Object -First 1).CreationTime
-                    LastSeen = ($userGroup.Group | Sort-Object CreationTime | Select-Object -Last 1).CreationTime
+                    FirstSeen = ($userGroup.Group | Sort-Object EventTime | Select-Object -First 1).CreationTime
+                    LastSeen = ($userGroup.Group | Sort-Object EventTime | Select-Object -Last 1).CreationTime
                     RiskLevel = if ($totalAttempts -ge 20) { "Critical" }
                                elseif ($totalAttempts -ge 10) { "High" }
                                else { "Medium" }
@@ -5940,17 +6471,17 @@ function Get-FailedLoginPatterns {
             if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip)) { continue }
             
             # Get the failed attempts sorted by time
-            $attempts = $group.Group | Sort-Object CreationTime
-            $firstFailedTime = [DateTime]($attempts[0].CreationTime)
-            $lastFailedTime = [DateTime]($attempts[-1].CreationTime)
+            $attempts = $group.Group | Sort-Object EventTime
+            $firstFailedTime = $attempts[0].EventTime
+            $lastFailedTime = $attempts[-1].EventTime
             
             # CRITICAL: Look for successful login from THE EXACT SAME IP
             # This ensures legitimate logins from office/home don't get flagged
             $breach = $successfulLogins | Where-Object {
                 $_.IP -eq $ip -and                                          # MUST be same IP
                 $_.UserId -eq $userId -and                                   # Same user
-                [DateTime]$_.CreationTime -gt $lastFailedTime -and          # After last failure
-                ([DateTime]$_.CreationTime - $firstFailedTime).TotalHours -le 2  # Within 2 hours
+                $_.EventTime -gt $lastFailedTime -and                       # After last failure
+                ($_.EventTime - $firstFailedTime).TotalHours -le 2          # Within 2 hours
             } | Select-Object -First 1
             
             if ($breach) {
@@ -5969,7 +6500,7 @@ function Get-FailedLoginPatterns {
                 
                 if (-not $existing) {
                     $breachCount++
-                    $breachTime = [DateTime]$breach.CreationTime
+                    $breachTime = $breach.EventTime
                     $totalFailedAttempts = $group.Count
                     $timeToBreach = [math]::Round(($breachTime - $lastFailedTime).TotalMinutes, 1)
                     
@@ -5997,11 +6528,78 @@ function Get-FailedLoginPatterns {
         }
         
         Write-Log "Breach detection complete: $breachCount confirmed breaches (same IP requirement)" -Level "Info"
+
+        #═══════════════════════════════════════════════════════════
+        # PATTERN 4: PASSWORD GUESSED, MFA HELD
+        # 5+ credential failures, then an MFA challenge (50074/50076) from the SAME IP.
+        # The MFA prompt only appears after the password was accepted, so the password is
+        # compromised even though the attacker never got in. Not counted as a success above.
+        #═══════════════════════════════════════════════════════════
+        Update-GuiStatus "Detecting guessed passwords blocked by MFA..." ([System.Drawing.Color]::Orange)
+        $mfaChallenged = @($signInData | Where-Object { $_.StatusCode -in @("50074", "50076") })
+        $mfaHeldCount = 0
+        foreach ($group in $failedByUserIP) {
+            if ($group.Count -lt 5) { continue }
+            $parts = $group.Name -split [regex]::Escape([char]0x1F)
+            if ($parts.Count -ne 2) { continue }
+            $userId = $parts[0]
+            $ip = $parts[1]
+            if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip)) { continue }
+
+            $attempts = $group.Group | Sort-Object EventTime
+            $firstFailedTime = $attempts[0].EventTime
+            $lastFailedTime = $attempts[-1].EventTime
+
+            $challenge = $mfaChallenged | Where-Object {
+                $_.IP -eq $ip -and
+                $_.UserId -eq $userId -and
+                $_.EventTime -gt $lastFailedTime -and
+                ($_.EventTime - $firstFailedTime).TotalHours -le 2
+            } | Select-Object -First 1
+
+            if ($challenge) {
+                $mfaHeldCount++
+                $patterns.Add([PSCustomObject]@{
+                    PatternType = "Password Guessed - MFA Held"
+                    SourceIP = $ip
+                    SourceIPs = $ip
+                    Location = $attempts[0].City + ", " + $attempts[0].Country
+                    ISP = $attempts[0].ISP
+                    TargetedUsers = 1
+                    FailedAttempts = $group.Count
+                    TimeSpan = [math]::Round(($challenge.EventTime - $firstFailedTime).TotalHours, 2)
+                    FirstSeen = $attempts[0].CreationTime
+                    LastSeen = $challenge.CreationTime
+                    RiskLevel = if ($group.Count -ge 20) { "Critical" } else { "High" }
+                    SuccessfulBreach = $false
+                    Details = "PASSWORD COMPROMISED, MFA HELD: User $userId - $($group.Count) failed attempts from $ip ($($attempts[0].City), $($attempts[0].Country)), then an MFA challenge from the SAME IP. The password was accepted; reset it and review the account."
+                })
+                Write-Log "MFA-HELD PASSWORD GUESS: $userId from $ip after $($group.Count) failures" -Level "Warning"
+            }
+        }
+        Write-Log "MFA-held password guesses detected: $mfaHeldCount" -Level "Info"
+
+        # Failures with no source IP cannot be grouped by attacker or matched to a later
+        # success, so spray and breach detection is blind to them. Count and report.
+        $noIpFailures = @($failedLogins | Where-Object { [string]::IsNullOrWhiteSpace($_.IP) -or $_.IP -eq "Unknown" }).Count
+        if ($noIpFailures -gt 0) {
+            $gaps.Add("$noIpFailures of $($failedLogins.Count) credential-failure event(s) had no source IP; spray and breach detection cannot evaluate them")
+            Write-Log "$noIpFailures of $($failedLogins.Count) credential-failure events have no source IP - not evaluated for spray/breach" -Level "Warning"
+        }
         
+        # Previous run's files are only rewritten when non-empty; remove them so a clean run
+        # cannot leave old attack patterns behind for the analysis step.
+        Remove-StaleOutput -Path @(
+            $OutputPath,
+            ($OutputPath -replace '\.csv$', '_Critical.csv'),
+            ($OutputPath -replace '\.csv$', '_Breaches.csv')
+        )
+
         # Export results
+        $patternsArray = @($patterns.ToArray())
         if ($patterns.Count -gt 0) {
-            $patternsArray = $patterns.ToArray()
-            $patternsArray | Sort-Object RiskLevel, FailedAttempts -Descending | 
+            $riskRank = @{ Critical = 3; High = 2; Medium = 1; Low = 0 }
+            $patternsArray | Sort-Object @{ Expression = { $riskRank[$_.RiskLevel] }; Descending = $true }, @{ Expression = 'FailedAttempts'; Descending = $true } | 
                 Export-Csv -Path $OutputPath -NoTypeInformation -Force
             
             $criticalPatterns = $patternsArray | Where-Object { $_.RiskLevel -eq "Critical" }
@@ -6033,9 +6631,16 @@ function Get-FailedLoginPatterns {
             Write-Log "  Critical Risk: $($stats.Critical)" -Level "Info"
         }
         else {
-            Update-GuiStatus "No suspicious failed login patterns detected" ([System.Drawing.Color]::Green)
+            if ($gaps.Count -gt 0) {
+                Update-GuiStatus "No attack patterns found, but coverage was incomplete (see log)" ([System.Drawing.Color]::Orange)
+            }
+            else {
+                Update-GuiStatus "No suspicious failed login patterns detected" ([System.Drawing.Color]::Green)
+            }
             Write-Log "No attack patterns detected" -Level "Info"
         }
+
+        Set-CollectionStatus -Source "FailedLoginAnalysis" -Complete ($gaps.Count -eq 0) -Records $patterns.Count -Note ($gaps -join "; ")
         
         return $patternsArray
     }
@@ -6052,7 +6657,11 @@ function Get-RecentPasswordChanges {
         Identifies suspicious password reset patterns
     
     .DESCRIPTION
-        Analyzes admin audit logs for password change patterns
+        Analyzes admin audit logs for password change patterns per target user: several
+        changes in a short window, many different initiators, off-hours activity, and
+        excessive totals. Users with a single password event are not flagged here (a lone
+        helpdesk reset is normal); admin-initiated changes still appear in the admin audit
+        data. Off-hours are evaluated in the local time of the machine running the analysis.
     #>
     
     [CmdletBinding()]
@@ -6088,7 +6697,7 @@ function Get-RecentPasswordChanges {
         $passwordEvents = @(foreach ($row in $auditData) {
             if ($row.Activity -notlike "*password*") { continue }
 
-            $eventTime = $null
+            [datetime]$eventTime = [datetime]::MinValue
             $rawDate = if (-not [string]::IsNullOrWhiteSpace($row.ActivityDate)) { $row.ActivityDate } else { $row.Timestamp }
             if ([string]::IsNullOrWhiteSpace($rawDate) -or -not [DateTime]::TryParse($rawDate, [ref]$eventTime)) { continue }
 
@@ -6116,6 +6725,13 @@ function Get-RecentPasswordChanges {
         if ($unresolvedTargets -gt 0) {
             Write-Log "$unresolvedTargets password-related event(s) had no resolvable target user and were excluded from analysis" -Level "Warning"
         }
+
+        # Clear this analysis' previous output so a clean run cannot leave old findings behind.
+        Remove-StaleOutput -Path @($OutputPath, ($OutputPath -replace '\.csv$', '_Critical.csv'))
+        Set-CollectionStatus -Source "PasswordChangeAnalysis" `
+            -Complete ($unresolvedTargets -eq 0) `
+            -Records $passwordEvents.Count `
+            -Note $(if ($unresolvedTargets -gt 0) { "$unresolvedTargets password-related audit event(s) had no resolvable target user and were not analyzed" } else { "" })
         
         if ($passwordEvents.Count -eq 0) {
             Update-GuiStatus "No password change events found" ([System.Drawing.Color]::Green)
@@ -6329,7 +6945,7 @@ function Get-AdminAuditData {
     # Lower bound only. A date-only upper bound ("le yyyy-MM-dd") resolves to midnight
     # UTC and silently drops every event from the current day - the newest and most
     # relevant records in an active investigation.
-    $startDate = (Get-Date).AddDays(-$DaysBack).ToString("yyyy-MM-dd")
+    $startDate = (Get-Date).ToUniversalTime().AddDays(-$DaysBack).ToString("yyyy-MM-dd")
     
     try {
         Update-GuiStatus "Querying Microsoft Graph for admin audit logs..." ([System.Drawing.Color]::Orange)
@@ -6369,7 +6985,9 @@ function Get-AdminAuditData {
                 ".*[Cc]reate.*[Aa]pplication.*|.*[Cc]reate.*[Ss]ervice [Pp]rincipal.*" { $riskLevel = "Medium" }
                 ".*[Uu]pdate.*[Aa]pplication.*" { $riskLevel = "Medium" }
                 ".*[Dd]elete.*|.*[Rr]emove.*" { $riskLevel = "Medium" }
-                default { $riskLevel = "Low" }
+                # Evaluated last so they win over the generic Delete/Remove match above.
+                # These are the classic persistence / defence-evasion operations.
+                ".*[Cc]onsent to application.*|.*[Aa]dd service principal credentials.*|.*[Cc]ertificates and secrets.*|.*[Aa]dd owner to (application|service principal).*|.*[Ss]et federation settings.*|.*[Aa]dd (unverified|verified) domain.*|.*[Cc]onditional [Aa]ccess policy.*|.*[Dd]isable [Ss]trong [Aa]uthentication.*" { $riskLevel = "High" }
             }
             
             # Login status determination
@@ -6449,9 +7067,22 @@ function Get-AdminAuditData {
             $processedLogs.Add($processedLog)
         }
         
+        # Clear the previous run's files (the filtered variants are only rewritten when
+        # non-empty) so old findings cannot be mistaken for current ones.
+        Remove-StaleOutput -Path @(
+            $OutputPath,
+            ($OutputPath -replace '\.csv$', '_Critical.csv'),
+            ($OutputPath -replace '\.csv$', '_Failed.csv'),
+            ($OutputPath -replace '\.csv$', '_LoginActivity.csv')
+        )
+
         # Export results
         $processedLogsArray = $processedLogs.ToArray()
-        $processedLogsArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        Set-CollectionStatus -Source "AdminAudit" -Complete $true -Records $processedLogsArray.Count `
+            -Note "Microsoft Entra directory audit only (role, app, user and policy changes). Exchange admin actions such as New-InboxRule or Add-MailboxPermission are not in this source."
+        if ($processedLogsArray.Count -gt 0) {
+            $processedLogsArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+        }
         
         # Create filtered versions
         $highRiskLogs = $processedLogsArray | Where-Object { $_.RiskLevel -eq "High" }
@@ -6481,6 +7112,7 @@ function Get-AdminAuditData {
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in admin audit collection: $($_.Exception.Message)" -Level "Error"
+        Set-CollectionStatus -Source "AdminAudit" -Complete $false -Records 0 -Note "Admin audit collection FAILED ($($_.Exception.Message)); any admin audit CSV in the working directory is from an EARLIER run."
         return $null
     }
 }
@@ -6495,9 +7127,27 @@ function Get-MailboxRules {
         Collects inbox rules from every user and shared mailbox in the tenant
     
     .DESCRIPTION
-        Retrieves inbox rules from all mailboxes regardless of sign-in
+        Retrieves inbox rules from every user and shared mailbox regardless of sign-in
         activity, with progress tracking. Note: Exchange Online cmdlets cannot use
         ForEach-Object -Parallel, so this uses optimized sequential processing.
+
+        - Hidden rules are included (Get-InboxRule -IncludeHidden). Attackers use hidden
+          rules precisely because they do not show up in Outlook or a plain Get-InboxRule.
+        - Forwarding/redirect targets are checked against the tenant's ACCEPTED DOMAINS
+          (ForwardTo, ForwardAsAttachmentTo and RedirectTo). A target outside those domains
+          is tagged "External forwarding".
+        - The Mailbox column is the UPN, so rule findings line up with sign-in data for
+          hybrid users whose UPN and primary SMTP address differ. The SMTP address is in
+          PrimarySmtpAddress.
+        - Mailboxes that cannot be read (errors, persistent throttling) are logged by name
+          and written to InboxRules_Skipped.csv, and the run is recorded as INCOMPLETE in
+          CollectionStatus.csv. A previous run's output is removed first so a run that
+          finds nothing cannot leave stale rules behind.
+
+    .NOTES
+        Get-InboxRule does not work for members of the View-Only Organization Management
+        role group or the Global Reader Entra role. Use Exchange Administrator (or a
+        role group with the Mail Recipients role).
     #>
     
     [CmdletBinding()]
@@ -6559,10 +7209,30 @@ function Get-MailboxRules {
         
         Write-Log "Processing $($mailboxesToCheck.Count) mailboxes for inbox rules" -Level "Info"
         Write-Log "NOTE: Exchange Online cmdlets require sequential processing" -Level "Info"
+
+        # Accepted domains define "internal" for the external forwarding check.
+        $orgDomains = @()
+        try {
+            $orgDomains = @(Get-AcceptedDomain -ErrorAction Stop | ForEach-Object { $_.DomainName.ToString().ToLower() })
+            Write-Log "Loaded $($orgDomains.Count) accepted domains for external forwarding checks" -Level "Info"
+        }
+        catch {
+            Write-Log "Could not retrieve accepted domains ($($_.Exception.Message)) - falling back to each mailbox's own domain, so forwarding between the tenant's other domains will be reported as external" -Level "Warning"
+        }
+
+        # Remove this collector's previous output so a run that finds nothing cannot leave
+        # last run's rules behind for the analysis step.
+        $skippedPath = $OutputPath -replace '\.csv$', '_Skipped.csv'
+        Remove-StaleOutput -Path @(
+            $OutputPath,
+            ($OutputPath -replace '\.csv$', '_Suspicious.csv'),
+            ($OutputPath -replace '\.csv$', '_Forwarding.csv'),
+            $skippedPath
+        )
         
         $allRulesArray = [System.Collections.Generic.List[PSCustomObject]]::new()
         $processedCount = 0
-        $skippedMailboxes = 0
+        $skippedMailboxes = [System.Collections.Generic.List[PSCustomObject]]::new()
         $startTime = Get-Date
 
         foreach ($mailbox in $mailboxesToCheck) {
@@ -6602,7 +7272,7 @@ function Get-MailboxRules {
                 while ($ruleAttempt -lt $maxRuleAttempts) {
                     $ruleAttempt++
                     try {
-                        $rules = Get-InboxRule -Mailbox $mailbox.PrimarySmtpAddress -ErrorAction Stop
+                        $rules = Get-InboxRule -Mailbox $mailbox.PrimarySmtpAddress -IncludeHidden -ErrorAction Stop
                         break
                     }
                     catch {
@@ -6625,26 +7295,39 @@ function Get-MailboxRules {
                         # Analyze rule for suspicious patterns
                         $isSuspicious = $false
                         $suspiciousReasons = @()
+                        $externalTargets = @()
                         
                         # Check for forwarding
                         if ($rule.ForwardTo -or $rule.ForwardAsAttachmentTo -or $rule.RedirectTo) {
                             $isSuspicious = $true
                             $suspiciousReasons += "Forwards email"
                             
-                            # Check for external forwarding
-                            $mailboxDomain = $mailbox.PrimarySmtpAddress.Split('@')[1]
-                            if ($rule.ForwardTo) {
-                                foreach ($forwardAddr in $rule.ForwardTo) {
-                                    if ($forwardAddr -notlike "*$mailboxDomain*") {
-                                        $suspiciousReasons += "External forwarding"
-                                        break
+                            # External = any target whose address domain is not an accepted
+                            # domain of the tenant. Checks ForwardTo, ForwardAsAttachmentTo
+                            # AND RedirectTo, and compares whole domains (a substring match
+                            # lets evilcontoso.com pass for contoso.com). Targets with no SMTP
+                            # address (internal recipients, [EX:...]) are treated as internal.
+                            $internalDomains = if ($orgDomains.Count -gt 0) { $orgDomains } else { @($mailbox.PrimarySmtpAddress.ToString().Split('@')[1].ToLower()) }
+                            $externalTargets = @()
+                            foreach ($targetList in @($rule.ForwardTo, $rule.ForwardAsAttachmentTo, $rule.RedirectTo)) {
+                                foreach ($target in @($targetList)) {
+                                    $targetText = "$target"
+                                    if ([string]::IsNullOrWhiteSpace($targetText)) { continue }
+                                    $targetDomain = $null
+                                    if ($targetText -match 'SMTP:[^\]\s@]+@([^\]\s]+)') { $targetDomain = $Matches[1] }
+                                    elseif ($targetText -match '[A-Za-z0-9._%+''-]+@([A-Za-z0-9.-]+\.[A-Za-z]{2,})') { $targetDomain = $Matches[1] }
+                                    if ($targetDomain -and ($internalDomains -notcontains $targetDomain.ToLower())) {
+                                        $externalTargets += $targetText
                                     }
                                 }
                             }
+                            if ($externalTargets.Count -gt 0) {
+                                $suspiciousReasons += "External forwarding"
+                            }
                         }
                         
-                        # Check for deletion
-                        if ($rule.DeleteMessage -eq $true) {
+                        # Check for deletion (hard delete or soft delete to Deleted Items)
+                        if ($rule.DeleteMessage -eq $true -or $rule.SoftDeleteMessage -eq $true) {
                             $isSuspicious = $true
                             $suspiciousReasons += "Deletes messages"
                         }
@@ -6677,7 +7360,9 @@ function Get-MailboxRules {
                         }
                         
                         $ruleObject = [PSCustomObject]@{
-                            Mailbox = $mailbox.PrimarySmtpAddress
+                            Mailbox = $mailbox.UserPrincipalName
+                            PrimarySmtpAddress = $mailbox.PrimarySmtpAddress
+                            MailboxType = $mailbox.RecipientTypeDetails
                             DisplayName = $mailbox.DisplayName
                             RuleName = $rule.Name
                             Description = $rule.Description
@@ -6686,7 +7371,9 @@ function Get-MailboxRules {
                             ForwardTo = if ($rule.ForwardTo) { $rule.ForwardTo -join ", " } else { "" }
                             RedirectTo = if ($rule.RedirectTo) { $rule.RedirectTo -join ", " } else { "" }
                             ForwardAsAttachmentTo = if ($rule.ForwardAsAttachmentTo) { $rule.ForwardAsAttachmentTo -join ", " } else { "" }
+                            ExternalTargets = ($externalTargets -join ", ")
                             DeleteMessage = $rule.DeleteMessage
+                            SoftDeleteMessage = $rule.SoftDeleteMessage
                             MarkAsRead = $rule.MarkAsRead
                             StopProcessingRules = $rule.StopProcessingRules
                             MoveToFolder = $rule.MoveToFolder
@@ -6706,16 +7393,26 @@ function Get-MailboxRules {
                 }
             }
             catch {
-                $skippedMailboxes++
+                $skippedMailboxes.Add([PSCustomObject]@{
+                    Mailbox = $mailbox.UserPrincipalName
+                    PrimarySmtpAddress = $mailbox.PrimarySmtpAddress
+                    Error = $_.Exception.Message
+                })
                 Write-Log "Error getting rules for $($mailbox.PrimarySmtpAddress): $($_.Exception.Message)" -Level "Warning"
             }
         }
 
-        # If any mailboxes could not be read, the rules dataset is incomplete - surface it.
-        if ($skippedMailboxes -gt 0) {
-            Write-Log "$skippedMailboxes of $($mailboxesToCheck.Count) mailboxes could not be read (errors/throttling) - inbox rule results are INCOMPLETE" -Level "Error"
-            Update-GuiStatus "WARNING: $skippedMailboxes mailbox(es) skipped - rule results incomplete (see log)" ([System.Drawing.Color]::Red)
+        # If any mailboxes could not be read, the rules dataset is incomplete - name them,
+        # write them out and record the gap so the report shows it.
+        if ($skippedMailboxes.Count -gt 0) {
+            $skippedMailboxes | Export-Csv -Path $skippedPath -NoTypeInformation -Force
+            Write-Log "$($skippedMailboxes.Count) of $($mailboxesToCheck.Count) mailboxes could not be read (errors/throttling) - inbox rule results are INCOMPLETE. Unread mailboxes listed in $skippedPath" -Level "Error"
+            Update-GuiStatus "WARNING: $($skippedMailboxes.Count) mailbox(es) skipped - rule results incomplete (see log)" ([System.Drawing.Color]::Red)
         }
+        Set-CollectionStatus -Source "InboxRules" `
+            -Complete ($skippedMailboxes.Count -eq 0) `
+            -Records $allRulesArray.Count `
+            -Note $(if ($skippedMailboxes.Count -gt 0) { "$($skippedMailboxes.Count) of $($mailboxesToCheck.Count) mailboxes could not be read; rules for those mailboxes are missing (see InboxRules_Skipped.csv)" } else { "" })
 
         # ═══════════════════════════════════════════════════════════════════════════
         # STEP 5: EXPORT RESULTS
@@ -6774,8 +7471,14 @@ function Get-MailboxRules {
             return $allRulesExport
         }
         else {
-            Update-GuiStatus "No inbox rules found in any mailbox" ([System.Drawing.Color]::Yellow)
-            Write-Log "No inbox rules found in any mailbox" -Level "Info"
+            if ($skippedMailboxes.Count -gt 0) {
+                Update-GuiStatus "No inbox rules found in the $($mailboxesToCheck.Count - $skippedMailboxes.Count) readable mailboxes - $($skippedMailboxes.Count) could not be read" ([System.Drawing.Color]::Red)
+                Write-Log "No inbox rules found in the readable mailboxes; $($skippedMailboxes.Count) mailbox(es) could not be read, so this is NOT a clean result" -Level "Warning"
+            }
+            else {
+                Update-GuiStatus "No inbox rules found in any mailbox" ([System.Drawing.Color]::Yellow)
+                Write-Log "No inbox rules found in any mailbox" -Level "Info"
+            }
             Write-Log "Mailboxes checked: $($mailboxesToCheck.Count)" -Level "Info"
             Write-Log "Processing time: $($elapsedTime.ToString('mm\:ss'))" -Level "Info"
             return @()
@@ -6995,6 +7698,10 @@ function Get-MailboxDelegationData {
         elseif (Test-Path -Path $skippedPath) {
             Remove-Item -Path $skippedPath -Force -ErrorAction SilentlyContinue
         }
+        Set-CollectionStatus -Source "MailboxDelegation" `
+            -Complete ($skipped.Count -eq 0) `
+            -Records $delegations.Count `
+            -Note $(if ($skipped.Count -gt 0) { "$($skipped.Count) of $totalCount mailboxes could not be read; delegations on those mailboxes are missing (see MailboxDelegation_Skipped.csv)" } else { "" })
 
         # Overwrite our own previous output either way so a clean run cannot leave last
         # run's delegations behind for the analysis step to pick up.
@@ -7032,20 +7739,34 @@ function Get-MailboxDelegationData {
 function Get-AppRegistrationData {
     <#
     .SYNOPSIS
-        Collects app registrations with risk assessment.
-    
+        Collects app registrations AND consented enterprise apps with risk assessment.
+
     .DESCRIPTION
-        Retrieves application registrations and service principals,
-        assessing risk based on:
-        • Requested permissions (high-privilege APIs)
-        • Missing publisher information
-        • Recently created apps
-        • Unusual configurations
-    
+        Covers both places an OAuth abuse can live:
+        - App registrations owned by this tenant (Get-MgApplication), evaluated
+          regardless of creation date. IsRecent marks apps created inside the date range.
+        - Third-party enterprise apps (service principals) that hold consent in this
+          tenant. Illicit-consent attacks use a multi-tenant app the attacker owns, so it
+          exists here ONLY as a service principal with grants and never as an app
+          registration.
+
+        Risk is based on permission NAMES, resolved from the Microsoft Graph, Exchange
+        Online, SharePoint and Azure AD Graph service principals (not a hard-coded ID
+        list), across three sources:
+        - Requested   (RequiredResourceAccess on the app registration)
+        - Delegated   (oauth2PermissionGrants, including tenant-wide admin consent)
+        - Application (app role assignments on Graph and Exchange Online)
+
+        Risk only ever escalates: a missing publisher raises Low to Medium but never
+        lowers a High.
+
+    .PARAMETER DaysBack
+        Window used for the IsRecent flag (default: configured date range).
+
     .OUTPUTS
-        Array of app registration objects with risk scores
+        Array of app objects with risk level and reasons
     #>
-    
+
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $false)]
@@ -7053,84 +7774,234 @@ function Get-AppRegistrationData {
         [Parameter(Mandatory = $false)]
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "AppRegistrations.csv")
     )
-    
+
     Update-GuiStatus "Starting app registration collection..." ([System.Drawing.Color]::Orange)
-    $startDate = (Get-Date).AddDays(-$DaysBack)
-    
+    Write-Log "APP REGISTRATION / ENTERPRISE APP COLLECTION STARTED" -Level "Info"
+    $recentCutoff = (Get-Date).AddDays(-$DaysBack)
+    $gaps = [System.Collections.Generic.List[string]]::new()
+
+    # Permission names that let an app read or send mail, read files/sites, or change
+    # identity/role configuration. Matched by permission name against requested, delegated
+    # and application grants.
+    $highRiskPermissions = @(
+        'Mail.Read', 'Mail.ReadWrite', 'Mail.Send', 'Mail.ReadBasic', 'Mail.ReadBasic.All',
+        'Mail.Read.Shared', 'Mail.ReadWrite.Shared', 'Mail.Send.Shared', 'MailboxSettings.ReadWrite',
+        'Files.Read.All', 'Files.ReadWrite.All', 'Sites.Read.All', 'Sites.ReadWrite.All', 'Sites.FullControl.All',
+        'Directory.ReadWrite.All', 'Directory.AccessAsUser.All', 'User.ReadWrite.All', 'Group.ReadWrite.All',
+        'Application.ReadWrite.All', 'AppRoleAssignment.ReadWrite.All', 'DelegatedPermissionGrant.ReadWrite.All',
+        'RoleManagement.ReadWrite.Directory', 'Policy.ReadWrite.ConditionalAccess',
+        'full_access_as_app', 'EWS.AccessAsUser.All', 'EAS.AccessAsUser.All', 'IMAP.AccessAsUser.All',
+        'POP.AccessAsUser.All', 'SMTP.Send', 'Contacts.ReadWrite', 'Calendars.ReadWrite',
+        'Chat.ReadWrite', 'ChatMessage.Read', 'Notes.ReadWrite.All'
+    )
+    $mediumRiskPermissions = @(
+        'Directory.Read.All', 'User.Read.All', 'Group.Read.All', 'AuditLog.Read.All',
+        'Calendars.Read', 'Contacts.Read', 'People.Read.All'
+    )
+    # First-party Microsoft owner tenants - excluded from the enterprise-app sweep.
+    $microsoftOwnerTenants = @('f8cdef31-a31e-4b4a-93e4-5f571e91255a', '72f988bf-86f1-41af-91ab-2d7cd011db47')
+    # Resource APIs whose permission IDs are resolved to names.
+    $graphAppId    = '00000003-0000-0000-c000-000000000000'
+    $exchangeAppId = '00000002-0000-0ff1-ce00-000000000000'
+    $resourceAppIds = @($graphAppId, $exchangeAppId, '00000003-0000-0ff1-ce00-000000000000', '00000002-0000-0000-c000-000000000000')
+
     try {
-        $applications = Get-MgApplication -All
-        $servicePrincipals = Get-MgServicePrincipal -All
-        
-        $appRegs = @()
+        $applications = @(Get-MgApplication -All -ErrorAction Stop)
+        $servicePrincipals = @(Get-MgServicePrincipal -All -ErrorAction Stop)
+        Write-Log "Retrieved $($applications.Count) app registrations and $($servicePrincipals.Count) service principals" -Level "Info"
+
+        $spById = @{}
+        $spByAppId = @{}
+        foreach ($sp in $servicePrincipals) {
+            $spById[$sp.Id] = $sp
+            if ($sp.AppId) { $spByAppId[$sp.AppId] = $sp }
+        }
+
+        # Permission id -> name
+        $permissionNames = @{}
+        foreach ($resourceAppId in $resourceAppIds) {
+            $resourceSp = $spByAppId[$resourceAppId]
+            if (-not $resourceSp) { continue }
+            foreach ($scope in @($resourceSp.Oauth2PermissionScopes)) { if ($scope.Id) { $permissionNames["$($scope.Id)"] = $scope.Value } }
+            foreach ($role in @($resourceSp.AppRoles)) { if ($role.Id) { $permissionNames["$($role.Id)"] = $role.Value } }
+        }
+
+        # Delegated consent (per client service principal)
+        $delegatedByClient = @{}
+        try {
+            foreach ($grant in @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/oauth2PermissionGrants")) {
+                if (-not $delegatedByClient.ContainsKey($grant.clientId)) {
+                    $delegatedByClient[$grant.clientId] = [System.Collections.Generic.List[object]]::new()
+                }
+                $delegatedByClient[$grant.clientId].Add($grant)
+            }
+        }
+        catch {
+            $gaps.Add("delegated consent grants could not be read")
+            Write-Log "Could not read oauth2PermissionGrants: $($_.Exception.Message)" -Level "Warning"
+        }
+
+        # Application permissions granted on Graph / Exchange Online (per client service principal)
+        $appRolesByClient = @{}
+        foreach ($resourceAppId in @($graphAppId, $exchangeAppId)) {
+            $resourceSp = $spByAppId[$resourceAppId]
+            if (-not $resourceSp) { continue }
+            try {
+                foreach ($assignment in @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/servicePrincipals/$($resourceSp.Id)/appRoleAssignedTo")) {
+                    if (-not $appRolesByClient.ContainsKey($assignment.principalId)) {
+                        $appRolesByClient[$assignment.principalId] = [System.Collections.Generic.List[string]]::new()
+                    }
+                    $roleName = $permissionNames["$($assignment.appRoleId)"]
+                    if (-not $roleName) { $roleName = "$($resourceSp.DisplayName):$($assignment.appRoleId)" }
+                    $appRolesByClient[$assignment.principalId].Add($roleName)
+                }
+            }
+            catch {
+                $gaps.Add("application permission grants on $($resourceSp.DisplayName) could not be read")
+                Write-Log "Could not read app role assignments on $($resourceSp.DisplayName): $($_.Exception.Message)" -Level "Warning"
+            }
+        }
+
+        $appRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
+        $registeredAppIds = [System.Collections.Generic.HashSet[string]]::new()
+
+        # Builds one output row for an app registration and/or its service principal.
+        $buildRow = {
+            param($Source, $DisplayName, $AppId, $Created, $PublisherDomain, $VerifiedPublisher, $Homepage, $Sp, $App)
+
+            $requestedNames = [System.Collections.Generic.List[string]]::new()
+            $requestedDisplay = [System.Collections.Generic.List[string]]::new()
+            if ($App) {
+                foreach ($resourceAccess in @($App.RequiredResourceAccess | Where-Object { $_ })) {
+                    foreach ($permission in @($resourceAccess.ResourceAccess | Where-Object { $_ })) {
+                        $name = $permissionNames["$($permission.Id)"]
+                        if ($name) {
+                            $requestedNames.Add($name)
+                            $requestedDisplay.Add("$name ($($permission.Type))")
+                        }
+                        else {
+                            $requestedDisplay.Add("$($resourceAccess.ResourceAppId):$($permission.Id) ($($permission.Type))")
+                        }
+                    }
+                }
+            }
+
+            $delegatedNames = [System.Collections.Generic.List[string]]::new()
+            $adminConsentAll = $false
+            if ($Sp -and $delegatedByClient.ContainsKey($Sp.Id)) {
+                foreach ($grant in $delegatedByClient[$Sp.Id]) {
+                    if ($grant.consentType -eq 'AllPrincipals') { $adminConsentAll = $true }
+                    foreach ($scopeName in @("$($grant.scope)" -split '\s+' | Where-Object { $_ })) { $delegatedNames.Add($scopeName) }
+                }
+            }
+            $applicationNames = @()
+            if ($Sp -and $appRolesByClient.ContainsKey($Sp.Id)) { $applicationNames = @($appRolesByClient[$Sp.Id] | Select-Object -Unique) }
+            $delegatedUnique = @($delegatedNames | Select-Object -Unique)
+
+            $level = 0
+            $reasons = @()
+            $allNames = @(@($requestedNames) + @($delegatedUnique) + @($applicationNames) | Select-Object -Unique)
+            $highHits = @($allNames | Where-Object { $highRiskPermissions -contains $_ })
+            $mediumHits = @($allNames | Where-Object { $mediumRiskPermissions -contains $_ })
+            if ($highHits.Count -gt 0) {
+                $level = 2
+                $reasons += "High-privilege permissions: $($highHits -join ', ')"
+            }
+            elseif ($mediumHits.Count -gt 0) {
+                $level = 1
+                $reasons += "Broad read permissions: $($mediumHits -join ', ')"
+            }
+            if ($adminConsentAll -and @($delegatedUnique | Where-Object { $highRiskPermissions -contains $_ }).Count -gt 0) {
+                $reasons += "Tenant-wide admin consent to high-privilege delegated permissions"
+            }
+            if (@($applicationNames | Where-Object { $highRiskPermissions -contains $_ }).Count -gt 0) {
+                $reasons += "High-privilege APPLICATION permissions (act without a signed-in user)"
+            }
+            if ([string]::IsNullOrEmpty($PublisherDomain) -and [string]::IsNullOrEmpty($VerifiedPublisher)) {
+                $level = [Math]::Max($level, 1)
+                $reasons += "No publisher information"
+            }
+            $isRecent = $false
+            [datetime]$createdTime = [datetime]::MinValue
+            if ($Created -and [DateTime]::TryParse("$Created", [ref]$createdTime) -and $createdTime -ge $recentCutoff) {
+                $isRecent = $true
+                if ($level -ge 1) { $reasons += "Created within the last $DaysBack days" }
+            }
+
+            [PSCustomObject]@{
+                AppId                  = $AppId
+                DisplayName            = $DisplayName
+                Source                 = $Source
+                CreatedDateTime        = $Created
+                IsRecent               = $isRecent
+                PublisherDomain        = $PublisherDomain
+                VerifiedPublisher      = $VerifiedPublisher
+                Homepage               = $Homepage
+                ServicePrincipalId     = if ($Sp) { $Sp.Id } else { "" }
+                ServicePrincipalType   = if ($Sp) { $Sp.ServicePrincipalType } else { "" }
+                SignInAudience         = if ($App) { $App.SignInAudience } else { "" }
+                RequestedPermissions   = ($requestedDisplay -join "; ")
+                GrantedDelegated       = ($delegatedUnique -join "; ")
+                GrantedApplication     = ($applicationNames -join "; ")
+                AdminConsentAllUsers   = $adminConsentAll
+                RequiredResourceAccess = if ($App) { ($App.RequiredResourceAccess | ConvertTo-Json -Compress -Depth 10) } else { "" }
+                RiskLevel              = @("Low", "Medium", "High")[$level]
+                RiskReasons            = ($reasons -join ", ")
+            }
+        }
+
         $processedCount = 0
-        
         foreach ($app in $applications) {
             $processedCount++
             if ($processedCount % 50 -eq 0) {
                 $percentage = [math]::Round(($processedCount / $applications.Count) * 100, 1)
                 Update-GuiStatus "Processing apps: $processedCount of $($applications.Count) ($percentage%)" ([System.Drawing.Color]::Orange)
             }
-            
-            if ($app.CreatedDateTime -ge $startDate) {
-                $servicePrincipal = $servicePrincipals | Where-Object { $_.AppId -eq $app.AppId } | Select-Object -First 1
-                
-                $riskLevel = "Low"
-                $riskReasons = @()
-                
-                # Check high-risk permissions
-                foreach ($resourceAccess in $app.RequiredResourceAccess) {
-                    foreach ($permission in $resourceAccess.ResourceAccess) {
-                        if ($permission.Id -in @(
-                            "570282fd-fa5c-430d-a7fd-fc8dc98a9dca",  # Mail.ReadWrite
-                            "024d486e-b451-40bb-833d-3e66d98c5c73",  # Mail.Read
-                            "75359482-378d-4052-8f01-80520e7db3cd",  # Files.ReadWrite.All
-                            "06da0dbc-49e2-44d2-8312-53746b5fccd9"   # Directory.Read.All
-                        )) {
-                            $riskLevel = "High"
-                            $riskReasons += "High-privilege permissions"
-                        }
-                    }
-                }
-                
-                if ([string]::IsNullOrEmpty($app.PublisherDomain)) {
-                    $riskLevel = "Medium"
-                    $riskReasons += "No publisher information"
-                }
-                
-                $appReg = [PSCustomObject]@{
-                    AppId = $app.AppId
-                    DisplayName = $app.DisplayName
-                    CreatedDateTime = $app.CreatedDateTime
-                    PublisherDomain = $app.PublisherDomain
-                    Homepage = $app.Web.HomePageUrl
-                    ServicePrincipalId = $servicePrincipal.Id
-                    ServicePrincipalType = $servicePrincipal.ServicePrincipalType
-                    SignInAudience = $app.SignInAudience
-                    RequiredResourceAccess = ($app.RequiredResourceAccess | ConvertTo-Json -Compress -Depth 10)
-                    RiskLevel = $riskLevel
-                    RiskReasons = ($riskReasons -join ", ")
-                }
-                
-                $appRegs += $appReg
-            }
+            [void]$registeredAppIds.Add("$($app.AppId)")
+            $sp = $spByAppId[$app.AppId]
+            $appRegs.Add((& $buildRow "AppRegistration" $app.DisplayName $app.AppId $app.CreatedDateTime $app.PublisherDomain $app.VerifiedPublisher.DisplayName $app.Web.HomePageUrl $sp $app))
         }
-        
-        if ($appRegs.Count -gt 0) {
-            $appRegs | Export-Csv -Path $OutputPath -NoTypeInformation -Force
-            
-            $highRiskApps = $appRegs | Where-Object { $_.RiskLevel -eq "High" }
+
+        # Enterprise apps owned by other tenants that hold consent here.
+        foreach ($sp in $servicePrincipals) {
+            if ($registeredAppIds.Contains("$($sp.AppId)")) { continue }
+            if ($sp.ServicePrincipalType -ne 'Application') { continue }
+            if ($microsoftOwnerTenants -contains "$($sp.AppOwnerOrganizationId)") { continue }
+            $hasGrants = $delegatedByClient.ContainsKey($sp.Id) -or $appRolesByClient.ContainsKey($sp.Id)
+            if (-not $hasGrants) { continue }
+
+            $created = $sp.CreatedDateTime
+            if (-not $created -and $sp.AdditionalProperties) { $created = $sp.AdditionalProperties['createdDateTime'] }
+            $appRegs.Add((& $buildRow "EnterpriseApp" $sp.DisplayName $sp.AppId $created "" $sp.VerifiedPublisher.DisplayName $sp.Homepage $sp $null))
+        }
+
+        # Remove previous output so a run with no apps cannot leave stale data behind.
+        $highRiskPath = $OutputPath -replace '\.csv$', '_HighRisk.csv'
+        Remove-StaleOutput -Path @($OutputPath, $highRiskPath)
+
+        $appRegArray = $appRegs.ToArray()
+        if ($appRegArray.Count -gt 0) {
+            $appRegArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+
+            $highRiskApps = @($appRegArray | Where-Object { $_.RiskLevel -eq "High" })
             if ($highRiskApps.Count -gt 0) {
-                $highRiskPath = $OutputPath -replace '.csv$', '_HighRisk.csv'
                 $highRiskApps | Export-Csv -Path $highRiskPath -NoTypeInformation -Force
             }
-            
-            Update-GuiStatus "App registration collection complete: $($appRegs.Count) apps." ([System.Drawing.Color]::Green)
         }
-        
-        return $appRegs
+
+        $enterpriseCount = @($appRegArray | Where-Object { $_.Source -eq "EnterpriseApp" }).Count
+        Set-CollectionStatus -Source "AppRegistrations" `
+            -Complete ($gaps.Count -eq 0) `
+            -Records $appRegArray.Count `
+            -Note $(if ($gaps.Count -gt 0) { "Partial app data: $($gaps -join '; '). Risk ratings may be understated." } else { "" })
+
+        Update-GuiStatus "App collection complete: $($appRegArray.Count) apps ($enterpriseCount third-party enterprise apps)." ([System.Drawing.Color]::Green)
+        Write-Log "App collection complete: $($applications.Count) registrations, $enterpriseCount third-party enterprise apps with consent, $(@($appRegArray | Where-Object { $_.RiskLevel -eq 'High' }).Count) high risk" -Level "Info"
+        return $appRegArray
     }
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
+        Write-Log "Error in app registration collection: $($_.Exception.Message)" -Level "Error"
         return $null
     }
 }
@@ -7139,51 +8010,89 @@ function Get-ConditionalAccessData {
     <#
     .SYNOPSIS
         Collects Conditional Access policies with configuration review.
-    
+
     .DESCRIPTION
-        Retrieves CA policies and identifies:
-        • Recently modified policies
-        • Disabled policies
-        • Policies excluding admin roles (potential bypass)
-        • Configuration issues
-    
+        Retrieves CA policies and flags (IsSuspicious):
+        - Policies modified inside the configured date range (CA tampering)
+        - Disabled policies
+        - Policies that exclude administrator roles. ExcludeRoles holds role TEMPLATE
+          GUIDs, so they are resolved to names through directoryRoleTemplates before
+          matching (comparing against display names never matches).
+
+        Also recorded as reasons (not flagged on their own): report-only state, excluded
+        users/groups, and trusted-location exemptions. A tenant with no CA policies is
+        recorded as a coverage note in CollectionStatus.csv.
+
     .OUTPUTS
         Array of CA policy objects with risk flags
     #>
-    
+
     [CmdletBinding()]
     param (
         [Parameter(Mandatory = $false)]
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "ConditionalAccess.csv")
     )
-    
+
     Update-GuiStatus "Starting Conditional Access collection..." ([System.Drawing.Color]::Orange)
-    
+    Write-Log "CONDITIONAL ACCESS COLLECTION STARTED" -Level "Info"
+
     try {
-        $caPolicies = Get-MgIdentityConditionalAccessPolicy -All
-        $policies = @()
-        $suspiciousPolicies = @()
-        
+        $caPolicies = @(Get-MgIdentityConditionalAccessPolicy -All -ErrorAction Stop)
+        $recentCutoff = (Get-Date).AddDays(-$ConfigData.DateRange)
+
+        # Role template id -> display name
+        $roleNames = @{}
+        $roleLookupFailed = $false
+        try {
+            foreach ($template in @(Invoke-GraphPaged -Uri "https://graph.microsoft.com/v1.0/directoryRoleTemplates")) {
+                $roleNames["$($template.id)"] = $template.displayName
+            }
+        }
+        catch {
+            $roleLookupFailed = $true
+            Write-Log "Could not resolve directory role templates ($($_.Exception.Message)) - only Global Administrator exclusions will be detected" -Level "Warning"
+        }
+        if (-not $roleNames.ContainsKey('62e90394-69f5-4237-9190-012177145e10')) {
+            $roleNames['62e90394-69f5-4237-9190-012177145e10'] = 'Global Administrator'
+        }
+
+        $policies = [System.Collections.Generic.List[PSCustomObject]]::new()
+
         foreach ($policy in $caPolicies) {
             $isSuspicious = $false
-            $suspiciousReasons = @()
-            
-            if ($policy.ModifiedDateTime -ge (Get-Date).AddDays(-7)) {
-                $suspiciousReasons += "Recently modified"
+            $reasons = @()
+
+            if ($policy.ModifiedDateTime -and $policy.ModifiedDateTime -ge $recentCutoff) {
+                $reasons += "Modified in the last $($ConfigData.DateRange) days"
+                $isSuspicious = $true
             }
-            
+
             if ($policy.State -eq "disabled") {
-                $suspiciousReasons += "Policy is disabled"
+                $reasons += "Policy is disabled"
                 $isSuspicious = $true
             }
-            
-            if ($policy.Conditions.Users.ExcludeRoles -contains "Company Administrator" -or 
-                $policy.Conditions.Users.ExcludeRoles -contains "Global Administrator") {
-                $suspiciousReasons += "Excludes admin roles"
+            elseif ($policy.State -eq "enabledForReportingButNotEnforced") {
+                $reasons += "Report-only (not enforced)"
+            }
+
+            $excludedRoleNames = @()
+            foreach ($roleId in @($policy.Conditions.Users.ExcludeRoles)) {
+                if ([string]::IsNullOrWhiteSpace($roleId)) { continue }
+                $excludedRoleNames += $(if ($roleNames.ContainsKey("$roleId")) { $roleNames["$roleId"] } else { "$roleId" })
+            }
+            $excludedAdminRoles = @($excludedRoleNames | Where-Object { $_ -like '*Administrator*' })
+            if ($excludedAdminRoles.Count -gt 0) {
+                $reasons += "Excludes admin roles ($($excludedAdminRoles -join ', '))"
                 $isSuspicious = $true
             }
-            
-            $policyEntry = [PSCustomObject]@{
+
+            $excludedUserCount = @($policy.Conditions.Users.ExcludeUsers | Where-Object { $_ }).Count
+            $excludedGroupCount = @($policy.Conditions.Users.ExcludeGroups | Where-Object { $_ }).Count
+            if ($excludedUserCount -gt 0) { $reasons += "Excludes $excludedUserCount user(s)/user type(s)" }
+            if ($excludedGroupCount -gt 0) { $reasons += "Excludes $excludedGroupCount group(s)" }
+            if (@($policy.Conditions.Locations.ExcludeLocations) -contains 'AllTrusted') { $reasons += "Exempts trusted locations" }
+
+            $policies.Add([PSCustomObject]@{
                 DisplayName = $policy.DisplayName
                 State = $policy.State
                 CreatedDateTime = $policy.CreatedDateTime
@@ -7192,25 +8101,38 @@ function Get-ConditionalAccessData {
                 GrantControls = ($policy.GrantControls | ConvertTo-Json -Compress -Depth 10)
                 SessionControls = ($policy.SessionControls | ConvertTo-Json -Compress -Depth 10)
                 IsSuspicious = $isSuspicious
-                SuspiciousReasons = ($suspiciousReasons -join ", ")
+                SuspiciousReasons = ($reasons -join ", ")
+            })
+        }
+
+        $suspiciousPath = $OutputPath -replace '\.csv$', '_Suspicious.csv'
+        Remove-StaleOutput -Path @($OutputPath, $suspiciousPath)
+
+        $policyArray = $policies.ToArray()
+        $suspiciousPolicies = @($policyArray | Where-Object { $_.IsSuspicious -eq $true })
+        if ($policyArray.Count -gt 0) {
+            $policyArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
+            if ($suspiciousPolicies.Count -gt 0) {
+                $suspiciousPolicies | Export-Csv -Path $suspiciousPath -NoTypeInformation -Force
             }
-            
-            $policies += $policyEntry
-            if ($isSuspicious) { $suspiciousPolicies += $policyEntry }
         }
-        
-        $policies | Export-Csv -Path $OutputPath -NoTypeInformation -Force
-        
-        if ($suspiciousPolicies.Count -gt 0) {
-            $suspiciousPath = $OutputPath -replace '.csv$', '_Suspicious.csv'
-            $suspiciousPolicies | Export-Csv -Path $suspiciousPath -NoTypeInformation -Force
+
+        $note = ""
+        if ($policyArray.Count -eq 0) {
+            $note = "No Conditional Access policies exist in this tenant. Confirm Security Defaults is on, otherwise sign-ins have no CA protection."
+            Write-Log $note -Level "Warning"
         }
-        
-        Update-GuiStatus "CA policy collection complete: $($policies.Count) policies." ([System.Drawing.Color]::Green)
-        return $policies
+        elseif ($roleLookupFailed) {
+            $note = "Directory role names could not be resolved; only Global Administrator role exclusions were checked."
+        }
+        Set-CollectionStatus -Source "ConditionalAccess" -Complete (-not $roleLookupFailed) -Records $policyArray.Count -Note $note
+
+        Update-GuiStatus "CA policy collection complete: $($policyArray.Count) policies ($($suspiciousPolicies.Count) flagged)." ([System.Drawing.Color]::Green)
+        return $policyArray
     }
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
+        Write-Log "Error in Conditional Access collection: $($_.Exception.Message)" -Level "Error"
         return $null
     }
 }
@@ -7253,8 +8175,12 @@ function Get-MessageTraceExchangeOnline {
         Default: WorkDir\MessageTraceResult.csv
     
     .PARAMETER MaxMessages
-        Maximum messages to retrieve (throttle protection)
-        Default: 5000
+        Maximum messages to retrieve across ALL pages (safety cap).
+        Get-MessageTraceV2 returns at most 5000 records per call and has no paging, so
+        this function pages manually (StartingRecipientAddress + EndDate from the last
+        record of each page, as Microsoft documents). If the cap is reached the result
+        is flagged INCOMPLETE in CollectionStatus.csv and the report.
+        Default: 50000
     
     .OUTPUTS
         Array of message trace objects in ETR format
@@ -7280,8 +8206,8 @@ function Get-MessageTraceExchangeOnline {
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "MessageTraceResult.csv"),
         
         [Parameter(Mandatory = $false)]
-        [ValidateRange(100, 50000)]
-        [int]$MaxMessages = 5000
+        [ValidateRange(100, 500000)]
+        [int]$MaxMessages = 50000
     )
     
     Update-GuiStatus "Starting Exchange Online message trace collection..." ([System.Drawing.Color]::Orange)
@@ -7303,31 +8229,82 @@ function Get-MessageTraceExchangeOnline {
             return @()
         }
         
-        # Calculate date range (conservative approach)
+        # Calculate date range. Exchange rejects ranges over 10 days, so a full 10-day
+        # request starts a minute late to stay safely inside the limit.
         $actualDaysBack = $DaysBack
-        $startDate = (Get-Date).AddDays(-$actualDaysBack)
         $endDate = Get-Date
+        $startDate = $endDate.AddDays(-$actualDaysBack)
+        if ($actualDaysBack -ge 10) { $startDate = $startDate.AddMinutes(1) }
         
         Write-Log "Message trace range: $($startDate.ToString('yyyy-MM-dd')) to $($endDate.ToString('yyyy-MM-dd'))" -Level "Info"
         
-        # Call Get-MessageTraceV2
+        # Page through Get-MessageTraceV2. Max 5000 per call and no native paging: take the
+        # Received time and recipient of the LAST record of each page as the next EndDate /
+        # StartingRecipientAddress. Results are de-duplicated on trace id + recipient.
         Update-GuiStatus "Calling Get-MessageTraceV2..." ([System.Drawing.Color]::Orange)
-        Write-Log "Executing: Get-MessageTraceV2 -StartDate $startDate -EndDate $endDate -ResultSize $MaxMessages" -Level "Info"
-        
-        $allMessages = Get-MessageTraceV2 -StartDate $startDate -EndDate $endDate -ResultSize $MaxMessages -ErrorAction Stop
-        
-        if (-not $allMessages) {
-            $allMessages = @()
-        }
-        
-        Write-Log "Get-MessageTraceV2 returned $($allMessages.Count) messages" -Level "Info"
+        Write-Log "Executing paged Get-MessageTraceV2 from $startDate to $endDate (cap $MaxMessages)" -Level "Info"
 
-        # If the result hit the ResultSize ceiling, the trace is almost certainly truncated.
-        # Flag it so downstream spam/ETR analysis is not mistaken for a complete picture.
-        if ($allMessages.Count -ge $MaxMessages) {
-            Write-Log "Message trace hit the $MaxMessages-record cap - results are likely TRUNCATED. Narrow the date range for complete coverage." -Level "Warning"
-            Update-GuiStatus "WARNING: message trace capped at $MaxMessages records - results may be incomplete" ([System.Drawing.Color]::Red)
+        $allMessages = [System.Collections.Generic.List[object]]::new()
+        $seenKeys = [System.Collections.Generic.HashSet[string]]::new()
+        $pageEnd = $endDate
+        $startingRecipient = $null
+        $hitCap = $false
+        $pageNumber = 0
+
+        while ($true) {
+            $remaining = $MaxMessages - $allMessages.Count
+            if ($remaining -le 0) { $hitCap = $true; break }
+            $pageSize = [Math]::Min(5000, $remaining)
+            $pageNumber++
+
+            $traceParams = @{
+                StartDate   = $startDate
+                EndDate     = $pageEnd
+                ResultSize  = $pageSize
+                ErrorAction = 'Stop'
+            }
+            if ($startingRecipient) { $traceParams['StartingRecipientAddress'] = $startingRecipient }
+
+            $page = @(Get-MessageTraceV2 @traceParams)
+            if ($page.Count -eq 0) { break }
+
+            $added = 0
+            foreach ($traceRecord in $page) {
+                if ($seenKeys.Add("$($traceRecord.MessageTraceId)|$($traceRecord.RecipientAddress)")) {
+                    $allMessages.Add($traceRecord)
+                    $added++
+                }
+            }
+            Update-GuiStatus "Message trace: $($allMessages.Count) messages retrieved (page $pageNumber)..." ([System.Drawing.Color]::Orange)
+            Write-Log "  Trace page ${pageNumber}: $($page.Count) records ($added new)" -Level "Info"
+
+            if ($page.Count -lt $pageSize) { break }   # last page
+
+            $lastRecord = $page[-1]
+            $receivedUtc = $lastRecord.Received
+            $pageEnd = if ($receivedUtc.Kind -eq [DateTimeKind]::Unspecified) { [DateTime]::SpecifyKind($receivedUtc, [DateTimeKind]::Utc) } else { $receivedUtc.ToUniversalTime() }
+            $startingRecipient = $lastRecord.RecipientAddress
+
+            if ($added -eq 0) {
+                # Paging is not advancing - stop rather than loop forever, and say so.
+                $hitCap = $true
+                Write-Log "Message trace paging stopped advancing at $pageEnd - results are TRUNCATED" -Level "Warning"
+                break
+            }
         }
+
+        Write-Log "Get-MessageTraceV2 returned $($allMessages.Count) messages in $pageNumber page(s)" -Level "Info"
+
+        # Previous output would otherwise be picked up as current if this run finds nothing.
+        Remove-StaleOutput -Path @($OutputPath)
+
+        $traceNote = ""
+        if ($hitCap) {
+            $traceNote = "message trace stopped at the $MaxMessages-message cap; older messages in the $actualDaysBack-day window are NOT included (raise -MaxMessages or narrow the range)"
+            Write-Log "Message trace hit the $MaxMessages-message cap - results are TRUNCATED" -Level "Warning"
+            Update-GuiStatus "WARNING: message trace capped at $MaxMessages messages - results incomplete" ([System.Drawing.Color]::Red)
+        }
+        Set-CollectionStatus -Source "MessageTrace" -Complete (-not $hitCap) -Records $allMessages.Count -Note $traceNote
 
         if ($allMessages.Count -eq 0) {
             Update-GuiStatus "No messages found in date range" ([System.Drawing.Color]::Orange)
@@ -7339,7 +8316,7 @@ function Get-MessageTraceExchangeOnline {
         Update-GuiStatus "Converting $($allMessages.Count) messages to ETR format..." ([System.Drawing.Color]::Orange)
         Write-Log "Converting message trace results to ETR-compatible format" -Level "Info"
         
-        $etrMessages = @()
+        $etrMessages = [System.Collections.Generic.List[object]]::new($allMessages.Count)
         $convertedCount = 0
         
         foreach ($msg in $allMessages) {
@@ -7367,7 +8344,7 @@ function Get-MessageTraceExchangeOnline {
                 timestamp = if ($msg.Received) { $msg.Received } else { "" }
                 date = if ($msg.Received) { $msg.Received } else { "" }
             }
-            $etrMessages += $etrMessage
+            $etrMessages.Add($etrMessage)
         }
         
         # Export to CSV
@@ -7382,7 +8359,7 @@ function Get-MessageTraceExchangeOnline {
         Write-Log "Format: ETR-compatible (ready for Analyze-ETRData)" -Level "Info"
         Write-Log "═══════════════════════════════════════════════════" -Level "Info"
         
-        return $etrMessages
+        return $etrMessages.ToArray()
         
     }
     catch {
@@ -8270,6 +9247,72 @@ function Invoke-CompromiseDetection {
     }
     
     Update-GuiStatus "Found $($availableDataSources.Count) data sources" ([System.Drawing.Color]::Green)
+
+    #══════════════════════════════════════════════════════════════
+    # DATA COVERAGE CHECK
+    # Every collector records gaps in CollectionStatus.csv (skipped mailboxes, truncated
+    # pulls, fallback sources, unreadable APIs). Surface them here and in the report, and
+    # flag stale or missing sources, so a partial dataset is never read as a clean one.
+    #══════════════════════════════════════════════════════════════
+    $coverageNotes = [System.Collections.Generic.List[PSCustomObject]]::new()
+    $statusRows = @(Get-CollectionStatus)
+
+    foreach ($row in $statusRows) {
+        $rowComplete = ("$($row.Complete)" -eq "True")
+        if (-not $rowComplete -or -not [string]::IsNullOrWhiteSpace($row.Note)) {
+            $coverageNotes.Add([PSCustomObject]@{
+                Source  = $row.Source
+                Level   = $(if ($rowComplete) { "Note" } else { "Incomplete" })
+                Message = $row.Note
+            })
+        }
+    }
+
+    # Data source -> collection status key
+    $statusKeys = @{
+        SignInData            = "SignIns"
+        AdminAuditData        = "AdminAudit"
+        InboxRulesData        = "InboxRules"
+        DelegationData        = "MailboxDelegation"
+        AppRegData            = "AppRegistrations"
+        ConditionalAccessData = "ConditionalAccess"
+        MFAStatusData         = "MFAAudit"
+    }
+    $staleAfterDays = 2
+    foreach ($entry in $dataSources.GetEnumerator()) {
+        $info = $entry.Value
+        if ($info.Available) {
+            $fileTime = (Get-Item -Path $info.Path -ErrorAction SilentlyContinue).LastWriteTime
+            if ($fileTime -and ((Get-Date) - $fileTime).TotalDays -gt $staleAfterDays) {
+                $coverageNotes.Add([PSCustomObject]@{
+                    Source  = $entry.Key
+                    Level   = "Stale"
+                    Message = "Data file $([System.IO.Path]::GetFileName($info.Path)) was last written $($fileTime.ToString('yyyy-MM-dd HH:mm')) ($([Math]::Round(((Get-Date) - $fileTime).TotalDays, 1)) days ago). Re-run the collector if this is not the data you intend to analyze."
+                })
+            }
+        }
+        elseif ($statusKeys.ContainsKey($entry.Key)) {
+            $hasStatus = @($statusRows | Where-Object { $_.Source -eq $statusKeys[$entry.Key] }).Count -gt 0
+            if (-not $hasStatus) {
+                $coverageNotes.Add([PSCustomObject]@{
+                    Source  = $entry.Key
+                    Level   = "Missing"
+                    Message = "No data for this source and no record that its collector ran. It was not collected in this working directory, so it is NOT reflected in this report."
+                })
+            }
+        }
+    }
+
+    $levelOrder = @{ Incomplete = 0; Missing = 1; Stale = 2; Note = 3 }
+    $coverageNotes = @($coverageNotes | Sort-Object @{ Expression = { $levelOrder[$_.Level] } }, Source)
+    $script:ReportCoverageNotes = $coverageNotes
+    foreach ($note in $coverageNotes) {
+        Write-Log "DATA COVERAGE [$($note.Level)] $($note.Source): $($note.Message)" -Level $(if ($note.Level -eq "Note") { "Info" } else { "Warning" })
+    }
+    $incompleteCount = @($coverageNotes | Where-Object { $_.Level -in @("Incomplete", "Missing", "Stale") }).Count
+    if ($incompleteCount -gt 0) {
+        Update-GuiStatus "WARNING: $incompleteCount data source(s) incomplete, missing or stale - see the Data Coverage section of the report" ([System.Drawing.Color]::Orange)
+    }
     
     # Initialize user tracking
     $users = @{}
@@ -8797,6 +9840,24 @@ function Generate-HTMLReport {
     # Get current theme for default
     $defaultDarkMode = if ($script:CurrentTheme -eq "Dark") { "true" } else { "false" }
     
+    # Data coverage banner: gaps recorded by the collectors, plus stale/missing sources
+    # found by the analysis step. Empty string when everything reported complete.
+    $coverageBannerHtml = ""
+    if ($script:ReportCoverageNotes -and @($script:ReportCoverageNotes).Count -gt 0) {
+        $coverageItems = [System.Text.StringBuilder]::new()
+        foreach ($note in $script:ReportCoverageNotes) {
+            $badgeColor = switch ($note.Level) { "Incomplete" { "var(--danger-color)" } "Missing" { "var(--danger-color)" } "Stale" { "var(--warning-color)" } default { "var(--secondary-color)" } }
+            [void]$coverageItems.Append("<li style='margin-bottom:6px;'><span style='background:$badgeColor;color:#fff;padding:1px 8px;border-radius:10px;font-size:0.8em;margin-right:8px;'>$(ConvertTo-HtmlSafe $note.Level.ToUpper())</span><strong>$(ConvertTo-HtmlSafe $note.Source)</strong>: $(ConvertTo-HtmlSafe $note.Message)</li>")
+        }
+        $coverageBannerHtml = @"
+        <div id="dataCoverage" style="background: rgba(255, 152, 0, 0.12); border-left: 6px solid var(--warning-color); padding: 16px 20px; margin: 20px 0; border-radius: 8px;">
+            <h3 style="margin-bottom: 8px;">Data Coverage</h3>
+            <p style="color: var(--text-secondary); margin-bottom: 10px;">Findings below are only as complete as the data behind them. A user or item that does not appear may simply be outside the collected data.</p>
+            <ul style="margin-left: 20px;">$($coverageItems.ToString())</ul>
+        </div>
+"@
+    }
+
     $sb = [System.Text.StringBuilder]::new(1MB)
     [void]$sb.Append(@"
 <!DOCTYPE html>
@@ -9481,6 +10542,7 @@ function Generate-HTMLReport {
             </div>
         </div>
 
+$coverageBannerHtml
         <div class="stats-grid">
 "@)
 
