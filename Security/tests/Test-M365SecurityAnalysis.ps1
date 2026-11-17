@@ -187,7 +187,7 @@ Test-Case 'static: no non-ASCII on added or changed lines' {
         [Console]::OutputEncoding = $prev
         $bad = @($diff | Where-Object { $_ -match '^\+(?!\+\+)' -and $_ -match '[^\x00-\x7F]' })
         # The BOM on line 1 only shows up if line 1 itself changed; ignore that line.
-        $bad = @($bad | Where-Object { $_ -notmatch '^\+﻿#{10,}' })
+        $bad = @($bad | Where-Object { $_ -notmatch '^\+\uFEFF#{10,}' })
         Assert-Equal $bad.Count 0 ("added lines with non-ASCII, first: " + (($bad | Select-Object -First 1) -replace '[^\x00-\x7F]', '?'))
     }
     finally { Pop-Location }
