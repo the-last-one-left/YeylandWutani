@@ -216,8 +216,8 @@ function New-CaPolicyJson {
 
 function Invoke-CaSdkChild {
     # $Cases: array of @{ Name; Json; User = @{Id;UserType} } -> returns hashtable Name -> result
-    param([object[]]$Cases, [string]$Call)
-    $fn = Get-FunctionSource -Name 'Test-CaPolicyRequiresMfa', 'Test-CaPolicyUserInScope'
+    param([object[]]$Cases, [string]$Call, [string[]]$Functions = @('Test-CaPolicyRequiresMfa', 'Test-CaPolicyUserInScope'))
+    $fn = Get-FunctionSource -Name $Functions
     $caseJson = ($Cases | ConvertTo-Json -Depth 6 -Compress)
     $caseFile = Join-Path $script:TestRoot ("cases_" + [guid]::NewGuid().ToString('N') + '.json')
     Set-Content -Path $caseFile -Value $caseJson -Encoding utf8
@@ -1034,6 +1034,103 @@ Test-Case '3.10 off-hours window includes 22:00-22:59 and names the time zone' {
 Test-Case '3.6 SkipGuests is defined in the config block' {
     Assert-True $ConfigData.ContainsKey('SkipGuests') 'config key missing'
     Assert-Equal $ConfigData.SkipGuests $false 'default'
+}
+#endregion
+
+#region 5.x Phase D: cleanup
+Write-Host "`n== Phase D ==" -ForegroundColor Cyan
+
+Test-Case '5.x unescaped regex dots in -replace patterns are gone' {
+    $src = [System.IO.File]::ReadAllText($ScriptPath)
+    $bad = [regex]::Matches($src, "-replace\s+'\.(csv|html)\`$'")
+    Assert-Equal $bad.Count 0 'every .csv / .html suffix pattern must escape the dot'
+}
+Test-Case '5.x unused code removed; no dead PowerShell 5.1 leftovers' {
+    $src = [System.IO.File]::ReadAllText($ScriptPath)
+    Assert-True ($src -notmatch 'isPowerShell51') '$isPowerShell51'
+    Assert-True (-not (Test-FunctionExists 'Test-SecurityDefaults')) 'Test-SecurityDefaults'
+    foreach ($k in 'HighRiskOperations', 'MaxConcurrentGeolookups') { Assert-True (-not $ConfigData.ContainsKey($k)) "config key $k" }
+    Assert-True (-not $ConfigData.ETRAnalysis.ContainsKey('MaxSameSubjectPerHour')) 'config key MaxSameSubjectPerHour'
+    Assert-True ($src -notmatch '\$loginActivities') 'LOGIN classification in the directory audit collector'
+    Assert-Equal ([regex]::Matches($src, 'Add-Type -AssemblyName System\.Web').Count) 1 'System.Web is loaded once'
+    Assert-True ($src -notmatch 'PowerShell 5\.1 compatibility') 'stale PowerShell 5.1 comment'
+}
+Test-Case '5.x per-user entry is built in one place' {
+    $core = $script:FunctionAsts['Invoke-CompromiseDetectionCore'].Extent.Text
+    Assert-Equal ([regex]::Matches($core, 'UnusualSignIns = \[System\.Collections\.Generic\.List').Count) 1 'the 13-key hashtable must exist once'
+    Assert-True ($core -match '\$newUserEntry') 'newUserEntry scriptblock'
+}
+Test-Case '5.x no array += in the ETR grouping loops or password pattern list' {
+    $etr = $script:FunctionAsts['Analyze-ETRData'].Extent.Text
+    Assert-True ($etr -notmatch '\+=\s*@\(\$msg\)') 'ETR groups must use List.Add'
+    $pw = $script:FunctionAsts['Get-RecentPasswordChanges'].Extent.Text
+    Assert-True ($pw -notmatch '\$suspiciousPatterns\s*\+=') 'suspiciousPatterns must use List.Add'
+}
+Test-Case '5.x Get-ETRColumnMapping maps one header even when several match' {
+    $m = Get-ETRColumnMapping -Headers @('Message ID', 'message_id', 'Sender', 'Subject')
+    Assert-True ($m.MessageId -is [string]) "MessageId mapping must be a single header, got $($m.MessageId.GetType().Name)"
+    Assert-Equal $m.MessageId 'Message ID' 'first match wins'
+}
+Test-Case '5.x ETR keyword match is a whole-word match' {
+    $d = New-TestWorkDir
+    $rows = @()
+    foreach ($i in 1..8) { $rows += [pscustomobject]@{ message_trace_id = "a$i"; sender_address = 'freedom@contoso.com'; recipient_address = "r$i@ext.example"; subject = "Freedom of speech newsletter $i"; status = 'Delivered'; to_ip = ''; from_ip = ''; message_size = 1; received = '2026-11-10T10:00:00Z'; message_direction = 'Outbound'; message_id = "<a$i>"; event_type = 'x'; timestamp = ''; date = '' } }
+    foreach ($i in 1..8) { $rows += [pscustomobject]@{ message_trace_id = "b$i"; sender_address = 'spammer@contoso.com'; recipient_address = "r$i@ext.example"; subject = "Free gift inside $i"; status = 'Delivered'; to_ip = ''; from_ip = ''; message_size = 1; received = '2026-11-10T10:00:00Z'; message_direction = 'Outbound'; message_id = "<b$i>"; event_type = 'x'; timestamp = ''; date = '' } }
+    $rows | Export-Csv -Path (Join-Path $d 'MessageTraceResult.csv') -NoTypeInformation
+    $hits = @(Analyze-ETRData | Where-Object { $_.RiskType -eq 'SpamKeywords' -and $_.DetectedKeyword -eq 'free' })
+    Assert-Equal @($hits | ForEach-Object { $_.SenderAddress }) @('spammer@contoso.com') '"free" must match "Free gift" but not "Freedom"'
+}
+Test-Case '5.x Test-ScriptVersion compares versions, so a newer local build is not offered an update' {
+    $ScriptVer = '12.1'
+    function Invoke-WebRequest { param($Uri, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction) [pscustomobject]@{ Content = "`$ScriptVer = `"$($script:Mock.Remote)`"" } }
+    $script:Mock = @{ Remote = '12.0' }
+    $older = Test-ScriptVersion -ShowMessageBox $false
+    Assert-Equal $older.IsLatest $true 'GitHub 12.0 vs local 12.1: nothing to update'
+    $script:Mock.Remote = '12.2'
+    Assert-Equal (Test-ScriptVersion -ShowMessageBox $false).IsLatest $false 'GitHub 12.2 vs local 12.1: update available'
+    $script:Mock.Remote = '12.1'
+    Assert-Equal (Test-ScriptVersion -ShowMessageBox $false).IsLatest $true 'same version'
+    $script:Mock.Remote = '12.10'
+    Assert-Equal (Test-ScriptVersion -ShowMessageBox $false).IsLatest $false '12.10 is newer than 12.9 (not a string compare)'
+    $ScriptVer = '12.9'
+    Assert-Equal (Test-ScriptVersion -ShowMessageBox $false).IsLatest $false '12.10 vs local 12.9'
+}
+Test-Case '5.x startup version check fetches once and only prompts when a newer version exists' {
+    $ScriptVer = '12.1'
+    $script:Mock = @{ Remote = '12.1'; Fetches = 0 }
+    function Invoke-WebRequest { param($Uri, [switch]$UseBasicParsing, $TimeoutSec, $ErrorAction) $script:Mock.Fetches++; [pscustomobject]@{ Content = "`$ScriptVer = `"$($script:Mock.Remote)`"" } }
+    $null = Test-ScriptVersion -ShowMessageBox $true -PromptOnlyIfNewer
+    Assert-Equal $script:Mock.Fetches 1 'one fetch'
+    Assert-Equal @($script:LogLines | Where-Object { $_ -like '[[]Dialog]*' }).Count 0 'no dialog when up to date'
+    $script:Mock.Remote = '12.5'
+    $null = Test-ScriptVersion -ShowMessageBox $true -PromptOnlyIfNewer
+    Assert-Equal @($script:LogLines | Where-Object { $_ -like '[[]Dialog]*Update Available*' }).Count 1 'dialog when a newer version exists'
+    $src = $script:FunctionAsts['Show-MainGUI'].Extent.Text
+    Assert-Equal ([regex]::Matches($src, 'Test-ScriptVersion').Count) 2 'Show-MainGUI: the Check version button and one startup check'
+}
+Test-Case '5.x MFA method pattern includes hardware OATH and platform credentials' {
+    foreach ($t in '#microsoft.graph.hardwareOathAuthenticationMethod', '#microsoft.graph.platformCredentialAuthenticationMethod', '#microsoft.graph.fido2AuthenticationMethod', '#microsoft.graph.microsoftAuthenticatorAuthenticationMethod') {
+        Assert-True (Test-MfaMethodType -MethodType $t) "$t counts as MFA"
+    }
+    foreach ($t in '#microsoft.graph.emailAuthenticationMethod', '#microsoft.graph.passwordAuthenticationMethod', '#microsoft.graph.temporaryAccessPassAuthenticationMethod') {
+        Assert-True (-not (Test-MfaMethodType -MethodType $t)) "$t is not MFA"
+    }
+}
+if ($script:SdkModule) {
+    Test-Case '5.x Conditional Access narrowing: locations, device filters, excluded apps' {
+        $mkRaw = { param($apps, $extra) '{"displayName":"t","state":"enabled","conditions":{"users":{"includeUsers":["All"]},"applications":{"includeApplications":["All"]' + $apps + '}' + $extra + '},"grantControls":{"operator":"OR","builtInControls":["mfa"]}}' }
+        $cases = @(
+            @{ Name = 'baseline: everything, everywhere'; Json = (& $mkRaw '' ''); Expect = 0 }
+            @{ Name = 'specific locations'; Json = (& $mkRaw '' ',"locations":{"includeLocations":["11111111-1111-1111-1111-111111111111"]}'); Expect = 1 }
+            @{ Name = 'all locations is not narrowing'; Json = (& $mkRaw '' ',"locations":{"includeLocations":["All"]}'); Expect = 0 }
+            @{ Name = 'device filter'; Json = (& $mkRaw '' ',"devices":{"deviceFilter":{"mode":"include","rule":"device.trustType -eq \"ServerAD\""}}'); Expect = 1 }
+            @{ Name = 'excluded apps'; Json = (& $mkRaw ',"excludeApplications":["22222222-2222-2222-2222-222222222222"]' ''); Expect = 1 }
+            @{ Name = 'risk-conditioned'; Json = (& $mkRaw '' ',"userRiskLevels":["high"]'); Expect = 1 }
+        )
+        $res = Invoke-CaSdkChild -Cases $cases -Functions 'Get-CaPolicyNarrowing' -Call '$out[$c.Name] = @(Get-CaPolicyNarrowing -Policy $policy).Count'
+        $wrong = @($cases | Where-Object { $res[$_.Name] -ne $_.Expect } | ForEach-Object { "$($_.Name) expected $($_.Expect) got $($res[$_.Name])" })
+        Assert-Equal $wrong.Count 0 ($wrong -join '; ')
+    }
 }
 #endregion
 

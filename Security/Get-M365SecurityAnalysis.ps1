@@ -259,7 +259,7 @@ $script:HighRiskISPs = @(
 #══════════════════════════════════════════════════════════════════════════════
 # Add this entire section BEFORE the Show-MainGUI function
 
-# Load System.Drawing assembly for PowerShell 5.1 compatibility
+# Load System.Drawing assembly
 # Required for color definitions below
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 
@@ -1442,20 +1442,8 @@ $ConfigData = @{
     # Security Monitoring Configuration
     #───────────────────────────────────────────────────────────
     
-    # High-risk administrative operations to monitor
-    # These operations will be flagged with high severity in audit analysis
-    # Add additional operations as needed for your security requirements
-    HighRiskOperations = @(
-        "Add mailbox permission",           # Mailbox access grants
-        "Remove mailbox permission",        # Mailbox access removal
-        "Update mailbox",                   # Mailbox configuration changes
-        "Add member to role",               # Role membership additions
-        "Remove member from role",          # Role membership removals
-        "Create application",               # New app registrations
-        "Update application",               # App registration modifications
-        "Create inbox rule",                # New inbox rules (potential data exfiltration)
-        "Update transport rule"             # Mail flow rule changes
-    )
+    # (HighRiskOperations was removed in 12.1: nothing read it. Operation risk is decided in
+    # Get-AdminAuditData.)
     
     #───────────────────────────────────────────────────────────
     # Performance Optimization Settings
@@ -1466,10 +1454,7 @@ $ConfigData = @{
     # Recommended range: 250-1000
     BatchSize = 500
     
-    # Maximum concurrent IP geolocation lookups
-    # Limited to prevent API rate limiting
-    # Note: Currently not used (sequential processing for stability)
-    MaxConcurrentGeolookups = 10
+
     
     # IP geolocation cache timeout in seconds
     # Cached results older than this will be re-queried
@@ -1505,9 +1490,7 @@ $ConfigData.ETRAnalysis = @{
     # Recommended: 50-100 for large organizations
     MaxSameSubjectMessages = 50
     
-    # Maximum same-subject messages per hour
-    # Lower threshold for time-based detection
-    MaxSameSubjectPerHour = 20
+
     
     # Maximum total messages per sender before flagging
     # Detects compromised accounts with high send volume
@@ -1579,11 +1562,7 @@ catch {
     Write-Host "  The script may not function properly." -ForegroundColor Yellow
 }
 
-try {
-    Add-Type -AssemblyName System.Web -ErrorAction SilentlyContinue
-} catch {
-    # Fallback for environments where System.Web isn't available
-}
+
 
 function ConvertTo-HtmlSafe {
     param([string]$Text)
@@ -2917,7 +2896,7 @@ function Test-ScriptVersion {
     .NOTES
         - Requires internet connection to GitHub
         - Uses 10-second timeout for web request
-        - Version comparison is simple string equality
+        - Versions are compared as [version], so a local build newer than GitHub is up to date
         - Does not automatically download/install updates
         - Safe to call multiple times (no side effects)
         - Updates GUI status during operation
@@ -2930,7 +2909,11 @@ function Test-ScriptVersion {
         [string]$GitHubUrl = "https://raw.githubusercontent.com/the-last-one-left/YeylandWutani/refs/heads/main/Security/Get-M365SecurityAnalysis.ps1",
         
         [Parameter(Mandatory = $false)]
-        [bool]$ShowMessageBox = $true
+        [bool]$ShowMessageBox = $true,
+
+        # Startup mode: stay silent unless a newer version exists (one fetch instead of two)
+        [Parameter(Mandatory = $false)]
+        [switch]$PromptOnlyIfNewer
     )
     
     try {
@@ -2957,14 +2940,15 @@ function Test-ScriptVersion {
             
             Write-Log "Current version: $currentVersion | Latest version: $latestVersion" -Level "Info"
             
-            # Compare versions (simple string comparison)
-            # For more complex versioning, consider [System.Version] casting
-            if ($latestVersion -eq $currentVersion) {
+            # Compare as [version] so a local build NEWER than GitHub is not offered an "update"
+            $latestIsNewer = ($latestVersion -ne $currentVersion)
+            try { $latestIsNewer = ([version]$latestVersion) -gt ([version]$currentVersion) } catch { }
+            if (-not $latestIsNewer) {
                 # Running latest version
                 Update-GuiStatus "Script is up to date (v$currentVersion)" ([System.Drawing.Color]::Green)
                 Write-Log "Script is running the latest version" -Level "Info"
-                
-                if ($ShowMessageBox) {
+
+                if ($ShowMessageBox -and -not $PromptOnlyIfNewer) {
                     [System.Windows.Forms.MessageBox]::Show(
                         "You are running the latest version!`n`n" +
                         "Current Version: $currentVersion`n" +
@@ -3027,8 +3011,8 @@ function Test-ScriptVersion {
         # Handle errors gracefully
         Update-GuiStatus "Version check failed: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error checking for updates: $($_.Exception.Message)" -Level "Error"
-        
-        if ($ShowMessageBox) {
+
+        if ($ShowMessageBox -and -not $PromptOnlyIfNewer) {
             [System.Windows.Forms.MessageBox]::Show(
                 "Unable to check for updates.`n`n" +
                 "Error: $($_.Exception.Message)`n`n" +
@@ -4286,7 +4270,7 @@ function Connect-TenantServices {
             Write-Log "Retrieving authenticated account from Graph session..." -Level "Info"
             $graphContext = Get-MgContext
             $userPrincipalName = $graphContext.Account
-            $isPowerShell51 = $PSVersionTable.PSVersion.Major -eq 5
+
 
             if ($userPrincipalName) {
                 Write-Log "EXO module: $((Get-Module ExchangeOnlineManagement).Version)" -Level "Info"
@@ -4807,85 +4791,6 @@ function Connect-ExchangeOnlineIfNeeded {
 #══════════════════════════════════════════════════════════════
 # SECURITY CONFIGURATION TESTING
 #══════════════════════════════════════════════════════════════
-
-function Test-SecurityDefaults {
-    <#
-    .SYNOPSIS
-        Checks if Microsoft 365 Security Defaults are enabled.
-    
-    .DESCRIPTION
-        Tests whether security defaults are enabled in the tenant, which can
-        block access to sign-in logs via Graph API.
-        
-        Security Defaults are a baseline security configuration that:
-        • Requires MFA for all users
-        • Blocks legacy authentication
-        • May restrict access to certain API endpoints
-        
-        If enabled, the script may need to use Exchange Online fallback
-        methods for sign-in data collection.
-    
-    .OUTPUTS
-        Hashtable with:
-        • IsEnabled   - Boolean or $null
-        • PolicyId    - Policy GUID
-        • DisplayName - Policy name
-        • Description - Policy description
-        • Error       - Error message (if check failed)
-    
-    .EXAMPLE
-        $defaults = Test-SecurityDefaults
-        if ($defaults.IsEnabled) {
-            Write-Warning "Security defaults may block sign-in log access"
-            # Use fallback method
-        }
-    
-    .NOTES
-        - Returns null for IsEnabled if check fails
-        - Non-blocking (continues on error)
-        - Updates GUI with status
-    #>
-    
-    [CmdletBinding()]
-    [OutputType([System.Collections.Hashtable])]
-    param()
-    
-    try {
-        Update-GuiStatus "Checking security defaults configuration..." ([System.Drawing.Color]::Orange)
-        Write-Log "Testing security defaults status..." -Level "Info"
-        
-        # Query the security defaults policy
-        $securityDefaultsUri = "https://graph.microsoft.com/v1.0/policies/identitySecurityDefaultsEnforcementPolicy"
-        $securityDefaultsPolicy = Invoke-MgGraphRequest -Uri $securityDefaultsUri -Method GET -ErrorAction Stop
-        
-        $isEnabled = $securityDefaultsPolicy.isEnabled -eq $true
-        
-        if ($isEnabled) {
-            Write-Log "Security defaults are ENABLED - this may block sign-in log access" -Level "Warning"
-            Update-GuiStatus "Security defaults detected as ENABLED" ([System.Drawing.Color]::Orange)
-        }
-        else {
-            Write-Log "Security defaults are disabled" -Level "Info"
-            Update-GuiStatus "Security defaults are disabled" ([System.Drawing.Color]::Green)
-        }
-        
-        return @{
-            IsEnabled   = $isEnabled
-            PolicyId    = $securityDefaultsPolicy.id
-            DisplayName = $securityDefaultsPolicy.displayName
-            Description = $securityDefaultsPolicy.description
-        }
-    }
-    catch {
-        Write-Log "Could not determine security defaults status: $($_.Exception.Message)" -Level "Warning"
-        Update-GuiStatus "Could not check security defaults status" ([System.Drawing.Color]::Orange)
-        
-        return @{
-            IsEnabled = $null
-            Error     = $_.Exception.Message
-        }
-    }
-}
 
 function Test-AdminAuditLogging {
     <#
@@ -5795,7 +5700,7 @@ function Get-TenantSignInData {
         # Export unusual locations
         $unusualSignIns = $resultsArray | Where-Object { $_.IsUnusualLocation -eq $true }
         if ($unusualSignIns.Count -gt 0) {
-            $unusualOutputPath = $OutputPath -replace '.csv$', '_Unusual.csv'
+            $unusualOutputPath = $OutputPath -replace '\.csv$', '_Unusual.csv'
             $unusualSignIns | Export-Csv -Path $unusualOutputPath -NoTypeInformation -Force
             Write-Log "Exported $($unusualSignIns.Count) unusual location sign-ins to: $unusualOutputPath" -Level "Info"
         }
@@ -5803,7 +5708,7 @@ function Get-TenantSignInData {
         # Export failed sign-ins
         $failedSignIns = $resultsArray | Where-Object { $_.StatusCode -ne "0" -and ![string]::IsNullOrEmpty($_.StatusCode) }
         if ($failedSignIns.Count -gt 0) {
-            $failedOutputPath = $OutputPath -replace '.csv$', '_Failed.csv'
+            $failedOutputPath = $OutputPath -replace '\.csv$', '_Failed.csv'
             $failedSignIns | Export-Csv -Path $failedOutputPath -NoTypeInformation -Force
             Write-Log "Exported $($failedSignIns.Count) failed sign-ins to: $failedOutputPath" -Level "Info"
         }
@@ -5901,10 +5806,10 @@ function Get-TenantSignInData {
         Write-Log "Output Files:" -Level "Info"
         Write-Log "  Main: $OutputPath" -Level "Info"
         if ($unusualSignIns.Count -gt 0) {
-            Write-Log "  Unusual: $($OutputPath -replace '.csv$', '_Unusual.csv')" -Level "Info"
+            Write-Log "  Unusual: $($OutputPath -replace '\.csv$', '_Unusual.csv')" -Level "Info"
         }
         if ($failedSignIns.Count -gt 0) {
-            Write-Log "  Failed: $($OutputPath -replace '.csv$', '_Failed.csv')" -Level "Info"
+            Write-Log "  Failed: $($OutputPath -replace '\.csv$', '_Failed.csv')" -Level "Info"
         }
         Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
         
@@ -6641,6 +6546,59 @@ function Test-CaPolicyUserInScope {
     return $inScope
 }
 
+function Get-CaPolicyNarrowing {
+    <#
+    .SYNOPSIS
+        Lists the conditions that narrow a Conditional Access policy below "everyone, everywhere".
+
+    .DESCRIPTION
+        A policy that requires MFA only counts as full enforcement when none of these apply:
+        specific apps, excluded apps, limited client app types, limited platforms, specific
+        (not All) included locations, a device filter, or a user / sign-in risk condition.
+        SDK model getters never return $null for nested objects, so only real values are tested.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.String[]])]
+    param ([Parameter(Mandatory = $true)]$Policy)
+
+    $narrowedBy = @()
+    $conditions = $Policy.Conditions
+
+    if (@($conditions.Applications.IncludeApplications) -notcontains "All") { $narrowedBy += "specific apps only" }
+    if (@($conditions.Applications.ExcludeApplications | Where-Object { $_ }).Count -gt 0) { $narrowedBy += "excludes some apps" }
+
+    $clientTypes = @($conditions.ClientAppTypes | Where-Object { $_ })
+    if ($clientTypes.Count -gt 0 -and $clientTypes -notcontains "all") { $narrowedBy += "limited client app types" }
+
+    $includedPlatforms = @($conditions.Platforms.IncludePlatforms | Where-Object { $_ })
+    if ($includedPlatforms.Count -gt 0 -and $includedPlatforms -notcontains "all") { $narrowedBy += "limited platforms" }
+
+    $includedLocations = @($conditions.Locations.IncludeLocations | Where-Object { $_ })
+    if ($includedLocations.Count -gt 0 -and $includedLocations -notcontains "All") { $narrowedBy += "limited locations" }
+
+    if (-not [string]::IsNullOrWhiteSpace("$($conditions.Devices.DeviceFilter.Rule)")) { $narrowedBy += "device filter" }
+
+    if (@($conditions.UserRiskLevels | Where-Object { $_ }).Count -gt 0 -or @($conditions.SignInRiskLevels | Where-Object { $_ }).Count -gt 0) { $narrowedBy += "risk-conditioned" }
+
+    return @($narrowedBy)
+}
+
+function Test-MfaMethodType {
+    <#
+    .SYNOPSIS
+        $true when an authentication method @odata.type is a second-factor / strong method.
+
+    .DESCRIPTION
+        Email is an SSPR method, not MFA, and is not counted. Windows Hello for Business,
+        passkeys (FIDO2), hardware OATH tokens and platform credentials are MFA-equivalent.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Boolean])]
+    param ([string]$MethodType)
+
+    return ($MethodType -match "microsoftAuthenticator|phone|softwareOath|hardwareOath|fido2|windowsHelloForBusiness|platformCredential")
+}
+
 function Get-MFAStatusAudit {
     <#
     .SYNOPSIS
@@ -6927,13 +6885,7 @@ function Get-MFAStatusAudit {
 
                     # The policy applies to this user; it only counts as FULL MFA enforcement if
                     # it is not narrowed by app, client type, platform or risk condition.
-                    $narrowedBy = @()
-                    if ($policy.Conditions.Applications.IncludeApplications -notcontains "All") { $narrowedBy += "specific apps only" }
-                    $clientTypes = @($policy.Conditions.ClientAppTypes | Where-Object { $_ })
-                    if ($clientTypes.Count -gt 0 -and $clientTypes -notcontains "all") { $narrowedBy += "limited client app types" }
-                    $includedPlatforms = @($policy.Conditions.Platforms.IncludePlatforms | Where-Object { $_ })
-                    if ($includedPlatforms.Count -gt 0 -and $includedPlatforms -notcontains "all") { $narrowedBy += "limited platforms" }
-                    if (@($policy.Conditions.UserRiskLevels | Where-Object { $_ }).Count -gt 0 -or @($policy.Conditions.SignInRiskLevels | Where-Object { $_ }).Count -gt 0) { $narrowedBy += "risk-conditioned" }
+                    $narrowedBy = @(Get-CaPolicyNarrowing -Policy $policy)
 
                     if ($narrowedBy.Count -gt 0) {
                         $partialPolicies += "$($policy.DisplayName) [$($narrowedBy -join ', ')]"
@@ -6978,7 +6930,7 @@ function Get-MFAStatusAudit {
                         
                         # Email is an SSPR method, not MFA, so it is not counted. Windows Hello
                         # for Business is strong MFA-equivalent.
-                        if ($methodType -match "microsoftAuthenticator|phone|softwareOath|fido2|windowsHelloForBusiness") {
+                        if (Test-MfaMethodType -MethodType $methodType) {
                             $registeredMethods += $methodType -replace '#microsoft.graph.', ''
                             $hasMFAMethods = $true
                         }
@@ -7185,7 +7137,7 @@ function Get-MFAStatusAudit {
             # Export high-risk users
             $noMFA = $mfaResultsArray | Where-Object { $_.HasMFA -eq "No" -and $_.AccountEnabled -eq $true }
             if ($noMFA.Count -gt 0) {
-                $noMFAPath = $OutputPath -replace '.csv$', '_NoMFA.csv'
+                $noMFAPath = $OutputPath -replace '\.csv$', '_NoMFA.csv'
                 $noMFA | Export-Csv -Path $noMFAPath -NoTypeInformation -Force
                 Write-Log "Exported $($noMFA.Count) users without MFA to: $noMFAPath" -Level "Warning"
             }
@@ -7197,7 +7149,7 @@ function Get-MFAStatusAudit {
                 $_.SecurityDefaults -eq $false
             }
             if ($perUserOnly.Count -gt 0) {
-                $perUserOnlyPath = $OutputPath -replace '.csv$', '_PerUserOnly.csv'
+                $perUserOnlyPath = $OutputPath -replace '\.csv$', '_PerUserOnly.csv'
                 $perUserOnly | Export-Csv -Path $perUserOnlyPath -NoTypeInformation -Force
                 Write-Log "Exported $($perUserOnly.Count) users with per-user MFA only to: $perUserOnlyPath" -Level "Info"
             }
@@ -7205,7 +7157,7 @@ function Get-MFAStatusAudit {
             # Export critical/high risk
             $highRisk = $mfaResultsArray | Where-Object { $_.RiskLevel -in @("Critical", "High") }
             if ($highRisk.Count -gt 0) {
-                $highRiskPath = $OutputPath -replace '.csv$', '_HighRisk.csv'
+                $highRiskPath = $OutputPath -replace '\.csv$', '_HighRisk.csv'
                 $highRisk | Export-Csv -Path $highRiskPath -NoTypeInformation -Force
                 Write-Log "Exported $($highRisk.Count) high-risk users to: $highRiskPath" -Level "Warning"
             }
@@ -7605,13 +7557,13 @@ function Get-FailedLoginPatterns {
             
             $criticalPatterns = $patternsArray | Where-Object { $_.RiskLevel -eq "Critical" }
             if ($criticalPatterns.Count -gt 0) {
-                $criticalPath = $OutputPath -replace '.csv$', '_Critical.csv'
+                $criticalPath = $OutputPath -replace '\.csv$', '_Critical.csv'
                 $criticalPatterns | Export-Csv -Path $criticalPath -NoTypeInformation -Force
             }
             
             $breaches = $patternsArray | Where-Object { $_.SuccessfulBreach -eq $true }
             if ($breaches.Count -gt 0) {
-                $breachPath = $OutputPath -replace '.csv$', '_Breaches.csv'
+                $breachPath = $OutputPath -replace '\.csv$', '_Breaches.csv'
                 $breaches | Export-Csv -Path $breachPath -NoTypeInformation -Force
             }
             
@@ -7777,7 +7729,7 @@ function Get-RecentPasswordChanges {
             return @()
         }
         
-        $suspiciousPatterns = @()
+        $suspiciousPatterns = [System.Collections.Generic.List[object]]::new()
         
         # Group by target user
         $userGroups = $passwordEvents | Group-Object -Property TargetUser | Where-Object { -not [string]::IsNullOrWhiteSpace($_.Name) }
@@ -7859,7 +7811,7 @@ function Get-RecentPasswordChanges {
                                 elseif ($riskScore -ge 15) { "Medium" }
                                 else { "Low" }
                     
-                    $suspiciousPatterns += [PSCustomObject]@{
+                    $suspiciousPatterns.Add([PSCustomObject]@{
                         User = $userGroup.Name
                         ChangeCount = $changeCount
                         TimeSpanHours = [math]::Round($timespan, 1)
@@ -7879,7 +7831,7 @@ function Get-RecentPasswordChanges {
                         } else {
                             "Review account for suspicious activity"
                         }
-                    }
+                    })
                 }
             }
             catch {
@@ -7896,7 +7848,7 @@ function Get-RecentPasswordChanges {
             # Create critical file
             $critical = $suspiciousPatterns | Where-Object { $_.RiskLevel -eq "Critical" }
             if ($critical.Count -gt 0) {
-                $criticalPath = $OutputPath -replace '.csv$', '_Critical.csv'
+                $criticalPath = $OutputPath -replace '\.csv$', '_Critical.csv'
                 $critical | Export-Csv -Path $criticalPath -NoTypeInformation -Force
             }
             
@@ -8028,36 +7980,9 @@ function Get-AdminAuditData {
                 ".*[Cc]onsent to application.*|.*[Aa]dd service principal credentials.*|.*[Cc]ertificates and secrets.*|.*[Aa]dd owner to (application|service principal).*|.*[Ss]et federation settings.*|.*[Aa]dd (unverified|verified) domain.*|.*[Cc]onditional [Aa]ccess policy.*|.*[Dd]isable [Ss]trong [Aa]uthentication.*" { $riskLevel = "High" }
             }
             
-            # Login status determination
+            # Directory audits contain no sign-ins (those come from the sign-in collectors), so
+            # the LOGIN column is always OTHER. The column is kept for CSV compatibility.
             $loginStatus = "OTHER"
-            $loginActivities = @(
-                "Sign-in activity", "User logged in", "User signed in",
-                "Interactive user sign in", "Non-interactive user sign in"
-            )
-            
-            $isLoginActivity = $false
-            foreach ($loginActivity in $loginActivities) {
-                if ($activityDisplayName -like "*$loginActivity*") {
-                    $isLoginActivity = $true
-                    break
-                }
-            }
-            
-            if ($isLoginActivity) {
-                switch ($log.result) {
-                    "success" { $loginStatus = "TRUE" }
-                    "failure" { $loginStatus = "FALSE" }
-                    "interrupted" { $loginStatus = "FALSE" }
-                    "timeout" { $loginStatus = "FALSE" }
-                    default { 
-                        if ($log.resultReason -like "*success*" -or $log.resultReason -like "*completed*") {
-                            $loginStatus = "TRUE"
-                        } elseif ($log.resultReason -like "*fail*" -or $log.resultReason -like "*error*") {
-                            $loginStatus = "FALSE"
-                        }
-                    }
-                }
-            }
             
             # Extract target resources
             $targetResources = $log.targetResources | ForEach-Object {
@@ -8125,22 +8050,18 @@ function Get-AdminAuditData {
         # Create filtered versions
         $highRiskLogs = $processedLogsArray | Where-Object { $_.RiskLevel -eq "High" }
         if ($highRiskLogs.Count -gt 0) {
-            $highRiskPath = $OutputPath -replace '.csv$', '_Critical.csv'
+            $highRiskPath = $OutputPath -replace '\.csv$', '_Critical.csv'
             $highRiskLogs | Export-Csv -Path $highRiskPath -NoTypeInformation -Force
             Write-Log "Found $($highRiskLogs.Count) high-risk admin operations" -Level "Warning"
         }
         
         $failedLogs = $processedLogsArray | Where-Object { $_.Result -ne "success" }
         if ($failedLogs.Count -gt 0) {
-            $failedPath = $OutputPath -replace '.csv$', '_Failed.csv'
+            $failedPath = $OutputPath -replace '\.csv$', '_Failed.csv'
             $failedLogs | Export-Csv -Path $failedPath -NoTypeInformation -Force
         }
         
-        $loginLogs = $processedLogsArray | Where-Object { $_.LOGIN -ne "OTHER" }
-        if ($loginLogs.Count -gt 0) {
-            $loginPath = $OutputPath -replace '.csv$', '_LoginActivity.csv'
-            $loginLogs | Export-Csv -Path $loginPath -NoTypeInformation -Force
-        }
+
         
         Update-GuiStatus "Admin audit log collection completed: $($processedLogsArray.Count) records." ([System.Drawing.Color]::Green)
         Write-Log "Admin audit collection complete" -Level "Info"
@@ -8549,7 +8470,7 @@ function Get-MailboxRules {
             # Export suspicious rules
             $suspiciousRules = $allRulesExport | Where-Object { $_.IsSuspicious -eq $true }
             if ($suspiciousRules.Count -gt 0) {
-                $suspiciousPath = $OutputPath -replace '.csv$', '_Suspicious.csv'
+                $suspiciousPath = $OutputPath -replace '\.csv$', '_Suspicious.csv'
                 $suspiciousRules | Export-Csv -Path $suspiciousPath -NoTypeInformation -Force
                 Write-Log "Exported $($suspiciousRules.Count) suspicious rules to: $suspiciousPath" -Level "Warning"
             }
@@ -8559,7 +8480,7 @@ function Get-MailboxRules {
                 $_.ForwardTo -or $_.RedirectTo -or $_.ForwardAsAttachmentTo 
             }
             if ($forwardingRules.Count -gt 0) {
-                $forwardingPath = $OutputPath -replace '.csv$', '_Forwarding.csv'
+                $forwardingPath = $OutputPath -replace '\.csv$', '_Forwarding.csv'
                 $forwardingRules | Export-Csv -Path $forwardingPath -NoTypeInformation -Force
                 Write-Log "Exported $($forwardingRules.Count) forwarding rules to: $forwardingPath" -Level "Info"
             }
@@ -9712,9 +9633,11 @@ function Get-ETRColumnMapping {
         
         foreach ($possibleName in $possibleNames) {
             # Normalize both for comparison (remove spaces, hyphens, underscores)
-            $matchedHeader = $Headers | Where-Object { 
+            # Several headers can normalise to the same name (for example "Message ID" and
+            # message_id); take the first so the mapping is always one header.
+            $matchedHeader = @($Headers | Where-Object {
                 $_.ToLower().Replace(" ", "").Replace("-", "").Replace("_", "") -eq $possibleName.Replace("_", "")
-            }
+            }) | Select-Object -First 1
             
             if ($matchedHeader) {
                 $mapping[$field] = $matchedHeader
@@ -9994,11 +9917,8 @@ function Analyze-ETRData {
             if (-not [string]::IsNullOrEmpty($msg.Subject) -and $msg.Subject.Length -ge $ConfigData.ETRAnalysis.MinSubjectLength) {
                 $normalizedSubject = $msg.Subject.ToLower().Trim()
                 $key = "$($msg.SenderAddress)`0$normalizedSubject"
-                if ($subjectGroups.ContainsKey($key)) {
-                    $subjectGroups[$key] += @($msg)
-                } else {
-                    $subjectGroups[$key] = @($msg)
-                }
+                if (-not $subjectGroups.ContainsKey($key)) { $subjectGroups[$key] = [System.Collections.Generic.List[object]]::new() }
+                $subjectGroups[$key].Add($msg)
             }
         }
         
@@ -10031,20 +9951,20 @@ function Analyze-ETRData {
         
         $keywordFindings = 0
         foreach ($keyword in $ConfigData.ETRAnalysis.SpamKeywords) {
-            $keywordMessages = $outboundMessages | Where-Object { 
-                $_.Subject -like "*$keyword*" -and -not [string]::IsNullOrEmpty($_.Subject)
-            }
+            # Whole-word match: "free" must not hit "freedom".
+            $keywordPattern = '\b' + [regex]::Escape($keyword) + '\b'
+            $keywordMessages = @($outboundMessages | Where-Object {
+                -not [string]::IsNullOrEmpty($_.Subject) -and
+                [regex]::IsMatch($_.Subject, $keywordPattern, [System.Text.RegularExpressions.RegexOptions]::IgnoreCase)
+            })
             
             if ($keywordMessages.Count -gt 5) {
                 $senderGroups = @{}
                 foreach ($msg in $keywordMessages) {
                     $sender = $msg.SenderAddress
                     if (-not [string]::IsNullOrEmpty($sender)) {
-                        if ($senderGroups.ContainsKey($sender)) {
-                            $senderGroups[$sender] += @($msg)
-                        } else {
-                            $senderGroups[$sender] = @($msg)
-                        }
+                        if (-not $senderGroups.ContainsKey($sender)) { $senderGroups[$sender] = [System.Collections.Generic.List[object]]::new() }
+                        $senderGroups[$sender].Add($msg)
                     }
                 }
                 
@@ -10123,11 +10043,8 @@ function Analyze-ETRData {
             foreach ($msg in $failedMessages) {
                 $sender = $msg.SenderAddress
                 if (-not [string]::IsNullOrEmpty($sender)) {
-                    if ($failedGroups.ContainsKey($sender)) {
-                        $failedGroups[$sender] += @($msg)
-                    } else {
-                        $failedGroups[$sender] = @($msg)
-                    }
+                    if (-not $failedGroups.ContainsKey($sender)) { $failedGroups[$sender] = [System.Collections.Generic.List[object]]::new() }
+                    $failedGroups[$sender].Add($msg)
                 }
             }
             
@@ -10167,7 +10084,7 @@ function Analyze-ETRData {
             $spamIndicatorsArray | Export-Csv -Path $OutputPath -NoTypeInformation -Force
             
             # Create message recall report
-            $recallReportPath = $OutputPath -replace '.csv$', '_MessageRecallReport.csv'
+            $recallReportPath = $OutputPath -replace '\.csv$', '_MessageRecallReport.csv'
             $recallReport = $spamIndicatorsArray | Where-Object { 
                 $_.RiskLevel -in @("Critical", "High") -and -not [string]::IsNullOrEmpty($_.MessageIds)
             }
@@ -10544,6 +10461,26 @@ function Invoke-CompromiseDetectionCore {
     # Initialize user tracking
     $users = @{}
     $systemIssues = @()
+
+    # One shape for every per-user entry (13 keys), so a new key is added in one place.
+    $newUserEntry = {
+        param([string]$DisplayName)
+        @{
+            UserDisplayName = $DisplayName
+            UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
+            FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
+            HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
+            SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
+            SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
+            HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
+            ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
+            HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
+            MFAStatus = $null
+            FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
+            PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
+            RiskScore = 0
+        }
+    }
     
     # Process sign-in data
     if ($dataSources.SignInData.Available) {
@@ -10558,21 +10495,7 @@ function Invoke-CompromiseDetectionCore {
             if ([string]::IsNullOrEmpty($userId)) { continue }
             
             if (-not $users.ContainsKey($userId)) {
-                $users[$userId] = @{
-                    UserDisplayName = $signIn.UserDisplayName
-                    UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    MFAStatus = $null
-                    FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    RiskScore = 0
-                }
+                $users[$userId] = & $newUserEntry ($signIn.UserDisplayName)
             }
             
             $isSuccessfulSignIn = ($signIn.StatusCode -eq "0" -or [string]::IsNullOrEmpty($signIn.StatusCode))
@@ -10611,21 +10534,7 @@ function Invoke-CompromiseDetectionCore {
             if ([string]::IsNullOrEmpty($userId)) { continue }
             
             if (-not $users.ContainsKey($userId)) {
-                $users[$userId] = @{
-                    UserDisplayName = $auditLog.UserDisplayName
-                    UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    MFAStatus = $null
-                    FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    RiskScore = 0
-                }
+                $users[$userId] = & $newUserEntry ($auditLog.UserDisplayName)
             }
             
             if ($auditLog.RiskLevel -eq "High") {
@@ -10647,21 +10556,7 @@ function Invoke-CompromiseDetectionCore {
                 if ([string]::IsNullOrEmpty($userId)) { continue }
                 
                 if (-not $users.ContainsKey($userId)) {
-                    $users[$userId] = @{
-                        UserDisplayName = $rule.DisplayName
-                        UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        MFAStatus = $null
-                        FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        RiskScore = 0
-                    }
+                    $users[$userId] = & $newUserEntry ($rule.DisplayName)
                 }
                 
                 $users[$userId].SuspiciousRules.Add($rule)
@@ -10682,21 +10577,7 @@ function Invoke-CompromiseDetectionCore {
                 if ([string]::IsNullOrEmpty($userId)) { continue }
                 
                 if (-not $users.ContainsKey($userId)) {
-                    $users[$userId] = @{
-                        UserDisplayName = $delegation.DisplayName
-                        UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        MFAStatus = $null
-                        FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        RiskScore = 0
-                    }
+                    $users[$userId] = & $newUserEntry ($delegation.DisplayName)
                 }
                 
                 $users[$userId].SuspiciousDelegations.Add($delegation)
@@ -10715,21 +10596,7 @@ function Invoke-CompromiseDetectionCore {
                 
                 $systemUser = "SYSTEM_WIDE_APPS"
                 if (-not $users.ContainsKey($systemUser)) {
-                    $users[$systemUser] = @{
-                        UserDisplayName = "System-Wide Application Issues"
-                        UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        MFAStatus = $null
-                        FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                        RiskScore = 0
-                    }
+                    $users[$systemUser] = & $newUserEntry ("System-Wide Application Issues")
                 }
                 
                 $users[$systemUser].HighRiskAppRegs.Add($appReg)
@@ -10757,21 +10624,7 @@ function Invoke-CompromiseDetectionCore {
             if ([string]::IsNullOrEmpty($userId)) { continue }
             
             if (-not $users.ContainsKey($userId)) {
-                $users[$userId] = @{
-                    UserDisplayName = $userId
-                    UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    MFAStatus = $null
-                    FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-                    RiskScore = 0
-                }
+                $users[$userId] = & $newUserEntry ($userId)
             }
 
             $users[$userId].ETRSpamActivity.Add($etrRecord)
@@ -10792,21 +10645,7 @@ function Invoke-CompromiseDetectionCore {
 			if ([string]::IsNullOrEmpty($userId)) { continue }
 			
 			if (-not $users.ContainsKey($userId)) {
-				$users[$userId] = @{
-					UserDisplayName = $mfaRecord.DisplayName
-					UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-					SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-					SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-					ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					MFAStatus = $null
-					FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-					RiskScore = 0
-				}
+				$users[$userId] = & $newUserEntry ($mfaRecord.DisplayName)
 			}
 			
 			# FIX: Ensure we store ONLY a single string value, force to string
@@ -10850,21 +10689,7 @@ function Invoke-CompromiseDetectionCore {
             if ($userId) {
 				
 				if (-not $users.ContainsKey($userId)) {
-					$users[$userId] = @{
-						UserDisplayName = $userId
-						UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-						FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-						HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-						SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-						SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-						HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-						ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-						HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-						MFAStatus = $null
-						FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-						PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-						RiskScore = 0
-					}
+					$users[$userId] = & $newUserEntry ($userId)
 				}
 				
 				# STORE the pattern data
@@ -10899,21 +10724,7 @@ function Invoke-CompromiseDetectionCore {
 			if ([string]::IsNullOrEmpty($userId)) { continue }
 			
 			if (-not $users.ContainsKey($userId)) {
-				$users[$userId] = @{
-					UserDisplayName = $userId
-					UnusualSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					FailedSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskOps = [System.Collections.Generic.List[PSCustomObject]]::new()
-					SuspiciousRules = [System.Collections.Generic.List[PSCustomObject]]::new()
-					SuspiciousDelegations = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskAppRegs = [System.Collections.Generic.List[PSCustomObject]]::new()
-					ETRSpamActivity = [System.Collections.Generic.List[PSCustomObject]]::new()
-					HighRiskISPSignIns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					MFAStatus = $null
-					FailedLoginPatterns = [System.Collections.Generic.List[PSCustomObject]]::new()
-					PasswordChangeIssues = [System.Collections.Generic.List[PSCustomObject]]::new()
-					RiskScore = 0
-				}
+				$users[$userId] = & $newUserEntry ($userId)
 			}
 			
 			# STORE the password change data
@@ -10981,7 +10792,7 @@ function Invoke-CompromiseDetectionCore {
     # Export results
     Update-GuiStatus "Exporting analysis results..." ([System.Drawing.Color]::Orange)
     
-    $csvPath = $ReportPath -replace '.html$', '.csv'
+    $csvPath = $ReportPath -replace '\.html$', '.csv'
     $results | Select-Object UserId, UserDisplayName, RiskScore, RiskLevel, UnusualSignInCount, 
         FailedSignInCount, HighRiskOperationsCount, SuspiciousRulesCount, SuspiciousDelegationsCount, 
         HighRiskAppRegistrationsCount, ETRSpamActivityCount, HighRiskISPCount, MFAStatus,
@@ -12864,10 +12675,8 @@ function Show-MainGUI {
         Update-ConnectionStatus
         Initialize-GuiTileStates
 
-        $versionCheck = Test-ScriptVersion -ShowMessageBox $false
-        if ($versionCheck.IsLatest -eq $false) {
-            Test-ScriptVersion -ShowMessageBox $true
-        }
+        # One fetch: the dialog only appears when a newer version exists
+        $null = Test-ScriptVersion -ShowMessageBox $true -PromptOnlyIfNewer
 
         if ($Global:ConnectionState.IsConnected) {
             Update-GuiStatus "[OK] Application ready - Using existing Microsoft Graph connection" (Get-ThemeColor -ColorName "Success")
