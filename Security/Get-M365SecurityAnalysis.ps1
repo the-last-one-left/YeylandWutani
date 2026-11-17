@@ -84,7 +84,7 @@
 # Update this version number when making significant changes
 # Format: Major.Minor (e.g., 8.2)
 # Record every change in Security/CHANGELOG-Get-M365SecurityAnalysis.md
-$ScriptVer = "12.0"
+$ScriptVer = "12.1"
 
 #--------------------------------------------------------------
 # POWERSHELL VERSION CHECK
@@ -2630,6 +2630,26 @@ function Set-CollectionStatus {
     }
 }
 
+function Set-CollectorFailed {
+    <#
+    .SYNOPSIS
+        Records that a collector failed, so the previous run's row cannot keep looking complete.
+
+    .DESCRIPTION
+        Same wording as the sign-in and admin audit collectors. Call it from every catch block
+        and every early return that stops a collector before it writes its own status.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$What,
+        [string]$Reason = "unknown error"
+    )
+
+    Set-CollectionStatus -Source $Source -Complete $false -Records 0 `
+        -Note "$What FAILED ($Reason); any $What CSV in the working directory is from an EARLIER run."
+}
+
 function Get-CollectionStatus {
     <#
     .SYNOPSIS
@@ -2992,6 +3012,107 @@ function Test-ScriptVersion {
 # IP ADDRESS GEOLOCATION
 #══════════════════════════════════════════════════════════════
 
+function Get-IPClassification {
+    <#
+    .SYNOPSIS
+        Single source of truth for "is this IP address usable / private / which version".
+
+    .DESCRIPTION
+        Returns IsValid, Version (IPv4 or IPv6 of the EFFECTIVE address), IsPrivate, Label and
+        EffectiveAddress. IPv4-mapped IPv6 addresses (::ffff:a.b.c.d) are unmapped and
+        classified as the IPv4 address they carry, so a mapped PUBLIC address is not private.
+        Private covers RFC1918, loopback, link-local, CGNAT (100.64.0.0/10), IPv6 loopback,
+        unspecified, link-local (fe80::/10), site-local (fec0::/10), unique local (fc00::/7)
+        and multicast (ff00::/8).
+    #>
+    [CmdletBinding()]
+    param ([string]$IPAddress)
+
+    $result = [PSCustomObject]@{
+        IsValid          = $false
+        Version          = ""
+        IsPrivate        = $false
+        Label            = ""
+        EffectiveAddress = "$IPAddress"
+        IsMapped         = $false
+    }
+
+    $text = "$IPAddress".Trim()
+    # IPAddress.TryParse accepts bare integers such as "1" (-> 0.0.0.1); real addresses always
+    # contain a dot or a colon.
+    if ($text -notmatch '[.:]') { return $result }
+
+    $ip = $null
+    if (-not [System.Net.IPAddress]::TryParse($text, [ref]$ip)) { return $result }
+    $result.IsValid = $true
+
+    if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6 -and $ip.IsIPv4MappedToIPv6) {
+        $ip = $ip.MapToIPv4()
+        $result.IsMapped = $true
+        $result.EffectiveAddress = $ip.ToString()
+    }
+
+    $bytes = $ip.GetAddressBytes()
+    if ($ip.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
+        $result.Version = "IPv4"
+        if ($bytes[0] -eq 10 -or
+            ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+            ($bytes[0] -eq 192 -and $bytes[1] -eq 168)) {
+            $result.IsPrivate = $true; $result.Label = "Private/Internal IPv4"
+        }
+        elseif ($bytes[0] -eq 127) {
+            $result.IsPrivate = $true; $result.Label = "Loopback IPv4"
+        }
+        elseif ($bytes[0] -eq 169 -and $bytes[1] -eq 254) {
+            $result.IsPrivate = $true; $result.Label = "Link-Local IPv4"
+        }
+        elseif ($bytes[0] -eq 100 -and ($bytes[1] -band 0xC0) -eq 64) {
+            $result.IsPrivate = $true; $result.Label = "Shared Address Space (CGNAT) IPv4"
+        }
+    }
+    else {
+        $result.Version = "IPv6"
+        if ($ip.Equals([System.Net.IPAddress]::IPv6Loopback)) {
+            $result.IsPrivate = $true; $result.Label = "Loopback IPv6"
+        }
+        elseif ($ip.Equals([System.Net.IPAddress]::IPv6Any)) {
+            $result.IsPrivate = $true; $result.Label = "Unspecified IPv6"
+        }
+        elseif ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0x80) {
+            $result.IsPrivate = $true; $result.Label = "Link-Local IPv6"
+        }
+        elseif ($bytes[0] -eq 0xFE -and ($bytes[1] -band 0xC0) -eq 0xC0) {
+            $result.IsPrivate = $true; $result.Label = "Site-Local IPv6 (deprecated)"
+        }
+        elseif (($bytes[0] -band 0xFE) -eq 0xFC) {
+            $result.IsPrivate = $true; $result.Label = "Private IPv6 (ULA)"
+        }
+        elseif ($bytes[0] -eq 0xFF) {
+            $result.IsPrivate = $true; $result.Label = "Multicast IPv6"
+        }
+    }
+
+    return $result
+}
+
+function Test-UnusualCountry {
+    <#
+    .SYNOPSIS
+        $true when a geolocated country is real and not in $ConfigData.ExpectedCountries.
+
+    .DESCRIPTION
+        Empty values and the placeholders "Unknown", "Private Network" and "Invalid IP" mean
+        "could not be evaluated", never "unusual".
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Boolean])]
+    param ([string]$Country)
+
+    if ([string]::IsNullOrWhiteSpace($Country)) { return $false }
+    if (@("Unknown", "Private Network", "Invalid IP") -contains $Country.Trim()) { return $false }
+    return ($ConfigData.ExpectedCountries -notcontains $Country)
+}
+
 function Invoke-IPGeolocation {
     <#
     .SYNOPSIS
@@ -3062,21 +3183,14 @@ function Invoke-IPGeolocation {
     # VALIDATE IP ADDRESS (IPv4 or IPv6)
     # ═══════════════════════════════════════════════════════════
     
-    $isIPv4 = $false
-    $isIPv6 = $false
-    
-    # Try to parse as IP address
-    try {
-        $ipObj = [System.Net.IPAddress]::Parse($IPAddress)
-        
-        if ($ipObj.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
-            $isIPv4 = $true
-        }
-        elseif ($ipObj.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
-            $isIPv6 = $true
-        }
-    }
-    catch {
+    # One classifier for the whole script (see Get-IPClassification). IPv4-mapped IPv6
+    # addresses are looked up as the IPv4 address they carry.
+    $ipInfo = Get-IPClassification -IPAddress $IPAddress
+    $isIPv4 = ($ipInfo.Version -eq "IPv4")
+    $isIPv6 = ($ipInfo.Version -eq "IPv6")
+    $lookupIp = $ipInfo.EffectiveAddress
+
+    if (-not $ipInfo.IsValid) {
         Write-Log "Invalid IP address format: $IPAddress" -Level "Warning"
         return @{
             ip           = $IPAddress
@@ -3107,50 +3221,8 @@ function Invoke-IPGeolocation {
     # CHECK FOR PRIVATE/SPECIAL IP ADDRESSES
     # ═══════════════════════════════════════════════════════════
     
-    $isPrivate = $false
-    $privateType = ""
-    
-    if ($isIPv4) {
-        # IPv4 private ranges
-        if ($IPAddress -match "^10\.|^172\.(1[6-9]|2[0-9]|3[0-1])\.|^192\.168\.|^127\.") {
-            $isPrivate = $true
-            $privateType = "Private/Internal IPv4"
-        }
-        elseif ($IPAddress -match "^169\.254\.") {
-            $isPrivate = $true
-            $privateType = "Link-Local IPv4"
-        }
-    }
-    elseif ($isIPv6) {
-        # IPv6 special ranges
-        $ipv6Lower = $IPAddress.ToLower()
-        
-        # Loopback ::1
-        if ($ipv6Lower -eq "::1") {
-            $isPrivate = $true
-            $privateType = "Loopback IPv6"
-        }
-        # Link-local fe80::/10
-        elseif ($ipv6Lower -match "^fe[89ab][0-9a-f]:") {
-            $isPrivate = $true
-            $privateType = "Link-Local IPv6"
-        }
-        # Unique local addresses fc00::/7 (fd00::/8 is most common)
-        elseif ($ipv6Lower -match "^f[cd][0-9a-f]{2}:") {
-            $isPrivate = $true
-            $privateType = "Private IPv6 (ULA)"
-        }
-        # Site-local (deprecated but still seen) fec0::/10
-        elseif ($ipv6Lower -match "^fec[0-9a-f]:") {
-            $isPrivate = $true
-            $privateType = "Site-Local IPv6 (deprecated)"
-        }
-        # IPv4-mapped IPv6 addresses ::ffff:0:0/96
-        elseif ($ipv6Lower -match "^::ffff:") {
-            $isPrivate = $true
-            $privateType = "IPv4-mapped IPv6"
-        }
-    }
+    $isPrivate = $ipInfo.IsPrivate
+    $privateType = $ipInfo.Label
     
     if ($isPrivate) {
         $privateResult = @{
@@ -3188,7 +3260,7 @@ function Invoke-IPGeolocation {
             $attempt++
             
             try {
-                $uri = "http://api.ipstack.com/${IPAddress}?access_key=${apiKey}" + "&output=json"
+                $uri = "http://api.ipstack.com/${lookupIp}?access_key=${apiKey}" + "&output=json"
                 
                 $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
                 
@@ -3253,7 +3325,7 @@ function Invoke-IPGeolocation {
             try {
                 # ip-api.com supports both IPv4 and IPv6
                 # Free tier: 45 requests/minute
-                $uri = "http://ip-api.com/json/${IPAddress}"
+                $uri = "http://ip-api.com/json/${lookupIp}"
 
                 $response = Invoke-RestMethod -Uri $uri -Method Get -TimeoutSec 10 -ErrorAction Stop
 
@@ -4055,27 +4127,17 @@ function Connect-TenantServices {
         Update-GuiStatus "Preparing Exchange Online connection..." ([System.Drawing.Color]::Orange)
         Write-Log "Preparing Exchange Online connection after Graph connection" -Level "Info"
 
-        # Check for existing working Exchange Online connection instead of disconnecting
-        $existingConnection = $null
-        try {
-            # Try to get a test result to verify connection works
-            $existingConnection = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
-            if ($existingConnection) {
-                Write-Log "Found existing working Exchange Online connection - reusing it" -Level "Info"
-                Update-GuiStatus "Reusing existing Exchange Online connection" ([System.Drawing.Color]::Green)
-
-                # Mark as connected and skip connection attempt
-                $Global:ExchangeOnlineState = @{
-                    IsConnected       = $true
-                    LastChecked       = Get-Date
-                    ConnectionAttempts = 0
-                }
-                $skipExchangeConnection = $true
-            }
+        # Reuse an existing Exchange Online session ONLY when it belongs to the tenant Graph
+        # is connected to. A session left over from another tenant is disconnected here.
+        $skipExchangeConnection = $false
+        if (Test-ExoSessionReusable) {
+            Write-Log "Found existing Exchange Online connection for this tenant - reusing it" -Level "Info"
+            Update-GuiStatus "Reusing existing Exchange Online connection" ([System.Drawing.Color]::Green)
+            Set-ExoConnectionState -IsConnected $true -ConnectionAttempts 0
+            $skipExchangeConnection = $true
         }
-        catch {
-            Write-Log "No existing working Exchange Online connection found" -Level "Info"
-            $skipExchangeConnection = $false
+        else {
+            Write-Log "No reusable Exchange Online connection for this tenant" -Level "Info"
         }
 
         if (-not $skipExchangeConnection) {
@@ -4175,12 +4237,8 @@ function Connect-TenantServices {
                 Write-Log "Exchange Online connection successful and verified" -Level "Info"
                 Update-GuiStatus "Connected to both Microsoft Graph and Exchange Online" ([System.Drawing.Color]::Green)
                 
-                # Initialize Exchange Online state tracking
-                $Global:ExchangeOnlineState = @{
-                    IsConnected       = $true
-                    LastChecked       = Get-Date
-                    ConnectionAttempts = 0
-                }
+                # Update state in place (keeps the LastCollection* keys)
+                Set-ExoConnectionState -IsConnected $true -ConnectionAttempts 0
             }
         }
         catch {
@@ -4188,12 +4246,8 @@ function Connect-TenantServices {
             Write-Log "Exchange Online connection failed (non-fatal): $($_.Exception.Message)" -Level "Warning"
             Update-GuiStatus "Graph connected, Exchange Online failed - will retry during inbox rules collection" ([System.Drawing.Color]::Orange)
             
-            # Initialize Exchange Online state as failed
-            $Global:ExchangeOnlineState = @{
-                IsConnected       = $false
-                LastChecked       = Get-Date
-                ConnectionAttempts = 1
-            }
+            # Update state in place (keeps the LastCollection* keys)
+            Set-ExoConnectionState -IsConnected $false -ConnectionAttempts 1
         }
         } # End of if (-not $skipExchangeConnection)
 
@@ -4290,6 +4344,9 @@ function Disconnect-GraphSafely {
     )
     
     try {
+        # The Exchange Online session is tied to the tenant, so it always goes with Graph.
+        Disconnect-ExoQuietly | Out-Null
+
         if ($Global:ConnectionState.IsConnected) {
             Update-GuiStatus "Disconnecting from Microsoft Graph..." ([System.Drawing.Color]::Orange)
             Write-Log "Disconnecting from Microsoft Graph..." -Level "Info"
@@ -4333,6 +4390,116 @@ function Disconnect-GraphSafely {
 #══════════════════════════════════════════════════════════════
 # EXCHANGE ONLINE CONNECTION MANAGEMENT
 #══════════════════════════════════════════════════════════════
+
+function Get-ExoConnectionTenant {
+    <#
+    .SYNOPSIS
+        Returns the tenant ids of the connected Exchange Online sessions (empty array if none).
+
+    .DESCRIPTION
+        EXO v3 uses REST and never creates a Microsoft.Exchange PSSession, so
+        Get-ConnectionInformation is the only reliable way to see which tenant a session
+        belongs to.
+    #>
+    [CmdletBinding()]
+    param ()
+
+    try {
+        $tenants = @(Get-ConnectionInformation -ErrorAction Stop |
+            Where-Object { $_.State -eq 'Connected' } |
+            ForEach-Object { "$($_.TenantID)" })
+        return @($tenants)
+    }
+    catch {
+        return @()
+    }
+}
+
+function Set-ExoConnectionState {
+    <#
+    .SYNOPSIS
+        Updates $Global:ExchangeOnlineState in place so the LastCollection* keys survive.
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)][bool]$IsConnected,
+        [int]$ConnectionAttempts = -1,
+        [switch]$IncrementAttempts
+    )
+
+    if (-not $Global:ExchangeOnlineState) {
+        $Global:ExchangeOnlineState = @{ ConnectionAttempts = 0 }
+    }
+    if (-not $Global:ExchangeOnlineState.ContainsKey('LastCollectionComplete')) { $Global:ExchangeOnlineState.LastCollectionComplete = $true }
+    if (-not $Global:ExchangeOnlineState.ContainsKey('LastCollectionWarning'))  { $Global:ExchangeOnlineState.LastCollectionWarning = $null }
+
+    $Global:ExchangeOnlineState.IsConnected = $IsConnected
+    $Global:ExchangeOnlineState.LastChecked = Get-Date
+    if ($ConnectionAttempts -ge 0) { $Global:ExchangeOnlineState.ConnectionAttempts = $ConnectionAttempts }
+    elseif ($IncrementAttempts) { $Global:ExchangeOnlineState.ConnectionAttempts = [int]$Global:ExchangeOnlineState.ConnectionAttempts + 1 }
+}
+
+function Disconnect-ExoQuietly {
+    <#
+    .SYNOPSIS
+        Drops any Exchange Online session without prompting. Never throws.
+
+    .OUTPUTS
+        System.Boolean - $true when a session was found and a disconnect was attempted.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Boolean])]
+    param ()
+
+    $hadSession = (@(Get-ExoConnectionTenant)).Count -gt 0
+    if ($hadSession) {
+        try {
+            Disconnect-ExchangeOnline -Confirm:$false -ErrorAction Stop
+            Write-Log "Disconnected Exchange Online session" -Level "Info"
+        }
+        catch {
+            Write-Log "Could not disconnect Exchange Online cleanly: $($_.Exception.Message)" -Level "Warning"
+        }
+    }
+    Set-ExoConnectionState -IsConnected $false
+    return $hadSession
+}
+
+function Test-ExoSessionReusable {
+    <#
+    .SYNOPSIS
+        $true when a working Exchange Online session exists for the tenant Graph is connected to.
+
+    .DESCRIPTION
+        A session for any other tenant (or one whose tenant cannot be compared with Graph's)
+        is disconnected so the caller reconnects against the right tenant. Without this,
+        inbox rules, delegations and message trace from tenant A end up in tenant B's report.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.Boolean])]
+    param ()
+
+    $exoTenants = @(Get-ExoConnectionTenant)
+    if ($exoTenants.Count -eq 0) { return $false }
+
+    $graphTenant = $null
+    try { $graphTenant = "$((Get-MgContext -ErrorAction Stop).TenantId)" } catch { $graphTenant = $null }
+
+    $sameTenant = ($exoTenants.Count -eq 1) -and (-not [string]::IsNullOrWhiteSpace($graphTenant)) -and ($exoTenants[0] -ieq $graphTenant)
+    if (-not $sameTenant) {
+        Write-Log "Exchange Online session is for tenant [$($exoTenants -join ', ')] but Microsoft Graph is connected to [$graphTenant] - disconnecting it so it is re-established for this tenant." -Level "Warning"
+        Disconnect-ExoQuietly | Out-Null
+        return $false
+    }
+
+    try {
+        $probe = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
+        return [bool]$probe
+    }
+    catch {
+        return $false
+    }
+}
 
 function Connect-ExchangeOnlineIfNeeded {
     <#
@@ -4401,33 +4568,13 @@ function Connect-ExchangeOnlineIfNeeded {
         Update-GuiStatus "Checking Exchange Online connection..." ([System.Drawing.Color]::Orange)
         
         $isConnected = $false
-        try {
-            $testResult = Get-AcceptedDomain -ErrorAction Stop | Select-Object -First 1
-            if ($testResult) {
-                $isConnected = $true
-                Write-Log "Exchange Online connection verified - already connected" -Level "Info"
-                
-                # Update global state
-                if (-not $Global:ExchangeOnlineState) {
-                    $Global:ExchangeOnlineState = @{
-                        IsConnected       = $true
-                        LastChecked       = Get-Date
-                        ConnectionAttempts = 0
-                    }
-                }
-                else {
-                    $Global:ExchangeOnlineState.IsConnected = $true
-                    $Global:ExchangeOnlineState.LastChecked = Get-Date
-                }
-                
-                Update-GuiStatus "Exchange Online connection verified" ([System.Drawing.Color]::Green)
-                return $true
-            }
+        if (Test-ExoSessionReusable) {
+            Write-Log "Exchange Online connection verified - already connected to this tenant" -Level "Info"
+            Set-ExoConnectionState -IsConnected $true
+            Update-GuiStatus "Exchange Online connection verified" ([System.Drawing.Color]::Green)
+            return $true
         }
-        catch {
-            Write-Log "No existing Exchange Online connection found" -Level "Info"
-            $isConnected = $false
-        }
+        Write-Log "No reusable Exchange Online connection for this tenant" -Level "Info"
         
         # If not connected, attempt to connect
         if (-not $isConnected) {
@@ -4500,12 +4647,8 @@ function Connect-ExchangeOnlineIfNeeded {
                     Write-Log "Exchange Online connection established successfully" -Level "Info"
                     Update-GuiStatus "Connected to Exchange Online successfully" ([System.Drawing.Color]::Green)
                     
-                    # Initialize/update global state
-                    $Global:ExchangeOnlineState = @{
-                        IsConnected       = $true
-                        LastChecked       = Get-Date
-                        ConnectionAttempts = 0
-                    }
+                    # Update global state in place (keeps the LastCollection* keys)
+                    Set-ExoConnectionState -IsConnected $true -ConnectionAttempts 0
                     
                     return $true
                 }
@@ -4517,19 +4660,8 @@ function Connect-ExchangeOnlineIfNeeded {
                 Write-Log "Failed to connect to Exchange Online: $($_.Exception.Message)" -Level "Error"
                 Update-GuiStatus "Exchange Online connection failed" ([System.Drawing.Color]::Red)
                 
-                # Update global state
-                if (-not $Global:ExchangeOnlineState) {
-                    $Global:ExchangeOnlineState = @{
-                        IsConnected       = $false
-                        LastChecked       = Get-Date
-                        ConnectionAttempts = 1
-                    }
-                }
-                else {
-                    $Global:ExchangeOnlineState.IsConnected = $false
-                    $Global:ExchangeOnlineState.LastChecked = Get-Date
-                    $Global:ExchangeOnlineState.ConnectionAttempts++
-                }
+                # Update global state in place
+                Set-ExoConnectionState -IsConnected $false -IncrementAttempts
                 
                 return $false
             }
@@ -4543,103 +4675,9 @@ function Connect-ExchangeOnlineIfNeeded {
         Update-GuiStatus "Exchange Online connection check failed" ([System.Drawing.Color]::Red)
         
         # Update global state on error
-        if (-not $Global:ExchangeOnlineState) {
-            $Global:ExchangeOnlineState = @{
-                IsConnected       = $false
-                LastChecked       = Get-Date
-                ConnectionAttempts = 1
-            }
-        }
+        Set-ExoConnectionState -IsConnected $false -IncrementAttempts
         
         return $false
-    }
-}
-
-function Disconnect-ExchangeOnlineSafely {
-    <#
-    .SYNOPSIS
-        Safely disconnects from Exchange Online.
-    
-    .DESCRIPTION
-        Performs a clean disconnect from Exchange Online and updates
-        the global connection state tracking. Shows confirmation message.
-    
-    .OUTPUTS
-        None. Updates global state and shows message box.
-    
-    .EXAMPLE
-        Disconnect-ExchangeOnlineSafely
-    
-    .NOTES
-        - Safe to call even if not connected
-        - Shows confirmation message to user
-        - Updates connection state tracking
-    #>
-    
-    [CmdletBinding()]
-    param()
-    
-    try {
-        # Check for active Exchange Online sessions
-        $session = Get-PSSession | Where-Object { 
-            $_.ConfigurationName -eq "Microsoft.Exchange" -and 
-            $_.State -eq "Opened" 
-        }
-        
-        if ($session) {
-            Update-GuiStatus "Disconnecting from Exchange Online..." ([System.Drawing.Color]::Orange)
-            Disconnect-ExchangeOnline -Confirm:$false -ErrorAction Stop
-            Write-Log "Disconnected from Exchange Online successfully" -Level "Info"
-            Update-GuiStatus "Disconnected from Exchange Online" ([System.Drawing.Color]::Green)
-            
-            # Update global connection state
-            if ($Global:ExchangeOnlineState) {
-                $Global:ExchangeOnlineState.IsConnected = $false
-                $Global:ExchangeOnlineState.LastChecked = Get-Date
-                $Global:ExchangeOnlineState.ConnectionAttempts = 0
-            }
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                "Disconnected from Exchange Online successfully.",
-                "Disconnected",
-                "OK",
-                "Information"
-            )
-        }
-        else {
-            Update-GuiStatus "No active Exchange Online session found" ([System.Drawing.Color]::Orange)
-            Write-Log "No active Exchange Online session found" -Level "Info"
-            
-            # Update global connection state anyway
-            if ($Global:ExchangeOnlineState) {
-                $Global:ExchangeOnlineState.IsConnected = $false
-                $Global:ExchangeOnlineState.LastChecked = Get-Date
-            }
-            
-            [System.Windows.Forms.MessageBox]::Show(
-                "No active Exchange Online session found.",
-                "No Session",
-                "OK",
-                "Information"
-            )
-        }
-    }
-    catch {
-        Write-Log "Error disconnecting from Exchange Online: $($_.Exception.Message)" -Level "Warning"
-        Update-GuiStatus "Error disconnecting from Exchange Online" ([System.Drawing.Color]::Red)
-        
-        # Force update connection state on error
-        if ($Global:ExchangeOnlineState) {
-            $Global:ExchangeOnlineState.IsConnected = $false
-            $Global:ExchangeOnlineState.LastChecked = Get-Date
-        }
-        
-        [System.Windows.Forms.MessageBox]::Show(
-            "Error disconnecting from Exchange Online:`n$($_.Exception.Message)",
-            "Disconnect Error",
-            "OK",
-            "Warning"
-        )
     }
 }
 
@@ -5172,11 +5210,12 @@ function Get-TenantSignInData {
         - Requires AuditLog.Read.All permission
         - Supports both IPv4 and IPv6 addresses
         - Geolocation requires internet connectivity
-        - Uses fallback methods: Premium Graph -> Exchange Online (max 10 days)
+        - Uses fallback methods: Premium Graph -> Exchange Online unified audit log (max 180 days,
+          the default Audit (Standard) retention)
         - Non-premium tenants automatically use Exchange Online fallback
         - On a tenant with a CONFIRMED P1/P2 license, a Graph timeout or 403 is treated as
           an error, NOT a licensing problem: the collection fails loudly instead of silently
-          dropping to 10 days of degraded unified audit log data.
+          dropping to degraded unified audit log data.
         - Coverage limits (fallback source, interactive-only, failed geolocation lookups,
           missing source IPs) are written to CollectionStatus.csv and shown in the report.
     #>
@@ -5335,11 +5374,11 @@ function Get-TenantSignInData {
             }
             
             # A timeout or 403 on a tenant with a CONFIRMED premium license is not a licensing
-            # problem. Falling back would silently swap in 10 days of degraded data, so fail loudly.
+            # problem. Falling back would silently swap in degraded data, so fail loudly.
             if ($premiumState -eq $true -and
                 ($errorMessage -match "HttpClient.Timeout|adaptive timeout|Forbidden|403|Authorization_RequestDenied")) {
                 Update-GuiStatus "Premium sign-in query failed on a licensed tenant - see log" ([System.Drawing.Color]::Red)
-                throw "Premium sign-in query failed on a tenant with a confirmed Entra ID P1/P2 license: $errorMessage. Not falling back to the 10-day Exchange Online source. Check AuditLog.Read.All consent and the admin's Entra role (Reports Reader, Security Reader or higher), or reduce the date range and retry."
+                throw "Premium sign-in query failed on a tenant with a confirmed Entra ID P1/P2 license: $errorMessage. Not falling back to the Exchange Online audit log source.Check AuditLog.Read.All consent and the admin's Entra role (Reports Reader, Security Reader or higher), or reduce the date range and retry."
             }
 
             # Check if the error indicates lack of premium license or B2C tenant
@@ -5353,14 +5392,17 @@ function Get-TenantSignInData {
                 $isPremiumTenant = $false
 
                 Write-Log "Premium license not available, using Exchange Online fallback..." -Level "Warning"
-                Update-GuiStatus "Premium license required - using Exchange Online fallback (max 10 days)" ([System.Drawing.Color]::Orange)
+                Update-GuiStatus "Premium license required - using Exchange Online fallback (max 180 days)" ([System.Drawing.Color]::Orange)
                 
-                # ATTEMPT 2: Exchange Online Fallback (max 10 days)
+                # ATTEMPT 2: Exchange Online Fallback (audit log retention: 180 days)
                 # NOTE: There is no non-premium Graph API method for sign-in logs
                 #       Graph API ALWAYS requires Azure AD Premium P1 or P2 license
                 try {
-                    $fallbackDaysBack = if ($DaysBack -gt 10) { 10 } else { $DaysBack }
-                    Write-Log "Using Exchange Online fallback with $fallbackDaysBack days (limited from requested $DaysBack days)" -Level "Info"
+                    # The unified audit log keeps 180 days by default (the 10-day limit belongs to
+                    # message trace, not to Search-UnifiedAuditLog).
+                    $fallbackDaysBack = [Math]::Min($DaysBack, 180)
+                    $fallbackLimited = ($DaysBack -gt 180)
+                    Write-Log "Using Exchange Online fallback with $fallbackDaysBack days (requested $DaysBack days)" -Level "Info"
                     
                     # FIX #1: Removed -UseCache parameter (not supported by Get-SignInDataFromExchangeOnline)
                     $exchangeData = Get-SignInDataFromExchangeOnline -DaysBack $fallbackDaysBack
@@ -5370,7 +5412,7 @@ function Get-TenantSignInData {
                         Update-GuiStatus "Exchange Online fallback successful - $($exchangeData.Count) records retrieved" ([System.Drawing.Color]::Yellow)
                         $signInLogs = $exchangeData
                         $coverageComplete = $false
-                        $coverageGaps.Add("Exchange Online unified audit log fallback used: $fallbackDaysBack day(s) of data (requested $DaysBack); Conditional Access, risk level and device fields are unavailable")
+                        $coverageGaps.Add("Exchange Online unified audit log fallback used: $fallbackDaysBack day(s) of data (requested $DaysBack$(if ($fallbackLimited) { ', limited by the 180-day audit log retention' })); Conditional Access, risk level and device fields are unavailable")
                         if (-not $Global:ExchangeOnlineState.LastCollectionComplete) {
                             $coverageGaps.Add("fallback pull had gaps: $($Global:ExchangeOnlineState.LastCollectionWarning)")
                         }
@@ -5510,46 +5552,20 @@ function Get-TenantSignInData {
                 # VALIDATE IP ADDRESS (IPv4 or IPv6)
                 #═══════════════════════════════════════════════════════════════
                 
-                try {
-                    $ipObj = [System.Net.IPAddress]::Parse($ip)
-                    
-                    if ($ipObj.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetwork) {
-                        # IPv4 Address
-                        $ipVersion = "IPv4"
-                        
-                        # Check IPv4 private ranges
-                        if ($ip -match "^10\." -or 
-                            $ip -match "^172\.(1[6-9]|2[0-9]|3[0-1])\." -or 
-                            $ip -match "^192\.168\." -or 
-                            $ip -match "^127\." -or 
-                            $ip -match "^169\.254\.") {
-                            
-                            $isPrivateIP = $true
-                            $country = "Private Network"
-                            $city = "Private"
-                            $region = "Private"
-                            $isp = "Private Network"
-                        }
-                    }
-                    elseif ($ipObj.AddressFamily -eq [System.Net.Sockets.AddressFamily]::InterNetworkV6) {
-                        # IPv6 Address
-                        $ipVersion = "IPv6"
-                        
-                        # Check IPv6 private/special ranges
-                        if ($ip -match "^::1$" -or                      # Loopback
-                            $ip -match "^fe80:" -or                      # Link-local
-                            $ip -match "^f[cd][0-9a-fA-F]{2}:" -or       # Unique local (fc00::/7)
-                            $ip -match "^ff[0-9a-fA-F]{2}:") {           # Multicast
-                            
-                            $isPrivateIP = $true
-                            $country = "Private Network"
-                            $city = "Private"
-                            $region = "Private"
-                            $isp = "Private Network (IPv6)"
-                        }
+                # Same classifier as Invoke-IPGeolocation, so the two can never disagree.
+                # IPv4-mapped IPv6 addresses are classified as the IPv4 address they carry.
+                $ipClass = Get-IPClassification -IPAddress $ip
+                if ($ipClass.IsValid) {
+                    $ipVersion = $ipClass.Version
+                    if ($ipClass.IsPrivate) {
+                        $isPrivateIP = $true
+                        $country = "Private Network"
+                        $city = "Private"
+                        $region = "Private"
+                        $isp = if ($ipClass.Version -eq "IPv6") { "Private Network (IPv6)" } else { "Private Network" }
                     }
                 }
-                catch {
+                else {
                     Write-Log "Invalid IP address format: $ip" -Level "Warning"
                 }
                 
@@ -5561,8 +5577,8 @@ function Get-TenantSignInData {
                     $country = if ($geoData.country_name) { $geoData.country_name } else { "Unknown" }
                     $isp = if ($geoData.connection -and $geoData.connection.isp) { $geoData.connection.isp } else { "Unknown" }
                     
-                    # Check if location is unusual
-                    if ($country -ne "Unknown" -and $ConfigData.ExpectedCountries -notcontains $country) {
+                    # Check if location is unusual (placeholders such as Unknown / Invalid IP never are)
+                    if (Test-UnusualCountry -Country $country) {
                         $isUnusual = $true
                     }
                 }
@@ -5666,55 +5682,31 @@ function Get-TenantSignInData {
         # Generate unique locations report
         Update-GuiStatus "Generating unique locations report..." ([System.Drawing.Color]::Orange)
         
+        # One pass: group by user + IP + city + country (the sign-ins of a group share one
+        # location, so first/last seen come from the group's own sorted rows).
         $uniqueLogins = [System.Collections.Generic.List[PSCustomObject]]::new()
-        $userLocationGroups = $resultsArray | Group-Object -Property UserId
-        
-        foreach ($userGroup in $userLocationGroups) {
-            $userId = $userGroup.Name
-            $userSignIns = $userGroup.Group
-            
-            $uniqueUserLocations = $userSignIns |
-                Select-Object UserId, UserDisplayName, IP, IPVersion, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
+        $locationGroups = $resultsArray |
+            Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" } |
+            Group-Object -Property UserId, IP, City, Country
 
-            foreach ($location in $uniqueUserLocations) {
-                $signInCount = ($userSignIns | Where-Object {
-                    $_.IP -eq $location.IP -and 
-                    $_.City -eq $location.City -and 
-                    $_.Country -eq $location.Country 
-                }).Count
-                
-                $locationSignIns = $userSignIns | Where-Object { 
-                    $_.IP -eq $location.IP -and 
-                    $_.City -eq $location.City -and 
-                    $_.Country -eq $location.Country 
-                } | Sort-Object CreationTime
-                
-                $firstSeen = if ($locationSignIns.Count -gt 0) { $locationSignIns[0].CreationTime } else { "" }
-                $lastSeen = if ($locationSignIns.Count -gt 0) { $locationSignIns[-1].CreationTime } else { "" }
-                
-                $isUnusualLocation = $false
-                if ($location.Country -and $ConfigData.ExpectedCountries -notcontains $location.Country) {
-                    $isUnusualLocation = $true
-                }
-                
-                $uniqueLogin = [PSCustomObject]@{
-                    UserId = $location.UserId
-                    UserDisplayName = $location.UserDisplayName
-                    IP = $location.IP
-                    IPVersion = $location.IPVersion
-                    City = $location.City
-                    RegionName = $location.RegionName
-                    Country = $location.Country
-                    ISP = $location.ISP
-                    IsUnusualLocation = $isUnusualLocation
-                    SignInCount = $signInCount
-                    FirstSeen = $firstSeen
-                    LastSeen = $lastSeen
-                }
-                
-                $uniqueLogins.Add($uniqueLogin)
-            }
+        foreach ($locationGroup in $locationGroups) {
+            $locationSignIns = @($locationGroup.Group | Sort-Object CreationTime)
+            $location = $locationSignIns[0]
+
+            $uniqueLogins.Add([PSCustomObject]@{
+                UserId = $location.UserId
+                UserDisplayName = $location.UserDisplayName
+                IP = $location.IP
+                IPVersion = $location.IPVersion
+                City = $location.City
+                RegionName = $location.RegionName
+                Country = $location.Country
+                ISP = $location.ISP
+                IsUnusualLocation = (Test-UnusualCountry -Country $location.Country)
+                SignInCount = $locationSignIns.Count
+                FirstSeen = $locationSignIns[0].CreationTime
+                LastSeen = $locationSignIns[-1].CreationTime
+            })
         }
         
         # Export unique logins
@@ -5833,8 +5825,8 @@ function Get-UalStsLogonWindow {
     do {
         $pageCount++
         $page = @(Search-UnifiedAuditLog `
-            -StartDate $Start `
-            -EndDate $End `
+            -StartDate $Start.ToUniversalTime() `
+            -EndDate $End.ToUniversalTime() `
             -RecordType "AzureActiveDirectoryStsLogon" `
             -ResultSize 5000 `
             -SessionId $sessionId `
@@ -5871,6 +5863,193 @@ function Get-UalStsLogonWindow {
     return @{ Records = $records; TruncatedWindows = $truncated }
 }
 
+function ConvertFrom-UalSignInRecord {
+    <#
+    .SYNOPSIS
+        Converts one AzureActiveDirectoryStsLogon unified audit log record into a sign-in record.
+
+    .DESCRIPTION
+        Pure parsing helper for the Exchange Online fallback (no cmdlet calls, so it can be
+        tested offline). Returns $null when the record has no AuditData; throws when the
+        AuditData is not valid JSON (the caller counts parse errors).
+
+        Status code: ErrorCode is the documented AADSTS code ("0" = success). When it is
+        absent the code is taken from digits in LogonError, a small text map, or, for
+        UserLoginFailed, ExtendedProperties, defaulting to 50126.
+    #>
+    [CmdletBinding()]
+    param ([Parameter(Mandatory = $true)]$Log)
+
+    if ([string]::IsNullOrEmpty($Log.AuditData)) { return $null }
+
+    $auditDetails = $log.AuditData | ConvertFrom-Json -ErrorAction Stop
+
+    $creationTime = if ($auditDetails.CreationTime) {
+        $auditDetails.CreationTime
+    } elseif ($log.CreationDate) {
+        $log.CreationDate
+    } else {
+        Get-Date
+    }
+
+    $userId = if ($auditDetails.UserId) {
+        $auditDetails.UserId
+    } elseif ($log.UserIds) {
+        $log.UserIds
+    } else {
+        "Unknown"
+    }
+
+    $ipAddress = if ($auditDetails.ClientIP) {
+        $auditDetails.ClientIP
+    } elseif ($auditDetails.ClientIPAddress) {
+        $auditDetails.ClientIPAddress
+    } elseif ($auditDetails.IPAddress) {
+        # AzureActiveDirectoryStsLogon (RecordType 15) uses IPAddress as top-level field
+        $auditDetails.IPAddress
+    } elseif ($auditDetails.ActorIpAddress) {
+        $auditDetails.ActorIpAddress
+    } elseif ($auditDetails.ExtendedProperties) {
+        $ipProp = $auditDetails.ExtendedProperties | Where-Object { $_.Name -eq "ipaddr" -or $_.Name -eq "IP" -or $_.Name -eq "IPAddress" } | Select-Object -First 1
+        if ($ipProp) { $ipProp.Value } else { "Unknown" }
+    } else {
+        "Unknown"
+    }
+
+    $operation = if ($auditDetails.Operation) {
+        $auditDetails.Operation
+    } elseif ($log.Operations) {
+        $log.Operations
+    } else {
+        "Unknown"
+    }
+
+    # Default to success
+    $statusCode = "0"
+    $statusDescription = "Success"
+
+    # Check for ErrorCode property (modern Entra ID sign-in logs - added Feb 2021)
+    if ($auditDetails.ErrorCode) {
+        $statusCode = $auditDetails.ErrorCode.ToString()
+        $statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
+    }
+    # Check for LogonError property (legacy field that indicates failure)
+    elseif ($auditDetails.LogonError) {
+        # LogonError present means it's a failed sign-in
+        # Try to extract error code from LogonError text
+        if ($auditDetails.LogonError -match '(\d{5,6})') {
+            $statusCode = $matches[1]
+        } else {
+            # Try to extract from other common patterns
+            if ($auditDetails.LogonError -match 'error\s*[:\s]*(\d{5,6})') {
+                $statusCode = $matches[1]
+            } elseif ($auditDetails.LogonError -match 'code\s*[:\s]*(\d{5,6})') {
+                $statusCode = $matches[1]
+            } else {
+                # Look for specific error descriptions to map to codes
+                switch -Wildcard ($auditDetails.LogonError) {
+                    "*password*expired*" { $statusCode = "50133" }
+                    "*account*disabled*" { $statusCode = "50057" }
+                    "*account*locked*" { $statusCode = "50053" }
+                    "*password*reset*" { $statusCode = "50125" }
+                    "*mfa*required*" { $statusCode = "50074" }
+                    "*consent*required*" { $statusCode = "65001" }
+                    default { $statusCode = "UNKNOWN" }  # Unmapped text: do not guess a cause (50126 would inflate spray/brute-force counts)
+                }
+            }
+        }
+        $statusDescription = "Failed - " + $auditDetails.LogonError
+    }
+    # Check Operation type - UserLoginFailed explicitly indicates failure
+    elseif ($operation -eq "UserLoginFailed") {
+        # Check ExtendedProperties for error code
+        if ($auditDetails.ExtendedProperties) {
+            $errorCodeProp = $auditDetails.ExtendedProperties | Where-Object {
+                $_.Name -eq "ResultStatusDetail" -or $_.Name -eq "errorCode" -or $_.Name -eq "ErrorCode"
+            }
+            if ($errorCodeProp -and $errorCodeProp.Value -match '(\d{5,6})') {
+                $statusCode = $matches[1]
+            } else {
+                # Check for error description in other properties
+                $errorDescProp = $auditDetails.ExtendedProperties | Where-Object {
+                    $_.Name -eq "ResultDescription" -or $_.Name -eq "ErrorDescription"
+                }
+                if ($errorDescProp) {
+                    switch -Wildcard ($errorDescProp.Value) {
+                        "*password*expired*" { $statusCode = "50133" }
+                        "*account*disabled*" { $statusCode = "50057" }
+                        "*account*locked*" { $statusCode = "50053" }
+                        "*password*reset*" { $statusCode = "50125" }
+                        "*mfa*required*" { $statusCode = "50074" }
+                        "*consent*required*" { $statusCode = "65001" }
+                        default { $statusCode = "50126" }
+                    }
+                } else {
+                    $statusCode = "50126"
+                }
+            }
+        } else {
+            $statusCode = "50126"
+        }
+        $statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
+    }
+    # Check ResultStatus for explicit failure indicators
+    # (also covers UserLoggedIn records whose ResultStatus is Failed)
+    elseif ($auditDetails.ResultStatus -and $auditDetails.ResultStatus -match "Failed|Failure|Error") {
+        if ($auditDetails.ResultStatus -match '(\d{5,6})') {
+            $statusCode = $matches[1]
+        } else {
+            $statusCode = "UNKNOWN"
+        }
+        $statusDescription = "Failed - " + $auditDetails.ResultStatus
+    }
+
+
+    $userAgent = if ($auditDetails.UserAgent) {
+        $auditDetails.UserAgent
+    } elseif ($auditDetails.ClientInfoString) {
+        $auditDetails.ClientInfoString
+    } else {
+        "Unknown"
+    }
+
+    $isInteractive = $true
+    if ($operation -match "NonInteractive") {
+        $isInteractive = $false
+    }
+
+    $appDisplayName = if ($auditDetails.ApplicationDisplayName) {
+        $auditDetails.ApplicationDisplayName
+    } elseif ($auditDetails.ApplicationId) {
+        $auditDetails.ApplicationId
+    } else {
+        "Unknown"
+    }
+
+    $signInRecord = [PSCustomObject]@{
+        CreatedDateTime = $creationTime
+        UserPrincipalName = $userId
+        UserDisplayName = $userId
+        IpAddress = $ipAddress
+        Status = @{ ErrorCode = $statusCode }
+        StatusCode = $statusCode
+        StatusDescription = $statusDescription
+        UserAgent = $userAgent
+        IsInteractive = $isInteractive
+        AppDisplayName = $appDisplayName
+        # The audit log does not carry these; say so instead of asserting "notApplied"/"none"
+        ConditionalAccessStatus = "notAvailable"
+        RiskLevelDuringSignIn = "notAvailable"
+        DeviceDetail = @{
+            OperatingSystem = "Unknown"
+            Browser = "Unknown"
+        }
+    }
+
+
+    return $signInRecord
+}
+
 function Get-SignInDataFromExchangeOnline {
     <#
     .SYNOPSIS
@@ -5890,7 +6069,7 @@ function Get-SignInDataFromExchangeOnline {
         Returns sign-in records in Graph API format for geolocation processing.
     
     .PARAMETER DaysBack
-        Number of days to look back (max 10 due to EXO limits)
+        Number of days to look back (max 180: default unified audit log retention)
     
     .PARAMETER OutputPath
         Output file path (optional, not used in current implementation)
@@ -5903,9 +6082,9 @@ function Get-SignInDataFromExchangeOnline {
     [OutputType([System.Object[]])]
     param (
         [Parameter(Mandatory = $false)]
-        [ValidateRange(1, 10)]
-        [int]$DaysBack = [Math]::Min($ConfigData.DateRange, 10),
-        
+        [ValidateRange(1, 180)]
+        [int]$DaysBack = [Math]::Min($ConfigData.DateRange, 180),
+
         [Parameter(Mandatory = $false)]
         [string]$OutputPath = (Join-Path -Path $ConfigData.WorkDir -ChildPath "UserLocationData_EXO.csv")
     )
@@ -5913,7 +6092,7 @@ function Get-SignInDataFromExchangeOnline {
     Update-GuiStatus "Collecting sign-in data via Exchange Online..." ([System.Drawing.Color]::Orange)
     Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
     Write-Log "EXCHANGE ONLINE FALLBACK METHOD STARTED (OPTIMIZED)" -Level "Info"
-    Write-Log "Maximum date range: 10 days (Exchange Online limitation)" -Level "Info"
+    Write-Log "Maximum date range: 180 days (default unified audit log retention)" -Level "Info"
     Write-Log "═════════════════════════════════════════════════════════" -Level "Info"
     
     try {
@@ -6051,172 +6230,8 @@ function Get-SignInDataFromExchangeOnline {
             }
             
             try {
-                if ([string]::IsNullOrEmpty($log.AuditData)) { continue }
-                
-                $auditDetails = $log.AuditData | ConvertFrom-Json -ErrorAction Stop
-
-                $creationTime = if ($auditDetails.CreationTime) { 
-                    $auditDetails.CreationTime 
-                } elseif ($log.CreationDate) { 
-                    $log.CreationDate 
-                } else { 
-                    Get-Date 
-                }
-                
-                $userId = if ($auditDetails.UserId) { 
-                    $auditDetails.UserId 
-                } elseif ($log.UserIds) { 
-                    $log.UserIds 
-                } else { 
-                    "Unknown" 
-                }
-                
-                $ipAddress = if ($auditDetails.ClientIP) {
-                    $auditDetails.ClientIP
-                } elseif ($auditDetails.ClientIPAddress) {
-                    $auditDetails.ClientIPAddress
-                } elseif ($auditDetails.IPAddress) {
-                    # AzureActiveDirectoryStsLogon (RecordType 15) uses IPAddress as top-level field
-                    $auditDetails.IPAddress
-                } elseif ($auditDetails.ActorIpAddress) {
-                    $auditDetails.ActorIpAddress
-                } elseif ($auditDetails.ExtendedProperties) {
-                    $ipProp = $auditDetails.ExtendedProperties | Where-Object { $_.Name -eq "ipaddr" -or $_.Name -eq "IP" -or $_.Name -eq "IPAddress" } | Select-Object -First 1
-                    if ($ipProp) { $ipProp.Value } else { "Unknown" }
-                } else {
-                    "Unknown"
-                }
-                
-                $operation = if ($auditDetails.Operation) {
-                    $auditDetails.Operation
-                } elseif ($log.Operations) {
-                    $log.Operations
-                } else {
-                    "Unknown"
-                }
-                
-				# Default to success
-				$statusCode = "0"
-				$statusDescription = "Success"
-
-				# Check for ErrorCode property (modern Entra ID sign-in logs - added Feb 2021)
-				if ($auditDetails.ErrorCode) {
-					$statusCode = $auditDetails.ErrorCode.ToString()
-					$statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
-				}
-				# Check for LogonError property (legacy field that indicates failure)
-				elseif ($auditDetails.LogonError) {
-					# LogonError present means it's a failed sign-in
-					# Try to extract error code from LogonError text
-					if ($auditDetails.LogonError -match '(\d{5,6})') {
-						$statusCode = $matches[1]
-					} else {
-						# Try to extract from other common patterns
-						if ($auditDetails.LogonError -match 'error\s*[:\s]*(\d{5,6})') {
-							$statusCode = $matches[1]
-						} elseif ($auditDetails.LogonError -match 'code\s*[:\s]*(\d{5,6})') {
-							$statusCode = $matches[1]
-						} else {
-							# Look for specific error descriptions to map to codes
-							switch -Wildcard ($auditDetails.LogonError) {
-								"*password*expired*" { $statusCode = "50133" }
-								"*account*disabled*" { $statusCode = "50057" }
-								"*account*locked*" { $statusCode = "50053" }
-								"*password*reset*" { $statusCode = "50125" }
-								"*mfa*required*" { $statusCode = "50074" }
-								"*consent*required*" { $statusCode = "65001" }
-								default { $statusCode = "UNKNOWN" }  # Unmapped text: do not guess a cause (50126 would inflate spray/brute-force counts)
-							}
-						}
-					}
-					$statusDescription = "Failed - " + $auditDetails.LogonError
-				}
-				# Check Operation type - UserLoginFailed explicitly indicates failure
-				elseif ($operation -eq "UserLoginFailed") {
-					# Check ExtendedProperties for error code
-					if ($auditDetails.ExtendedProperties) {
-						$errorCodeProp = $auditDetails.ExtendedProperties | Where-Object { 
-							$_.Name -eq "ResultStatusDetail" -or $_.Name -eq "errorCode" -or $_.Name -eq "ErrorCode"
-						}
-						if ($errorCodeProp -and $errorCodeProp.Value -match '(\d{5,6})') {
-							$statusCode = $matches[1]
-						} else {
-							# Check for error description in other properties
-							$errorDescProp = $auditDetails.ExtendedProperties | Where-Object { 
-								$_.Name -eq "ResultDescription" -or $_.Name -eq "ErrorDescription"
-							}
-							if ($errorDescProp) {
-								switch -Wildcard ($errorDescProp.Value) {
-									"*password*expired*" { $statusCode = "50133" }
-									"*account*disabled*" { $statusCode = "50057" }
-									"*account*locked*" { $statusCode = "50053" }
-									"*password*reset*" { $statusCode = "50125" }
-									"*mfa*required*" { $statusCode = "50074" }
-									"*consent*required*" { $statusCode = "65001" }
-									default { $statusCode = "50126" }
-								}
-							} else {
-								$statusCode = "50126"
-							}
-						}
-					} else {
-						$statusCode = "50126"
-					}
-					$statusDescription = Get-SignInStatusDescription -StatusCode $statusCode
-				}
-				# Check ResultStatus for explicit failure indicators
-				# (also covers UserLoggedIn records whose ResultStatus is Failed)
-				elseif ($auditDetails.ResultStatus -and $auditDetails.ResultStatus -match "Failed|Failure|Error") {
-					if ($auditDetails.ResultStatus -match '(\d{5,6})') {
-						$statusCode = $matches[1]
-					} else {
-						$statusCode = "UNKNOWN"
-					}
-					$statusDescription = "Failed - " + $auditDetails.ResultStatus
-				}
-
-                
-                $userAgent = if ($auditDetails.UserAgent) {
-                    $auditDetails.UserAgent
-                } elseif ($auditDetails.ClientInfoString) {
-                    $auditDetails.ClientInfoString
-                } else {
-                    "Unknown"
-                }
-                
-                $isInteractive = $true
-                if ($operation -match "NonInteractive") {
-                    $isInteractive = $false
-                }
-                
-                $appDisplayName = if ($auditDetails.ApplicationDisplayName) {
-                    $auditDetails.ApplicationDisplayName
-                } elseif ($auditDetails.ApplicationId) {
-                    $auditDetails.ApplicationId
-                } else {
-                    "Unknown"
-                }
-                
-                $signInRecord = [PSCustomObject]@{
-                    CreatedDateTime = $creationTime
-                    UserPrincipalName = $userId
-                    UserDisplayName = $userId
-                    IpAddress = $ipAddress
-                    Status = @{ ErrorCode = $statusCode }
-                    StatusCode = $statusCode
-                    StatusDescription = $statusDescription
-                    UserAgent = $userAgent
-                    IsInteractive = $isInteractive
-                    AppDisplayName = $appDisplayName
-                    # The audit log does not carry these; say so instead of asserting "notApplied"/"none"
-                    ConditionalAccessStatus = "notAvailable"
-                    RiskLevelDuringSignIn = "notAvailable"
-                    DeviceDetail = @{
-                        OperatingSystem = "Unknown"
-                        Browser = "Unknown"
-                    }
-                }
-                
+                $signInRecord = ConvertFrom-UalSignInRecord -Log $log
+                if ($null -eq $signInRecord) { continue }
                 $signInResults.Add($signInRecord)
             }
             catch {
@@ -6384,6 +6399,112 @@ function Get-MFAStatusFromSignIns {
             Error = $_.Exception.Message
         }
     }
+}
+
+function Test-CaPolicyRequiresMfa {
+    <#
+    .SYNOPSIS
+        Returns $true when a Conditional Access policy requires MFA of the users it covers.
+
+    .DESCRIPTION
+        MFA is credited when the grant controls offer the built-in "mfa" control or an
+        authentication strength, AND the user cannot satisfy the policy another way
+        (operator is not OR, or MFA is the only grant option).
+
+        Graph SDK model getters lazily create nested objects, so GrantControls and
+        GrantControls.AuthenticationStrength are never $null. Only real values count:
+        the strength is present only when it has an Id.
+    #>
+    [CmdletBinding()]
+    param ([Parameter(Mandatory = $true)]$Policy)
+
+    $gc = $Policy.GrantControls
+    if ($null -eq $gc) { return $false }
+
+    # NOTE: @($null).Count is 1 in PowerShell, so absent values are filtered before counting.
+    $builtInControls = @($gc.BuiltInControls | Where-Object { $_ })
+    $strengthId = $null
+    if ($null -ne $gc.AuthenticationStrength) { $strengthId = $gc.AuthenticationStrength.Id }
+    $hasAuthStrength = -not [string]::IsNullOrEmpty("$strengthId")
+
+    $grantOptionCount = $builtInControls.Count +
+        $(if ($hasAuthStrength) { 1 } else { 0 }) +
+        @($gc.CustomAuthenticationFactors | Where-Object { $_ }).Count +
+        @($gc.TermsOfUse | Where-Object { $_ }).Count
+
+    $offersMfa = (($builtInControls | ForEach-Object { "$_" }) -contains "mfa") -or $hasAuthStrength
+    if (-not $offersMfa) { return $false }
+
+    return ("$($gc.Operator)" -ne "OR" -or $grantOptionCount -le 1)
+}
+
+function Test-CaPolicyUserInScope {
+    <#
+    .SYNOPSIS
+        Returns $true when a Conditional Access policy's user conditions cover a user.
+
+    .DESCRIPTION
+        Include: All, the user id, a cached group, a directory role (template id), or guest
+        types. Exclude: user id, cached group, role, guest types. Guest include/exclude
+        objects are lazily created by the SDK and always truthy, so they only count when
+        GuestOrExternalUserTypes is non-empty. IncludeUsers may also carry the literal
+        "GuestsOrExternalUsers".
+    #>
+    [CmdletBinding()]
+    param (
+        [Parameter(Mandatory = $true)]$Policy,
+        [Parameter(Mandatory = $true)][string]$UserId,
+        [bool]$IsGuest = $false,
+        $RoleTemplateIds = $null,
+        $GroupMembershipCache = @{}
+    )
+
+    $policyUsers = $Policy.Conditions.Users
+    if ($null -eq $policyUsers) { return $false }
+
+    $includeGuests = $false
+    if ($null -ne $policyUsers.IncludeGuestsOrExternalUsers -and
+        -not [string]::IsNullOrWhiteSpace("$($policyUsers.IncludeGuestsOrExternalUsers.GuestOrExternalUserTypes)")) {
+        $includeGuests = $true
+    }
+    if (@($policyUsers.IncludeUsers) -contains "GuestsOrExternalUsers") { $includeGuests = $true }
+
+    $excludeGuests = $false
+    if ($null -ne $policyUsers.ExcludeGuestsOrExternalUsers -and
+        -not [string]::IsNullOrWhiteSpace("$($policyUsers.ExcludeGuestsOrExternalUsers.GuestOrExternalUserTypes)")) {
+        $excludeGuests = $true
+    }
+    if (@($policyUsers.ExcludeUsers) -contains "GuestsOrExternalUsers") { $excludeGuests = $true }
+
+    $inScope = $false
+    if (@($policyUsers.IncludeUsers) -contains "All" -or @($policyUsers.IncludeUsers) -contains $UserId) { $inScope = $true }
+
+    if (-not $inScope) {
+        foreach ($groupId in @($policyUsers.IncludeGroups | Where-Object { $_ })) {
+            if ($GroupMembershipCache.ContainsKey($groupId) -and $GroupMembershipCache[$groupId].Contains($UserId)) { $inScope = $true; break }
+        }
+    }
+    if (-not $inScope -and $RoleTemplateIds) {
+        foreach ($roleId in @($policyUsers.IncludeRoles | Where-Object { $_ })) {
+            if ($RoleTemplateIds.Contains("$roleId")) { $inScope = $true; break }
+        }
+    }
+    if (-not $inScope -and $IsGuest -and $includeGuests) { $inScope = $true }
+
+    if ($inScope) {
+        if (@($policyUsers.ExcludeUsers) -contains $UserId) { return $false }
+        foreach ($groupId in @($policyUsers.ExcludeGroups | Where-Object { $_ })) {
+            if ($GroupMembershipCache.ContainsKey($groupId) -and $GroupMembershipCache[$groupId].Contains($UserId)) { return $false }
+        }
+        if ($RoleTemplateIds) {
+            foreach ($roleId in @($policyUsers.ExcludeRoles | Where-Object { $_ })) {
+                if ($RoleTemplateIds.Contains("$roleId")) { return $false }
+            }
+        }
+        if ($IsGuest -and $excludeGuests) { return $false }
+    }
+
+    return $inScope
 }
 
 function Get-MFAStatusAudit {
@@ -6660,81 +6781,14 @@ function Get-MFAStatusAudit {
                     # Grant controls: MFA via the built-in "mfa" control or an authentication
                     # strength. compliantDevice is NOT MFA and is not credited. With operator OR
                     # and more than one grant option the user can satisfy the policy without MFA.
-                    $requiresMFA = $false
-                    if ($policy.GrantControls) {
-                        # NOTE: @($null).Count is 1 in PowerShell, so absent properties are
-                        # filtered before counting.
-                        $builtInControls = @($policy.GrantControls.BuiltInControls | Where-Object { $_ })
-                        $hasAuthStrength = ($null -ne $policy.GrantControls.AuthenticationStrength)
-                        $grantOptionCount = $builtInControls.Count +
-                            $(if ($hasAuthStrength) { 1 } else { 0 }) +
-                            @($policy.GrantControls.CustomAuthenticationFactors | Where-Object { $_ }).Count +
-                            @($policy.GrantControls.TermsOfUse | Where-Object { $_ }).Count
-                        $offersMfa = ($builtInControls -contains "mfa") -or $hasAuthStrength
-                        if ($offersMfa -and ($policy.GrantControls.Operator -ne "OR" -or $grantOptionCount -le 1)) {
-                            $requiresMFA = $true
-                        }
-                    }
+                    # (Test-CaPolicyRequiresMfa: SDK nested objects are never $null, so it
+                    # tests real values only.)
+                    if (-not (Test-CaPolicyRequiresMfa -Policy $policy)) { continue }
                     
-                    if (-not $requiresMFA) { continue }
-                    
-                    $policyUsers = $policy.Conditions.Users
+                    # In scope: All, listed user, group (cache), role, guest type; minus exclusions.
+                    $userInScope = Test-CaPolicyUserInScope -Policy $policy -UserId $user.Id -IsGuest $userIsGuest `
+                        -RoleTemplateIds $userRoleTemplateIds -GroupMembershipCache $groupMembershipCache
 
-                    # Check if user is in scope: All, listed user, group (cache), role, guest type
-                    $userInScope = $false
-                    
-                    if ($policyUsers.IncludeUsers -contains "All" -or
-                        $policyUsers.IncludeUsers -contains $user.Id) {
-                        $userInScope = $true
-                    }
-                    
-                    if (-not $userInScope -and $policyUsers.IncludeGroups) {
-                        foreach ($groupId in $policyUsers.IncludeGroups) {
-                            if ($groupMembershipCache.ContainsKey($groupId) -and
-                                $groupMembershipCache[$groupId].Contains($user.Id)) {
-                                $userInScope = $true
-                                break
-                            }
-                        }
-                    }
-
-                    if (-not $userInScope -and $policyUsers.IncludeRoles -and $userRoleTemplateIds) {
-                        foreach ($roleId in $policyUsers.IncludeRoles) {
-                            if ($userRoleTemplateIds.Contains("$roleId")) { $userInScope = $true; break }
-                        }
-                    }
-
-                    if (-not $userInScope -and $userIsGuest -and $policyUsers.IncludeGuestsOrExternalUsers) {
-                        $userInScope = $true
-                    }
-                    
-                    # Exclusions: user, group (cache), role, guest type
-                    if ($userInScope) {
-                        if ($policyUsers.ExcludeUsers -contains $user.Id) {
-                            $userInScope = $false
-                        }
-                        
-                        if ($userInScope -and $policyUsers.ExcludeGroups) {
-                            foreach ($groupId in $policyUsers.ExcludeGroups) {
-                                if ($groupMembershipCache.ContainsKey($groupId) -and
-                                    $groupMembershipCache[$groupId].Contains($user.Id)) {
-                                    $userInScope = $false
-                                    break
-                                }
-                            }
-                        }
-
-                        if ($userInScope -and $policyUsers.ExcludeRoles -and $userRoleTemplateIds) {
-                            foreach ($roleId in $policyUsers.ExcludeRoles) {
-                                if ($userRoleTemplateIds.Contains("$roleId")) { $userInScope = $false; break }
-                            }
-                        }
-
-                        if ($userInScope -and $userIsGuest -and $policyUsers.ExcludeGuestsOrExternalUsers) {
-                            $userInScope = $false
-                        }
-                    }
-                    
                     if (-not $userInScope) { continue }
 
                     # The policy applies to this user; it only counts as FULL MFA enforcement if
@@ -7063,6 +7117,7 @@ function Get-MFAStatusAudit {
     catch {
         Update-GuiStatus "Error during MFA audit: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in MFA status audit: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "MFAAudit" -What "MFA audit" -Reason $_.Exception.Message
         Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Level "Error"
         return $null
     }
@@ -7168,7 +7223,8 @@ function Get-FailedLoginPatterns {
             # Skip records with no source IP. EXO UAL fallback data frequently omits the IP,
             # and an empty/null IP would otherwise collapse every IP-less failure across many
             # users into a single phantom password-spray group.
-            if ([string]::IsNullOrWhiteSpace($ipGroup.Name)) { continue }
+            # "Unknown" is the placeholder the UAL fallback writes for a missing IP; treat it the same.
+            if ([string]::IsNullOrWhiteSpace($ipGroup.Name) -or $ipGroup.Name -eq "Unknown") { continue }
 
             $uniqueUsers = ($ipGroup.Group | Select-Object -Unique UserId).Count
             $totalAttempts = $ipGroup.Count
@@ -7217,7 +7273,7 @@ function Get-FailedLoginPatterns {
             # Capture the actual distinct source IPs (excluding blanks) so the executive
             # summary can union real IPs instead of a fabricated count.
             $bruteForceIPs = @($userGroup.Group |
-                Where-Object { -not [string]::IsNullOrWhiteSpace($_.IP) } |
+                Where-Object { -not [string]::IsNullOrWhiteSpace($_.IP) -and $_.IP -ne "Unknown" } |
                 Select-Object -ExpandProperty IP -Unique)
             $uniqueIPs = $bruteForceIPs.Count
 
@@ -7275,7 +7331,7 @@ function Get-FailedLoginPatterns {
             $ip = $parts[1]
             
             # Skip if missing critical info
-            if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip)) { continue }
+            if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip) -or $ip -eq "Unknown") { continue }
             
             # Get the failed attempts sorted by time
             $attempts = $group.Group | Sort-Object EventTime
@@ -7351,7 +7407,7 @@ function Get-FailedLoginPatterns {
             if ($parts.Count -ne 2) { continue }
             $userId = $parts[0]
             $ip = $parts[1]
-            if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip)) { continue }
+            if ([string]::IsNullOrWhiteSpace($userId) -or [string]::IsNullOrWhiteSpace($ip) -or $ip -eq "Unknown") { continue }
 
             $attempts = $group.Group | Sort-Object EventTime
             $firstFailedTime = $attempts[0].EventTime
@@ -7976,6 +8032,7 @@ function Get-MailboxRules {
         $connectionResult = Connect-ExchangeOnlineIfNeeded
         if (-not $connectionResult) {
             Update-GuiStatus "Exchange Online connection failed - skipping rules" ([System.Drawing.Color]::Red)
+            Set-CollectorFailed -Source "InboxRules" -What "Inbox rule collection" -Reason "Exchange Online connection could not be established"
             [System.Windows.Forms.MessageBox]::Show(
                 "Exchange Online connection required for mailbox rule collection.",
                 "Connection Required", "OK", "Warning"
@@ -8007,6 +8064,13 @@ function Get-MailboxRules {
         
         if ($mailboxesToCheck.Count -eq 0) {
             Write-Log "No mailboxes to check" -Level "Warning"
+            Remove-StaleOutput -Path @(
+                $OutputPath,
+                ($OutputPath -replace '\.csv$', '_Suspicious.csv'),
+                ($OutputPath -replace '\.csv$', '_Forwarding.csv'),
+                ($OutputPath -replace '\.csv$', '_Skipped.csv')
+            )
+            Set-CollectionStatus -Source "InboxRules" -Complete $false -Records 0 -Note "Get-Mailbox returned no user or shared mailboxes, so no inbox rules were checked."
             return @()
         }
         
@@ -8294,6 +8358,7 @@ function Get-MailboxRules {
     catch {
         Update-GuiStatus "Error collecting inbox rules: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in mailbox rules collection: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "InboxRules" -What "Inbox rule collection" -Reason $_.Exception.Message
         Write-Log "Stack Trace: $($_.ScriptStackTrace)" -Level "Error"
         return $null
     }
@@ -8344,6 +8409,7 @@ function Get-MailboxDelegationData {
         $connectionResult = Connect-ExchangeOnlineIfNeeded
         if (-not $connectionResult) {
             Update-GuiStatus "Exchange Online connection failed - skipping delegation collection" ([System.Drawing.Color]::Red)
+            Set-CollectorFailed -Source "MailboxDelegation" -What "Mailbox delegation collection" -Reason "Exchange Online connection could not be established"
             [System.Windows.Forms.MessageBox]::Show(
                 "Exchange Online connection required for mailbox delegation collection.",
                 "Connection Required", "OK", "Warning"
@@ -8539,6 +8605,7 @@ function Get-MailboxDelegationData {
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in delegation collection: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "MailboxDelegation" -What "Mailbox delegation collection" -Reason $_.Exception.Message
         return $null
     }
 }
@@ -8809,6 +8876,7 @@ function Get-AppRegistrationData {
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in app registration collection: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "AppRegistrations" -What "App registration collection" -Reason $_.Exception.Message
         return $null
     }
 }
@@ -8940,6 +9008,7 @@ function Get-ConditionalAccessData {
     catch {
         Update-GuiStatus "Error: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "Error in Conditional Access collection: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "ConditionalAccess" -What "Conditional Access collection" -Reason $_.Exception.Message
         return $null
     }
 }
@@ -9028,6 +9097,7 @@ function Get-MessageTraceExchangeOnline {
         $connectionResult = Connect-ExchangeOnlineIfNeeded
         if (-not $connectionResult) {
             Update-GuiStatus "Exchange Online connection failed - skipping message trace" ([System.Drawing.Color]::Red)
+            Set-CollectorFailed -Source "MessageTrace" -What "Message trace collection" -Reason "Exchange Online connection could not be established"
             [System.Windows.Forms.MessageBox]::Show(
                 "Exchange Online connection required for message trace collection.`n`n" +
                 "Please ensure you have Exchange Administrator permissions.",
@@ -9105,13 +9175,28 @@ function Get-MessageTraceExchangeOnline {
         # Previous output would otherwise be picked up as current if this run finds nothing.
         Remove-StaleOutput -Path @($OutputPath)
 
-        $traceNote = ""
+        # Message trace V2 has no direction field. Derive it from the accepted domains so
+        # Analyze-ETRData can tell outbound mail from inbound mail.
+        $orgDomains = @()
+        $directionGap = $false
+        try {
+            $orgDomains = @(Get-AcceptedDomain -ErrorAction Stop | ForEach-Object { $_.DomainName.ToString().ToLower() })
+        }
+        catch {
+            Write-Log "Could not read accepted domains for message direction: $($_.Exception.Message)" -Level "Warning"
+        }
+        if ($orgDomains.Count -eq 0) { $directionGap = $true }
+
+        $traceNotes = @()
         if ($hitCap) {
-            $traceNote = "message trace stopped at the $MaxMessages-message cap; older messages in the $actualDaysBack-day window are NOT included (raise -MaxMessages or narrow the range)"
+            $traceNotes += "message trace stopped at the $MaxMessages-message cap; older messages in the $actualDaysBack-day window are NOT included (raise -MaxMessages or narrow the range)"
             Write-Log "Message trace hit the $MaxMessages-message cap - results are TRUNCATED" -Level "Warning"
             Update-GuiStatus "WARNING: message trace capped at $MaxMessages messages - results incomplete" ([System.Drawing.Color]::Red)
         }
-        Set-CollectionStatus -Source "MessageTrace" -Complete (-not $hitCap) -Records $allMessages.Count -Note $traceNote
+        if ($directionGap) {
+            $traceNotes += "accepted domains could not be read, so message direction is blank; ETR analysis treats every row as possibly outbound and inbound mail may inflate the findings"
+        }
+        Set-CollectionStatus -Source "MessageTrace" -Complete (-not ($hitCap -or $directionGap)) -Records $allMessages.Count -Note ($traceNotes -join "; ")
 
         if ($allMessages.Count -eq 0) {
             Update-GuiStatus "No messages found in date range" ([System.Drawing.Color]::Orange)
@@ -9145,7 +9230,7 @@ function Get-MessageTraceExchangeOnline {
                 from_ip = if ($msg.FromIP) { $msg.FromIP } else { "" }
                 message_size = if ($msg.Size) { $msg.Size } else { 0 }
                 received = if ($msg.Received) { $msg.Received } else { "" }
-                message_direction = "Unknown"  # V2 doesn't provide this
+                message_direction = (Get-MessageDirection -Sender "$($msg.SenderAddress)" -Recipient "$($msg.RecipientAddress)" -AcceptedDomains $orgDomains)  # V2 has no direction; derived from accepted domains
                 message_id = if ($msg.MessageId) { $msg.MessageId } else { "" }
                 event_type = "MessageTraceV2"
                 timestamp = if ($msg.Received) { $msg.Received } else { "" }
@@ -9174,10 +9259,12 @@ function Get-MessageTraceExchangeOnline {
         Update-GuiStatus $errorMsg ([System.Drawing.Color]::Red)
         Write-Log $errorMsg -Level "Error"
         
-        # Update global state on error
-        if ($Global:ExchangeOnlineState) {
-            $Global:ExchangeOnlineState.IsConnected = $false
-            $Global:ExchangeOnlineState.LastChecked = Get-Date
+        Set-CollectorFailed -Source "MessageTrace" -What "Message trace collection" -Reason $_.Exception.Message
+
+        # Only a connection or authentication failure means the Exchange Online session is
+        # gone. A bad parameter, throttling or a data error must not flag a healthy session.
+        if ($_.Exception.Message -match 'connect|connection|unauthori|401|token|session|socket|name resolution|timed out|timeout|network') {
+            Set-ExoConnectionState -IsConnected $false
         }
         
         return $null
@@ -9187,6 +9274,47 @@ function Get-MessageTraceExchangeOnline {
 #══════════════════════════════════════════════════════════════
 # ETR FILE DETECTION AND ANALYSIS
 #══════════════════════════════════════════════════════════════
+
+function Get-MessageDirection {
+    <#
+    .SYNOPSIS
+        Classifies a message as Outbound, Internal or Inbound from the organisation's accepted domains.
+
+    .DESCRIPTION
+        Internal: sender and recipient domains are both accepted domains.
+        Outbound: sender domain is accepted, recipient domain is not.
+        Inbound : anything else. Returns an empty string when no accepted domains are known
+        or the sender address has no domain, so the analyzer treats the row as direction unknown.
+    #>
+    [CmdletBinding()]
+    [OutputType([System.String])]
+    param (
+        [string]$Sender,
+        [string]$Recipient,
+        [string[]]$AcceptedDomains
+    )
+
+    $domains = @($AcceptedDomains | Where-Object { $_ } | ForEach-Object { "$_".Trim().ToLower() })
+    if ($domains.Count -eq 0) { return "" }
+
+    $domainOf = {
+        param([string]$Address)
+        $at = "$Address".LastIndexOf('@')
+        if ($at -lt 0) { return "" }
+        return "$Address".Substring($at + 1).Trim().Trim('>').ToLower()
+    }
+
+    $senderDomain = & $domainOf $Sender
+    if ([string]::IsNullOrEmpty($senderDomain)) { return "" }
+    $recipientDomain = & $domainOf $Recipient
+
+    $senderInternal = $domains -contains $senderDomain
+    $recipientInternal = (-not [string]::IsNullOrEmpty($recipientDomain)) -and ($domains -contains $recipientDomain)
+
+    if ($senderInternal -and $recipientInternal) { return "Internal" }
+    if ($senderInternal) { return "Outbound" }
+    return "Inbound"
+}
 
 function Find-ETRFiles {
     <#
@@ -9439,12 +9567,17 @@ function Analyze-ETRData {
     try {
         # Force garbage collection before starting
         [System.GC]::Collect()
+
+        # Remove the previous run's output first: this run only writes these files when it
+        # finds something, so an old file must never survive as the "current" result.
+        Remove-StaleOutput -Path @($OutputPath, ($OutputPath -replace '\.csv$', '_MessageRecallReport.csv'))
         
         # Find ETR files
         $etrFiles = Find-ETRFiles
         
         if ($etrFiles.Count -eq 0) {
             Update-GuiStatus "No ETR files found! Place message trace files in working directory." ([System.Drawing.Color]::Red)
+            Set-CollectionStatus -Source "ETRAnalysis" -Complete $false -Records 0 -Note "No ETR or message trace file was found in the working directory, so ETR analysis did not run."
             
             $message = "No Exchange Trace Report (ETR) files found!`n`n" +
                       "Expected file patterns:`n" +
@@ -9468,6 +9601,7 @@ function Analyze-ETRData {
                 "Large File Warning", "YesNo", "Warning"
             )
             if ($result -eq "No") {
+                Set-CollectionStatus -Source "ETRAnalysis" -Complete $false -Records 0 -Note "ETR analysis was cancelled at the large-file prompt; no analysis was run."
                 return $null
             }
         }
@@ -9539,9 +9673,13 @@ function Analyze-ETRData {
         Write-Log "Processed $($processedMessages.Count) messages" -Level "Info"
         Update-GuiStatus "Analyzing patterns in $($processedMessages.Count) messages..." ([System.Drawing.Color]::Orange)
         
-        # Focus on outbound messages
+        # Focus on messages a compromised account could be sending: outbound, internal (a
+        # compromised account spams colleagues too), or direction unknown (empty / "Unknown").
+        # Inbound mail is never analysed.
         $outboundMessages = foreach ($msg in $processedMessages) {
-            if ($msg.Direction -like "*outbound*" -or $msg.Direction -like "*send*" -or [string]::IsNullOrEmpty($msg.Direction)) {
+            $dir = "$($msg.Direction)".Trim()
+            if ($dir -like "*outbound*" -or $dir -like "*send*" -or $dir -like "*internal*" -or
+                [string]::IsNullOrEmpty($dir) -or $dir -eq "Unknown") {
                 $msg
             }
         }
@@ -9550,6 +9688,7 @@ function Analyze-ETRData {
         
         if ($outboundMessages.Count -eq 0) {
             Update-GuiStatus "No outbound messages found in ETR data" ([System.Drawing.Color]::Orange)
+            Set-CollectionStatus -Source "ETRAnalysis" -Complete $true -Records 0 -Note "The ETR file contained no outbound, internal or direction-unknown messages ($($processedMessages.Count) rows, all inbound)."
             return @()
         }
         
@@ -9809,11 +9948,13 @@ function Analyze-ETRData {
             Write-Log "Output: $OutputPath" -Level "Info"
             Write-Log "═══════════════════════════════════════════════════" -Level "Info"
             
+            Set-CollectionStatus -Source "ETRAnalysis" -Complete $true -Records $outboundMessages.Count -Note "$($spamIndicatorsArray.Count) pattern(s) found in $($selectedFile.Name)."
             return $spamIndicatorsArray
         }
         else {
             Update-GuiStatus "No suspicious patterns detected in ETR analysis" ([System.Drawing.Color]::Green)
             Write-Log "No suspicious patterns detected" -Level "Info"
+            Set-CollectionStatus -Source "ETRAnalysis" -Complete $true -Records $outboundMessages.Count -Note "No patterns found in $($selectedFile.Name)."
             return @()
         }
         
@@ -9821,6 +9962,7 @@ function Analyze-ETRData {
     catch {
         Update-GuiStatus "Error in ETR analysis: $($_.Exception.Message)" ([System.Drawing.Color]::Red)
         Write-Log "ETR analysis error: $($_.Exception.Message)" -Level "Error"
+        Set-CollectorFailed -Source "ETRAnalysis" -What "ETR analysis" -Reason $_.Exception.Message
         [System.GC]::Collect()
         return $null
     }
@@ -10129,65 +10271,9 @@ function Invoke-CompromiseDetection {
     if ($dataSources.SignInData.Available) {
         Update-GuiStatus "Analyzing sign-in data..." ([System.Drawing.Color]::Orange)
         
-        # Generate unique logins report
-        $uniqueLogins = [System.Collections.Generic.List[PSCustomObject]]::new()
-        $userLocationGroups = $dataSources.SignInData.Data | Group-Object -Property UserId
-        
-        foreach ($userGroup in $userLocationGroups) {
-            $userId = $userGroup.Name
-            $userSignIns = $userGroup.Group
-            
-            $uniqueUserLocations = $userSignIns |
-                Select-Object UserId, UserDisplayName, IP, City, RegionName, Country, ISP -Unique |
-                Where-Object { -not [string]::IsNullOrEmpty($_.IP) -and $_.IP -ne "Unknown" }
-            
-            foreach ($location in $uniqueUserLocations) {
-                $signInCount = ($userSignIns | Where-Object { 
-                    $_.IP -eq $location.IP -and $_.City -eq $location.City -and $_.Country -eq $location.Country 
-                }).Count
-                
-                $locationSignIns = $userSignIns | Where-Object { 
-                    $_.IP -eq $location.IP -and $_.City -eq $location.City -and $_.Country -eq $location.Country 
-                } | Sort-Object CreationTime
-                
-                $firstSeen = if ($locationSignIns.Count -gt 0) { $locationSignIns[0].CreationTime } else { "" }
-                $lastSeen = if ($locationSignIns.Count -gt 0) { $locationSignIns[-1].CreationTime } else { "" }
-                
-                $isUnusualLocation = $false
-                if ($location.Country -and $ConfigData.ExpectedCountries -notcontains $location.Country) {
-                    $isUnusualLocation = $true
-                }
-                
-                $uniqueLogin = [PSCustomObject]@{
-                    UserId = $location.UserId
-                    UserDisplayName = $location.UserDisplayName
-                    IP = $location.IP
-                    City = $location.City
-                    RegionName = $location.RegionName
-                    Country = $location.Country
-                    ISP = $location.ISP
-                    IsUnusualLocation = $isUnusualLocation
-                    SignInCount = $signInCount
-                    FirstSeen = $firstSeen
-                    LastSeen = $lastSeen
-                }
-                
-                $uniqueLogins.Add($uniqueLogin)
-            }
-        }
-        
-        # Export unique logins
-        if ($uniqueLogins.Count -gt 0) {
-            $uniqueLoginsPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations.csv"
-            $uniqueLogins | Export-Csv -Path $uniqueLoginsPath -NoTypeInformation -Force
-            
-            $unusualUniqueLogins = $uniqueLogins | Where-Object { $_.IsUnusualLocation -eq $true }
-            if ($unusualUniqueLogins.Count -gt 0) {
-                $unusualPath = Join-Path -Path $ConfigData.WorkDir -ChildPath "UniqueSignInLocations_Unusual.csv"
-                $unusualUniqueLogins | Export-Csv -Path $unusualPath -NoTypeInformation -Force
-            }
-        }
-        
+        # The unique sign-in location files are written by Get-TenantSignInData (with the
+        # IPVersion column); they are not recomputed here.
+
         # Process sign-ins for risk analysis
         foreach ($signIn in $dataSources.SignInData.Data) {
             $userId = $signIn.UserId
@@ -12583,12 +12669,7 @@ catch {
 
 # Ensure clean disconnect from Exchange Online
 try {
-    $exchangeSession = Get-PSSession | Where-Object { 
-        $_.ConfigurationName -eq "Microsoft.Exchange" -and 
-        $_.State -eq "Opened" 
-    }
-    
-    if ($exchangeSession) {
+    if ((@(Get-ExoConnectionTenant)).Count -gt 0) {
         Write-Log "Final disconnect from Exchange Online" -Level "Info"
         Write-Host "Disconnecting from Exchange Online..." -ForegroundColor Yellow
         Disconnect-ExchangeOnline -Confirm:$false -ErrorAction SilentlyContinue

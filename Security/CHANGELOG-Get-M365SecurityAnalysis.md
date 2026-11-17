@@ -2,6 +2,28 @@
 
 Versions follow Major.Minor (`$ScriptVer` in the script). Newest first.
 
+## 12.1 - 2026-11-16
+Review fixes: wrong results first. Verified offline only (`Security/tests/Test-M365SecurityAnalysis.ps1`); not yet run against a live tenant.
+
+**Fixed**
+- Conditional Access MFA credit was inverted. Graph SDK models never return `$null` for nested objects, so "Require MFA" policies (operator OR, `mfa`) were not credited while device-only and session-only policies were. Logic now lives in `Test-CaPolicyRequiresMfa` and `Test-CaPolicyUserInScope`, which test real values only (authentication strength needs an `Id`; guest include/exclude needs `GuestOrExternalUserTypes`; `GuestsOrExternalUsers` in `IncludeUsers` counts).
+- An Exchange Online session from a previous tenant was reused after reconnecting Graph to another tenant. The EXO session is now reused only when `Get-ConnectionInformation` reports the same tenant id as `Get-MgContext`, otherwise it is disconnected and re-established. Disconnect, Reconnect, window close and final cleanup now drop the EXO session too (EXO v3 never creates a `Microsoft.Exchange` PSSession, so the old checks never fired). `$Global:ExchangeOnlineState` is updated in place, so `LastCollectionComplete` and `LastCollectionWarning` survive reconnects. `Disconnect-ExchangeOnlineSafely` (never called) was removed.
+- The tool's own `MessageTraceResult.csv` was filtered out of ETR analysis because direction was written as "Unknown". The collector now derives Outbound / Internal / Inbound from the accepted domains (blank, plus a coverage note, if they cannot be read) and `Analyze-ETRData` treats blank and "Unknown" as possibly outbound, counts Internal, and never analyses Inbound.
+- Private and unknown IPs could be flagged as unusual locations. One classifier (`Get-IPClassification`) is now used by both the geolocator and the sign-in loop: IPv4-mapped IPv6 is unmapped and classified as IPv4, fe80::/10 and fec0::/10 are tested on the real prefix, 100.64.0.0/10 (CGNAT) is private. `Test-UnusualCountry` never flags empty, Unknown, Private Network or Invalid IP. The duplicate unique-location block in `Invoke-CompromiseDetection` (it overwrote `UniqueSignInLocations.csv` without the `IPVersion` column) was removed, and the collector's version now groups once instead of rescanning per location.
+- Failed-login analysis no longer reports a password spray, breach or MFA-held pattern from sign-ins whose IP is the "Unknown" placeholder.
+- A failed collector left the previous run's status row looking complete. MFA audit, inbox rules, delegations, app registrations, Conditional Access and message trace (exceptions and the "no Exchange Online connection" early returns) now record an Incomplete row, `Analyze-ETRData` records an `ETRAnalysis` row on every exit and clears its previous output first, and inbox rules with zero mailboxes is recorded as incomplete. A message trace error only marks Exchange Online disconnected when it is a connection or authentication error.
+
+**Changed**
+- The Exchange Online sign-in fallback now honours the requested range up to 180 days (default Audit (Standard) retention, per Microsoft Learn) instead of 10 days; the 10-day limit belongs to message trace. The coverage note states the range used. `Search-UnifiedAuditLog` is called with explicit UTC dates.
+- `ConvertFrom-UalSignInRecord` extracted from `Get-SignInDataFromExchangeOnline` so the record parsing can be tested offline. Behaviour unchanged.
+
+**Not changed (could not be confirmed)**
+- The audit record's failure code is still read from `ErrorCode`. Microsoft's schema documents `ErrorCode` and describes `LogonError` as free text, and does not document `ErrorNumber`; the claim that real records carry `ErrorNumber` and a `LogonError` name could not be confirmed from documentation, so the parsing is untouched. Confirm against one real record before changing it.
+- `Get-MessageTraceV2` `-StartDate` / `-EndDate`: the documentation does not state how a value without a time zone is read, so those calls are untouched.
+
+**Added**
+- `Security/tests/Test-M365SecurityAnalysis.ps1`: offline harness (AST extraction, no tenant connection, no Pester).
+
 ## 12.0 - 2026-09-29
 Redesigned window and HTML report (Yeyland Wutani design handoff).
 
